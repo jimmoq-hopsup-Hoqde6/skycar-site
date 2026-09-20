@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CareInput } from "@/domain/care/request";
 import { readCareSubmission } from "@/domain/care/submission";
+import { unreadableResponseIsUncertain } from "@/domain/care/submission-recovery";
 import { ApiError, garageApi, type Page, type Vehicle } from "@/features/garage/types";
 import "./request-form.css";
 
@@ -44,7 +45,14 @@ async function submitCare(body: string, key: string) {
   }
   let envelope: Record<string, unknown>;
   try { envelope = await response.json(); }
-  catch { throw new SubmitError("INVALID_RESPONSE", "We could not confirm whether your request was saved.", response.status, true); }
+  catch {
+    throw new SubmitError(
+      "INVALID_RESPONSE",
+      "We could not confirm whether your request was saved.",
+      response.status,
+      unreadableResponseIsUncertain(response.status),
+    );
+  }
   if (!response.ok) {
     const error = envelope.error as Record<string, unknown> | undefined;
     const code = typeof error?.code === "string" ? error.code : "INTERNAL_ERROR";
@@ -76,12 +84,25 @@ export function CareRequestForm() {
   const [uncertain, setUncertain] = useState(false);
   const pending = useRef<Pending | null>(null);
   const controller = useRef<AbortController | null>(null);
+  const accountEpoch = useRef(0);
+
+  const clearAccountState = useCallback(() => {
+    accountEpoch.current += 1;
+    pending.current = null;
+    setVehicles([]);
+    setVehicleId("");
+    setService("repair");
+    setDescription("");
+    setPreferredWindow("flexible");
+    setError(null);
+    setUncertain(false);
+  }, []);
 
   const loadVehicles = useCallback(async () => {
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
-    pending.current = null;
-    setLoading(true); setAccess("ready"); setError(null); setUncertain(false); setVehicles([]); setVehicleId("");
+    clearAccountState();
+    setLoading(true); setAccess("ready");
     try {
       const result = await loadActiveVehicles(current.signal);
       if (current.signal.aborted) return;
@@ -90,12 +111,23 @@ export function CareRequestForm() {
       if (current.signal.aborted) return;
       setAccess(accessState(caught));
     } finally { if (!current.signal.aborted) setLoading(false); }
-  }, []);
+  }, [clearAccountState]);
 
   useEffect(() => {
     let active = true;
-    queueMicrotask(() => { if (active) void loadVehicles(); });
-    return () => { active = false; controller.current?.abort(); };
+    const revalidate = () => { if (active) void loadVehicles(); };
+    const revalidateVisible = () => { if (document.visibilityState === "visible") revalidate(); };
+    queueMicrotask(revalidate);
+    window.addEventListener("focus", revalidate);
+    window.addEventListener("pageshow", revalidate);
+    document.addEventListener("visibilitychange", revalidateVisible);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", revalidate);
+      window.removeEventListener("pageshow", revalidate);
+      document.removeEventListener("visibilitychange", revalidateVisible);
+      controller.current?.abort();
+    };
   }, [loadVehicles]);
 
   async function submit(event: React.FormEvent) {
@@ -105,17 +137,22 @@ export function CareRequestForm() {
       const input: CareInput = { vehicle_id: vehicleId, service, description: description.trim(), preferred_window: preferredWindow };
       pending.current = { key: crypto.randomUUID(), body: JSON.stringify(input) };
     }
+    const attempt = pending.current;
+    const epoch = accountEpoch.current;
     setSaving(true); setError(null);
     try {
-      const result = await submitCare(pending.current.body, pending.current.key);
+      const result = await submitCare(attempt.body, attempt.key);
+      if (epoch !== accountEpoch.current) return;
       pending.current = null; setUncertain(false);
       router.push(`/care/requests/${encodeURIComponent(result.request.id)}`);
     } catch (caught) {
+      if (epoch !== accountEpoch.current) return;
       const next = caught instanceof SubmitError ? caught : new SubmitError("INTERNAL_ERROR", "We could not save your request.", 0, true);
       if (!next.retryable) pending.current = null;
       setUncertain(next.retryable && !!pending.current);
       if ([401, 403].includes(next.status)) {
-        setVehicles([]); setVehicleId(""); setAccess(next.status === 401 ? "session" : "access");
+        clearAccountState();
+        setAccess(next.status === 401 ? "session" : "access");
       }
       if (next.status === 404) { setVehicles([]); setVehicleId(""); setAccess("vehicle"); }
       if (next.status === 409) setAccess("conflict");

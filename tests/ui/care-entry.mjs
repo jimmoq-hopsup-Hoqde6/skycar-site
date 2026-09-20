@@ -22,6 +22,7 @@ try {
   const evidence = new URL("../../docs/qa/care-entry/", import.meta.url);
   await mkdir(evidence, { recursive: true });
   const vehicle = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", make: "Toyota", model: "Corolla", variant: "Ascent Sport", year: 2020, registration: "SKY123", registration_state: "SA", revision: 1, archived_at: null, created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" };
+  const otherVehicle = { ...vehicle, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", make: "Mazda", model: "CX-5", registration: "NEW456" };
   const requestId = "11111111-1111-4111-8111-111111111111";
   const received = { id: requestId, vehicle_id: vehicle.id, service: "repair", description: "Scratch on the left rear door", preferred_window: "flexible", quote_state: "in_review", assignment_state: "none", fulfilment_state: null, money_state: null, customer_stage: "request_received", next_action: "review_request", responsible_role: "operations", created_at: "2026-09-20T12:00:00Z", updated_at: "2026-09-20T12:00:00Z", next_update_at: "2026-09-20T13:00:00Z", events: [{ id: "22222222-2222-4222-8222-222222222222", sequence: 1, type: "request_received", occurred_at: "2026-09-20T12:00:00Z" }] };
   let vehicleMode = "ready";
@@ -32,14 +33,17 @@ try {
   await context.route("**/api/v1/garage/vehicles?*", route => {
     if (vehicleMode === "session") return route.fulfill({ status: 401, json: { error: { code: "UNAUTHENTICATED", message: "Sign in." } } });
     if (vehicleMode === "empty") return route.fulfill({ json: { data: { items: [], nextCursor: null } } });
+    if (vehicleMode === "other") return route.fulfill({ json: { data: { items: [otherVehicle], nextCursor: null } } });
     return route.fulfill({ json: { data: { items: [vehicle], nextCursor: null } } });
   });
+  let submissionMode = "malformed503-then-success";
   await context.route("**/api/v1/care/requests", async route => {
     if (route.request().method() !== "POST") return route.continue();
     attempts++;
     keys.push(route.request().headers()["idempotency-key"]);
     bodies.push(route.request().postData());
-    if (attempts === 1) return route.fulfill({ status: 503, json: { error: { code: "TEMPORARILY_UNAVAILABLE", message: "Unable to save or load your request. Retry with the same request key.", retryable: true } } });
+    if (submissionMode === "malformed400") return route.fulfill({ status: 400, contentType: "text/plain", body: "not-json" });
+    if (submissionMode === "malformed503-then-success" && attempts === 1) return route.fulfill({ status: 503, contentType: "text/plain", body: "not-json" });
     return route.fulfill({ status: 201, json: { data: { request: received, replayed: false } } });
   });
   await context.route(`**/api/v1/care/requests/${requestId}`, route => route.fulfill({ json: { data: received } }));
@@ -67,20 +71,50 @@ try {
   assert.equal(bodies[0], bodies[1]);
   assert.deepEqual(JSON.parse(bodies[0]), { vehicle_id: vehicle.id, service: "repair", description: received.description, preferred_window: "flexible" });
 
-  vehicleMode = "session";
+  submissionMode = "malformed400";
+  const validationPage = await context.newPage();
+  await validationPage.goto(`${origin}/care/request`);
+  await validationPage.getByLabel("Describe the damage or cleaning work").fill("Initial invalid response attempt");
+  const validationStart = keys.length;
+  await validationPage.getByRole("button", { name: "Submit for review" }).click();
+  await validationPage.getByText("We could not confirm whether your request was saved.").waitFor();
+  assert.equal(await validationPage.getByLabel("Describe the damage or cleaning work").isEnabled(), true);
+  assert.equal(await validationPage.getByRole("button", { name: "Submit for review" }).isEnabled(), true);
+  await validationPage.getByLabel("Describe the damage or cleaning work").fill("Corrected after definitive malformed response");
+  submissionMode = "success";
+  await validationPage.getByRole("button", { name: "Submit for review" }).click();
+  await validationPage.waitForURL(`${origin}/care/requests/${requestId}`);
+  assert.notEqual(keys[validationStart], keys[validationStart + 1]);
+  assert.notEqual(bodies[validationStart], bodies[validationStart + 1]);
+
+  vehicleMode = "ready";
   const sessionPage = await context.newPage();
   await sessionPage.setViewportSize({ width: 390, height: 844 });
   await sessionPage.goto(`${origin}/care/request`);
+  await sessionPage.getByLabel("Detail or clean my car").check();
+  await sessionPage.getByLabel("Describe the damage or cleaning work").fill("Private draft from the first account");
+  await sessionPage.getByLabel("When would you prefer the work?").selectOption("seven_to_fourteen_days");
+  vehicleMode = "session";
+  await sessionPage.evaluate(() => window.dispatchEvent(new Event("focus")));
   await sessionPage.getByRole("heading", { name: "Sign in to request care" }).waitFor();
   assert.equal(await sessionPage.getByLabel("Active Garage vehicle").count(), 0);
+  assert.equal(await sessionPage.getByText("Private draft from the first account").count(), 0);
   await sessionPage.screenshot({ path: new URL("mobile-session-required.png", evidence).pathname, fullPage: true });
+  vehicleMode = "other";
+  await sessionPage.getByRole("button", { name: "I’m signed in — try again" }).click();
+  await sessionPage.getByLabel("Active Garage vehicle").waitFor();
+  assert.equal(await sessionPage.getByLabel("Active Garage vehicle").inputValue(), otherVehicle.id);
+  assert.equal(await sessionPage.getByLabel("Active Garage vehicle").locator(`option[value="${vehicle.id}"]`).count(), 0);
+  assert.equal(await sessionPage.getByLabel("Describe the damage or cleaning work").inputValue(), "");
+  assert.equal(await sessionPage.getByLabel("Fix scratches or dents").isChecked(), true);
+  assert.equal(await sessionPage.getByLabel("When would you prefer the work?").inputValue(), "flexible");
 
   vehicleMode = "empty";
   const emptyPage = await context.newPage();
   await emptyPage.goto(`${origin}/care/request`);
   await emptyPage.getByRole("heading", { name: "Add a vehicle first" }).waitFor();
   assert.equal(await emptyPage.getByRole("link", { name: "Add a vehicle in Garage" }).getAttribute("href"), "/garage");
-  console.log("PASS: public service entry, active vehicle, exact contract, uncertain same-key retry, receipt navigation, mobile, session and empty Garage states");
+  console.log("PASS: service entry contract, malformed 4xx correction, malformed 5xx same-key retry, account-switch draft redaction, receipt navigation and empty Garage");
 } finally {
   if (browser) await browser.close();
   server.kill();

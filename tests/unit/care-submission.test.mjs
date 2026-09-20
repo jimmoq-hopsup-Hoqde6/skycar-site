@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readCareSubmission } from "../../src/domain/care/submission.ts";
+import { unreadableResponseIsUncertain } from "../../src/domain/care/submission-recovery.ts";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const receipt = {
@@ -27,4 +28,13 @@ test("fails closed for malformed, expanded or unsupported submission responses",
     { request: { ...receipt, customer_stage: "appointment_confirmed" }, replayed: false },
     { request: receipt, replayed: false, price: 500 },
   ]) assert.throws(() => readCareSubmission(value));
+});
+
+test("only network and server failures keep an unreadable submission uncertain", () => {
+  assert.equal(unreadableResponseIsUncertain(0), true);
+  assert.equal(unreadableResponseIsUncertain(500), true);
+  assert.equal(unreadableResponseIsUncertain(503), true);
+  assert.equal(unreadableResponseIsUncertain(400), false);
+  assert.equal(unreadableResponseIsUncertain(401), false);
+  assert.equal(unreadableResponseIsUncertain(409), false);
 });
