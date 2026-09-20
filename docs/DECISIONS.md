@@ -63,3 +63,31 @@ Issue #1 is the blocking foundation. Issue #2 and Issues #3/#4 are unblocked onl
 
 Reference:
 docs/FOUNDATION_ARCHITECTURE.md
+
+
+## D-007 — Services acquire customers; Garage retains them
+Date: 2026-09-20
+Status: ACCEPTED
+
+Decision:
+Skycar's public acquisition experience is service-led. Customers enter through an immediate vehicle need, initially focused on cosmetic Repair & Cleaning and a later Sale-Ready journey. The logged-in Garage remains the persistent customer home and retention layer.
+
+Initial public service choices should stay narrow and understandable:
+- Fix scratches or dents
+- Detail or clean my car
+- Prepare my car for sale (staged after the core Care path is usable)
+
+A customer may begin a service journey before understanding or actively choosing the Garage proposition. When the customer creates/saves the vehicle needed for the service, that same authorised vehicle record becomes their free Garage vehicle. Care references the Garage vehicle ID; it does not create a separate vehicle ownership model.
+
+The Garage remains useful independently of technician bookings, with vehicle identity, actual customer vehicle image, records/history, jobs, documents and reminders. Skycar+ and broader ownership benefits may increase retention later but must not block the free Garage.
+
+Reason:
+Customers are more likely to arrive with urgent, concrete intent such as cleaning, detailing, scratches, dents or preparing a car for sale. Services provide a clearer acquisition and early monetisation wedge, while Garage provides continuity and repeat value after the immediate problem is solved.
+
+Impact:
+- Marketing/public entry is service-first, not Garage-first.
+- Logged-in home remains Garage-first.
+- Build Garage and Care in parallel on the shared foundation.
+- Prioritise a short service request path and manual/operational fulfilment before advanced automation.
+- Do not broaden V1 into mechanical repairs, roadside, insurance, nationwide coverage or a full vehicle marketplace.
+- Sale-Ready becomes the next acquisition extension after the core service flow, without replacing Garage.
