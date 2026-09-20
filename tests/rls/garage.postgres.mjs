@@ -1,12 +1,25 @@
-// Runs real PostgreSQL (PGlite) with small auth/storage schema stubs, NOT live Supabase.
+// Runs PostgreSQL (PGlite or a disposable server) with auth/storage stubs, NOT live Supabase.
 // Usage: GARAGE_PGLITE_MODULE=/tmp/garage-validation/node_modules/@electric-sql/pglite/dist/index.js node tests/rls/garage.postgres.mjs
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
-if (!process.env.GARAGE_PGLITE_MODULE) throw new Error('Set GARAGE_PGLITE_MODULE to an installed PGlite module.');
-const { PGlite } = await import(pathToFileURL(process.env.GARAGE_PGLITE_MODULE).href);
-const db = new PGlite();
+let db;
+let engine = 'PGlite';
+if (process.env.GARAGE_PG_MODULE) {
+  const url = new URL(process.env.GARAGE_TEST_DATABASE_URL ?? '');
+  if (!['localhost', '127.0.0.1'].includes(url.hostname) || url.pathname !== '/garage_test') throw new Error('Only a disposable local garage_test database is allowed.');
+  const pg = await import(pathToFileURL(process.env.GARAGE_PG_MODULE).href);
+  const { Client } = pg.default ?? pg;
+  const client = new Client({ connectionString: url.toString() });
+  await client.connect();
+  db = { exec: sql => client.query(sql), query: (sql, args) => client.query(sql, args), close: () => client.end() };
+  engine = 'PostgreSQL server';
+} else {
+  if (!process.env.GARAGE_PGLITE_MODULE) throw new Error('Set GARAGE_PGLITE_MODULE or GARAGE_PG_MODULE.');
+  const { PGlite } = await import(pathToFileURL(process.env.GARAGE_PGLITE_MODULE).href);
+  db = new PGlite();
+}
 let checks = 0;
 const check = (condition, message) => { assert.ok(condition, message); checks++; };
 try {
@@ -74,5 +87,5 @@ try {
   await db.exec('reset role; drop trigger test_audit_fail on public.audit_events;');
   await login('');
   await rejects(() => mutate('create', null, input), 'UNAUTHENTICATED');
-  console.log(`PASS: ${checks} PostgreSQL migration/RLS/RPC checks (PGlite auth/storage stubs; not live Supabase).`);
+  console.log(`PASS: ${checks} migration/RLS/RPC checks (${engine}; auth/storage stubs, not live Supabase).`);
 } finally { await db.close(); }
