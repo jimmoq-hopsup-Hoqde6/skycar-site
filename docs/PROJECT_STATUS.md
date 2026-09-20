@@ -16,23 +16,30 @@ Core product areas:
 - Payments, booking and notifications
 
 ## Current repository state
-This repository currently contains a very small public website foundation. The production Skycar V2 application architecture has not yet been established in this repository.
+The repository now contains the legacy small public website plus the merged Skycar V2 modular-monolith application scaffold. The V2 foundation is not production-ready and has not been deployed.
 
 ## Immediate priority
 Build a stable application foundation before expanding features.
 
 ### Phase 0 — Foundation
-Status: NOT STARTED
-- Confirm frontend framework and project structure
-- Confirm backend runtime and database
-- Environment configuration
-- Authentication and role model
-- CI checks
-- Shared API conventions
-- Error reporting and logging
+Status: IN PROGRESS
+- [x] Architecture contract and modular source structure
+- [x] Next.js/React/TypeScript + Supabase/PostgreSQL baseline
+- [x] Exact direct dependency versions and package-lock.json
+- [x] Demo/staging/production configuration contract
+- [x] Verified-session server auth boundary and server-granted role model
+- [x] Versioned /api/v1 baseline
+- [x] Initial Garage vehicle/history/media schema and RLS policies
+- [x] Private storage policy baseline
+- [x] Care quote/assignment/fulfilment state separation
+- [x] CI install/lint/typecheck/unit/build checks passing on PR #13
+- [ ] Execute migration against isolated Supabase test project
+- [ ] Prove two-user negative RLS/storage authorization tests
+- [ ] Complete application logging/audit/error middleware baseline
+- [ ] Verify staging environment and rollback/restore setup
 
 ### Phase 1 — Garage
-Status: NOT STARTED
+Status: READY TO START IN PARALLEL
 - Account onboarding
 - Add vehicle
 - Vehicle profile
@@ -42,7 +49,7 @@ Status: NOT STARTED
 - Recommended actions
 
 ### Phase 2 — Repair & Cleaning
-Status: NOT STARTED
+Status: READY TO START IN PARALLEL
 - Service selection
 - Vehicle selection
 - Guided photo upload
@@ -97,3 +104,10 @@ No public production release until:
 - Upload security verified
 - Core error handling implemented
 - Backup/recovery plan documented
+
+## Latest verified checkpoint — 2026-09-20
+- PR #11 merged architecture contract.
+- PR #13 merged executable foundation scaffold as commit 23468048a391cc6c16ae87afcd34abadf82f9522.
+- GitHub Actions run #6 passed dependency install from committed lockfile, lint, TypeScript checking, unit tests, Next.js build and environment-file guard.
+- No production deployment or live billing/provider activation occurred.
+- Issue #1 remains open for isolated database/RLS/storage verification and remaining operational foundation controls.
