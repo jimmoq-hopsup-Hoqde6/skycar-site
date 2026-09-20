@@ -6,6 +6,11 @@ contract is published before any frontend consumer. No customer deadline is
 invented: an operator must configure the internal `care_response_policy` row
 before submission is available. Tests use explicitly test-only policy values.
 
+The public, server-owned service list and provider-neutral coverage decision
+are defined separately in [CARE_SERVICE_CATALOGUE_API.md](CARE_SERVICE_CATALOGUE_API.md).
+Only a successful authoritative coverage decision may allow a consumer to
+continue; request receipt still does not guarantee coverage or fulfilment.
+
 ## Authentication, privacy and transport
 
 All routes require a verified Supabase session, `FEATURE_CARE=true`, and use the
