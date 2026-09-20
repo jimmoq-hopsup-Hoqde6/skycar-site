@@ -37,7 +37,7 @@ same key and input. A fresh user edit must use a new key.
 | GET `/api/v1/garage/vehicles/{id}` | UUID | Vehicle, including archived vehicles |
 | PATCH `/api/v1/garage/vehicles/{id}` | Full vehicle input plus `expected_revision` positive integer | Vehicle; stale revision or archived vehicle is 409 |
 | POST `/api/v1/garage/vehicles/{id}/archive` | `{ "expected_revision": 1 }` | Archived Vehicle; no hard delete or restore in this slice |
-| GET `/api/v1/garage/vehicles/{id}/history` | `limit=1..50`; optional UUID `after` cursor | `{items: HistoryEvent[], nextCursor}` ordered by ID for stable pagination; UI sorts fetched events by occurrence time |
+| GET `/api/v1/garage/vehicles/{id}/history` | `limit=1..50`; optional opaque `after` cursor | `{items: HistoryEvent[], nextCursor}` ordered by occurrence time descending, then ID descending for stable pagination |
 
 ```json
 {
@@ -87,7 +87,8 @@ vehicles remain accessible in the archived list/history and cannot be edited.
 
 `202609200100_garage_mutations.sql` adds a vehicle revision, private mutation ledger,
 and an authenticated RPC. It preserves vehicle IDs and ownership. Direct authenticated
-vehicle writes are revoked; consumers must use the audited RPC. Care reads/references
+vehicle/history writes are revoked; consumers must use an audited, validated server
+mutation. Owner-entered odometer/reminder APIs are a follow-up, not direct inserts. Care reads/references
 remain unchanged. This access change is recorded in D-007 before implementation.
 
 Release still requires applying migrations to an isolated Supabase environment,

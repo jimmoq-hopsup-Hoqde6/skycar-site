@@ -72,7 +72,9 @@ Decision:
 Own-vehicle create/edit/archive goes through one authenticated, atomic database RPC.
 The RPC derives ownership from auth.uid(), rejects unknown fields, checks the expected
 vehicle revision, and records mutation history, audit metadata and idempotent results
-in the same transaction. Direct authenticated writes to public.vehicles are revoked.
+in the same transaction. Direct authenticated writes to public.vehicles and its
+system-created vehicle_history are revoked; owner-entered events require a future
+validated Garage event API rather than direct database inserts.
 Vehicle identity, existing read policies and Care references remain unchanged.
 
 Reason:
