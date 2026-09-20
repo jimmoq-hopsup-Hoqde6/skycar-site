@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
 permissions:
-  contents: read
+  contents: write
 jobs:
   application:
     runs-on: ubuntu-latest
@@ -14,7 +14,22 @@ jobs:
         with:
           node-version: 24
       - name: Install dependencies
-        run: npm install --ignore-scripts
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --ignore-scripts
+          else
+            npm install --ignore-scripts
+          fi
+      - name: Persist generated lockfile on same-repository PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          if ! git diff --quiet -- package-lock.json || [ -n "$(git ls-files --others --exclude-standard package-lock.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "Lock foundation dependencies"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
       - name: Lint
         run: npm run lint
       - name: Typecheck
