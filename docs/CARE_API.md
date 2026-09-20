@@ -51,6 +51,10 @@ an existing request is allowed after vehicle archive, not ownership loss.
 
 ## Read status / timeline
 
+The additive [My Jobs list contract](CARE_MY_JOBS_API.md) defines the owner-scoped
+`GET /api/v1/care/requests` collection and stable continuation tokens. Fetch
+individual details below after selecting an authorised request from that list.
+
 `GET /api/v1/care/requests/:id` returns `data: <status>`.
 
 ```json

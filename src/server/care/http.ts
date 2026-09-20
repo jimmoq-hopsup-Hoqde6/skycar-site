@@ -1,7 +1,10 @@
 import { CareError, careInput, object, uuid } from "../../domain/care/request.ts";
 import type { CareInput, CareReceipt } from "../../domain/care/request.ts";
+import { careListPage, careListQuery } from "../../domain/care/list.ts";
+import type { CareListQuery, CareListRows } from "../../domain/care/list.ts";
 
 export interface CareRepository {
+  list(query: CareListQuery): Promise<CareListRows>;
   submit(key: string, input: CareInput): Promise<{ request: CareReceipt; replayed: boolean }>;
   get(id: string): Promise<CareReceipt>;
   retry(id: string, key: string): Promise<{ request: CareReceipt; replayed: boolean }>;
@@ -78,6 +81,10 @@ export function careHandlers(deps: Dependencies) {
     }
   }
   return {
+    list: (request: Request) => run(async repo => {
+      const query = careListQuery(new URL(request.url).searchParams);
+      return { data: careListPage(await repo.list(query), query), status: 200 };
+    }),
     submit: (request: Request) => run(async repo => {
       const body = await readBody(request);
       const result = await repo.submit(uuid(request.headers.get("idempotency-key")), careInput(body));

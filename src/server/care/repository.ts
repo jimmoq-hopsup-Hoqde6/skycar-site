@@ -1,6 +1,7 @@
 import "server-only";
 import { CareError } from "@/domain/care/request";
 import type { CareInput, CareReceipt } from "@/domain/care/request";
+import type { CareListQuery, CareListRows } from "@/domain/care/list";
 import { createSupabaseServerClient } from "@/server/supabase/server";
 import { featureEnabled } from "@/server/env";
 import { careHandlers } from "@/server/care/http";
@@ -26,6 +27,10 @@ export const careApi = careHandlers({
       return data as T;
     }
     return {
+      list: (query: CareListQuery) => rpc<CareListRows>("care_list_requests", {
+        p_limit: query.limit, p_vehicle_id: query.vehicle_id,
+        p_before_created_at: query.before?.created_at ?? null, p_before_id: query.before?.id ?? null,
+      }),
       submit: (key: string, input: CareInput) => rpc<{ request: CareReceipt; replayed: boolean }>("care_submit_request", { p_key: key, p_payload: input }),
       get: (id: string) => rpc<CareReceipt>("care_get_request", { p_id: id }),
       retry: (id: string, key: string) => rpc<{ request: CareReceipt; replayed: boolean }>("care_retry_request", { p_id: id, p_key: key }),

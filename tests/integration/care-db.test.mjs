@@ -22,11 +22,16 @@ before(() => {
   file("tests/integration/bootstrap.sql");
   file("supabase/migrations/202609200001_foundation.sql");
   file("supabase/migrations/202609200002_care_requests.sql");
+  file("supabase/migrations/202609200003_care_my_jobs.sql");
   file("tests/integration/fixtures.sql");
 });
 
 test("PostgreSQL ownership, RLS, atomic receipt, deadline, replay and recovery assertions", () => {
   file("tests/integration/care.sql");
+});
+
+test("My Jobs ownership, archived history, deadline truth and stable pagination", () => {
+  file("tests/integration/care-list.sql");
 });
 
 test("concurrent identical submissions create exactly one request/event/outbox/command", async () => {
