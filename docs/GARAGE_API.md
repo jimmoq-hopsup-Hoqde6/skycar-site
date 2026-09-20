@@ -89,7 +89,7 @@ vehicles remain accessible in the archived list/history and cannot be edited.
 and an authenticated RPC. It preserves vehicle IDs and ownership. Direct authenticated
 vehicle/history writes are revoked; consumers must use an audited, validated server
 mutation. Owner-entered odometer/reminder APIs are a follow-up, not direct inserts. Care reads/references
-remain unchanged. This access change is recorded in D-007 before implementation.
+remain unchanged. This access change is recorded in D-GARAGE-001 (originally D-007 on this branch) before implementation.
 
 Release still requires applying migrations to an isolated Supabase environment,
 two-user RLS/RPC tests, session-refresh/auth integration and signed-in device QA.
