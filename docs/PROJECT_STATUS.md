@@ -3,7 +3,7 @@
 Last updated: 2026-09-20
 
 ## Current product direction
-Skycar V2 is a Garage-first automotive ownership platform. The product must remain useful even when a customer never books a technician.
+Skycar V2 uses services as the acquisition engine and the Garage as the retention engine. Public entry is service-led around immediate cosmetic Care needs; after acquisition, the free Garage becomes the persistent customer home and must remain useful even when the customer is not booking a technician.
 
 Core product areas:
 - Garage / vehicle profile
@@ -123,3 +123,14 @@ No public production release until:
 - Feature branches `feature/garage-foundation` and `feature/care-backend` had not advanced beyond the prior main application commit at the time of this status update.
 - No production deployment, live billing/provider activation, DNS change or destructive database change occurred.
 - Issue #1 remains open for isolated database/RLS/storage verification and remaining operational foundation controls.
+
+## Product priority update — 2026-09-20
+Decision D-007 approved: Services acquire customers; Garage retains them.
+
+Active build priority:
+1. Lean authenticated Garage: real vehicle identity/image, ownership, history, reminders, documents and My Jobs.
+2. Service-first acquisition/Care: scratch/dent and detail/clean entry, shared vehicle, private photos, coverage, durable request/status.
+3. Technician/operations fulfilment required to complete Care jobs.
+4. Sale-Ready acquisition extension after the core Care path is usable.
+
+Issue #18 tracks the public service-first entry journey. This priority change does not replace the shared Garage/Care architecture or duplicate vehicle ownership.
