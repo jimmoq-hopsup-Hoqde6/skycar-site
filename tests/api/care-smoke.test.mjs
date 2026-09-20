@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 
-test("built Next.js Care routes fail closed without activation/configuration", { timeout: 30000 }, async () => {
+test("built Next.js Care routes publish the catalogue and fail closed without activation/configuration", { timeout: 30000 }, async () => {
   for (const feature of ["false", "true"]) {
     const port = feature === "false" ? 3317 : 3318;
     const base = `http://127.0.0.1:${port}`;
@@ -27,6 +27,30 @@ test("built Next.js Care routes fail closed without activation/configuration", {
         } catch { await delay(100); }
       }
       assert.ok(ready, `Local application failed to start: ${output}`);
+
+      const catalogue = await fetch(`${base}/api/v1/care/services`, { signal: AbortSignal.timeout(2000) });
+      assert.equal(catalogue.status, 200);
+      assert.equal(catalogue.headers.get("cache-control"), "public, max-age=300, stale-while-revalidate=60");
+      assert.deepEqual((await catalogue.json()).data.services, [
+        { id: "repair", name: "Scratch & dent repair" },
+        { id: "cleaning", name: "Detailing & cleaning" },
+      ]);
+
+      const coverage = await fetch(`${base}/api/v1/care/coverage`, {
+        method: "POST",
+        // next start normalises the server-side request URL to localhost even
+        // when the test binds 127.0.0.1.
+        headers: { origin: `http://localhost:${port}`, "content-type": "application/json" },
+        body: JSON.stringify({ service: "repair", postcode: "5000" }),
+        signal: AbortSignal.timeout(2000),
+      });
+      const coverageBody = await coverage.json();
+      assert.equal(coverage.status, 503, JSON.stringify(coverageBody));
+      assert.equal(coverage.headers.get("cache-control"), "no-store");
+      assert.equal(coverageBody.error.code, "COVERAGE_UNAVAILABLE");
+      assert.equal(coverageBody.error.retryable, true);
+      assert.equal(coverageBody.data, undefined);
+
       for (const [path, method] of [
         ["/api/v1/care/requests", "GET"],
         ["/api/v1/care/requests", "POST"],
