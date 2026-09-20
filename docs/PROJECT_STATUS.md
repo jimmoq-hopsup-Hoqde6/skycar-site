@@ -23,10 +23,11 @@ Active implementation evidence:
 - PR #17: ownership-scoped Garage vehicle list/create/detail/edit/archive/history with audited mutation controls and responsive UI.
 - PR #19: customer Care request status/timeline UI with overdue/no-match handling and committed synthetic desktop/mobile evidence, stacked on #16.
 - PR #20: owner-scoped My Jobs/Care request list API with pagination, vehicle filtering and overdue summaries, stacked on #16.
-- PR #21: combined Garage/Care integration-verification branch applying every public migration together and testing the shared vehicle/permission boundary.
+- PR #21: combined Garage/Care integration-verification branch applying every public migration together and testing the shared vehicle/permission boundary; Technical Lead accepted this combined boundary evidence only, not the full feature/release scope.
+- PR #22: authenticated Garage-linked My Jobs UI with Garage vehicle filtering, archived-history labels, pagination, request-detail links, stale/error recovery and committed desktop/mobile evidence, stacked on #21.
 
 ## Immediate priority
-Route PR #21 through Technical Lead/Project Manager dependency and acceptance review, then use the verified shared Garage/Care boundary to implement the Garage-linked My Jobs list/timeline. The previously identified separate-bootstrap integration evidence gap is closed by green combined verification, but hosted Supabase/session/private-storage, signed-in device QA and remaining release gates are still open.
+Record the reviewed dependency/integration sequence for #16/#20/#17/#19/#21 before any merge, and route draft PR #22 through dependency/acceptance review. The combined Garage/Care database-boundary evidence is accepted as resolved, but individual feature acceptance, hosted Supabase/session/private-storage verification, signed-in device QA and remaining release gates are still open. If no review finding blocks #22, the next dependency-independent Care frontend slice is cross-reload uncertain-write recovery for request submission/retry.
 
 ### Phase 0 — Foundation
 Status: IN PROGRESS
@@ -46,28 +47,32 @@ Status: IN PROGRESS
 - [ ] Verify staging environment and rollback/restore setup
 
 ### Phase 1 — Garage
-Status: IMPLEMENTED IN DRAFT PR #17 — NOT MERGED
+Status: IMPLEMENTED IN DRAFT PRS — NOT MERGED
 - [x] Ownership-scoped add/edit/archive vehicle contract and UI in PR #17
 - [x] Vehicle detail and history in PR #17
 - [x] Audited/idempotent Garage mutation path in PR #17
 - [x] Combined Garage/Care shared vehicle and permission verification in draft PR #21
+- [x] Garage-linked My Jobs UI for saved Care requests in draft PR #22
 - [ ] Hosted Supabase/PostgREST/session verification
 - [ ] Signed-in device QA
 - [ ] Customer-owned vehicle photo using the actual car with a clean/plain-background derived display image; original media remains private
 - [ ] Condition summary
 - [ ] Membership summary
 - [ ] Recommended actions
-- [ ] My Jobs integration for pending, upcoming and past Repair & Cleaning jobs
 
 ### Phase 2 — Repair & Cleaning
-Status: IN PROGRESS — PR #16 REVIEW-READY; PR #19/#20/#21 DRAFT
+Status: IN PROGRESS — PR #16 REVIEW-READY; PR #19/#20/#21/#22 DRAFT
 - [x] Durable request acknowledgement and authoritative request status/events in PR #16
 - [x] Customer next-update deadline, overdue/no-match recovery and owner retry in PR #16
 - [x] Customer request detail/status timeline UI in PR #19
 - [x] Synthetic desktop/mobile visual acceptance evidence for PR #19
 - [x] Owner-scoped My Jobs request list backend in PR #20
 - [x] Combined Garage/Care schema and permission verification in PR #21
-- [ ] Technical Lead/Project Manager dependency and integration acceptance review
+- [x] Technical Lead accepted the combined Garage/Care database-boundary evidence in PR #21
+- [x] Garage-linked account-wide My Jobs list UI in PR #22
+- [ ] Project Manager dependency/integration route and individual feature acceptance before merge
+- [ ] PR #22 dependency/acceptance review
+- [ ] Cross-reload uncertain-write recovery for Care request submission/retry
 - [ ] Service-first public entry for scratch/dent and detail/clean (#18)
 - [ ] Guided private photo upload / media processing
 - [ ] Coverage/capacity handling
@@ -125,12 +130,13 @@ No public production release until:
 - Core error handling implemented
 - Backup/recovery plan documented
 
-## Latest verified checkpoint — 2026-09-21 02:00 ACST
-- `main` still contains no merged current feature PR. The status document is updated to reflect verified but unmerged branch evidence.
-- PR #21 head `61975a3` is mergeable and draft. All four exact-head checks passed: application CI, Care PostgreSQL, Garage PostgreSQL and combined Garage/Care PostgreSQL. The combined suite applied every public migration in filename order and passed 54 assertions covering shared vehicle identity, two-account isolation, archive/history behaviour, idempotent replay/conflict, direct-write denial, audit/outbox rollback and both lock orderings for archive versus Care intake/retry.
-- PR #19 advanced to head `3d58562`. Five synthetic fixture-only desktop/mobile screenshots now cover overdue receipt/timeline, stale refresh, no-match recovery and access-expired redaction. Exact-head application CI and Care PostgreSQL acceptance both passed.
-- PR #16 remains at `915acbb`, PR #17 at `bca07a5`, and PR #20 at `4902335`; their previously recorded exact-head checks remain green. No acceptance review has been recorded on PR #21.
-- Remaining blockers/gates are Technical Lead/Project Manager dependency/acceptance review, hosted Supabase/PostgREST/session/private-storage verification, signed-in device QA, cross-reload uncertain-write recovery for the Care status UI, notification delivery worker wiring and the remaining #1/#8 operational/release controls.
+## Latest verified checkpoint — 2026-09-21 04:01 ACST
+- `main` still contains no merged current feature PR. This status document records verified but unmerged branch evidence.
+- PR #21 remains at `61975a3`; Technical Lead review accepted the combined database-boundary evidence as resolving the prior separate-bootstrap gap. This is evidence acceptance only and does not approve merging the full stacked feature set or release.
+- Draft PR #22 head `5c5f741` adds authenticated `/garage/jobs`, a Garage My Jobs entry, owner-scoped Care request summaries, active/archived vehicle filtering, opaque cursor pagination, request-detail links, fail-closed response validation, access/session redaction and stale-data retry. It changes 25 files (+727/-2) and has no schema, environment, provider or commercial-policy change.
+- PR #22 local exact-tree verification passed lint, TypeScript, 42 unit/API tests, production build, built Care-route fail-closed smoke, synthetic Chromium My Jobs acceptance and `git diff --check`. Four fixture-only desktop/mobile screenshots are committed. Exact-head GitHub Skycar CI and Care PostgreSQL acceptance both completed successfully.
+- PR #22 is open, draft and mergeable. No review finding is recorded on #22 yet. Individual feature/dependency acceptance and the Project Manager integration route remain open.
+- Remaining blockers/gates are hosted Supabase/PostgREST/session/private-storage verification, signed-in physical-device QA, PR #19 cross-reload uncertain-write recovery, notification delivery worker wiring and remaining #1/#8 operational/release controls.
 - No production deployment, live billing/provider activation, DNS change, destructive database change or live migration occurred.
 
 ## Product priority update — 2026-09-20
