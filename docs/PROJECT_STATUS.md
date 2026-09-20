@@ -16,10 +16,16 @@ Core product areas:
 - Payments, booking and notifications
 
 ## Current repository state
-The repository contains the legacy small public website plus the merged Skycar V2 modular-monolith application scaffold. The V2 foundation is not production-ready and has not been deployed. Garage and Repair & Cleaning feature work are cleared to start in parallel, but no executable feature implementation has yet landed on their feature branches.
+The repository contains the legacy small public website plus the merged Skycar V2 modular-monolith application scaffold. The V2 foundation is not production-ready and has not been deployed. Executable Garage and Repair & Cleaning work now exists in open pull requests, but none of those feature PRs has been merged to `main` or accepted for production use.
+
+Active implementation evidence:
+- PR #16: durable Care request receipt, authoritative status/events, overdue/no-match recovery and restricted worker contract.
+- PR #17: ownership-scoped Garage vehicle list/create/detail/edit/archive/history with audited mutation controls and responsive UI.
+- PR #19: customer Care request status/timeline UI with overdue/no-match handling, stacked on #16.
+- PR #20: owner-scoped My Jobs/Care request list API with pagination, vehicle filtering and overdue summaries, stacked on #16.
 
 ## Immediate priority
-Continue the remaining Foundation security/operational verification while delivering the first executable Garage and Repair & Cleaning slices in parallel. Backend contracts land before frontend integration.
+Complete combined Garage/Care migration and permission verification before integration acceptance, while preserving the service-first acquisition / Garage-retention architecture. Individual PR checks are green, but combined schema compatibility and hosted/session/device gates remain open.
 
 ### Phase 0 — Foundation
 Status: IN PROGRESS
@@ -33,43 +39,44 @@ Status: IN PROGRESS
 - [x] Private storage policy baseline
 - [x] Care quote/assignment/fulfilment state separation
 - [x] CI install/lint/typecheck/unit/build checks passing on PR #13
-- [ ] Execute migration against isolated Supabase test project
-- [ ] Prove two-user negative RLS/storage authorization tests
+- [ ] Execute migration against isolated hosted Supabase test project
+- [ ] Prove hosted two-user negative RLS/storage authorization tests
 - [ ] Complete application logging/audit/error middleware baseline
 - [ ] Verify staging environment and rollback/restore setup
 
 ### Phase 1 — Garage
-Status: READY TO START IN PARALLEL
-- Account onboarding
-- Add/edit/archive vehicle
-- Vehicle profile
-- Vehicle history
-- Customer-owned vehicle photo using the actual car with a clean/plain-background derived display image; original media remains private
-- Condition summary
-- Membership summary
-- Recommended actions
-- My Jobs entry point for pending, upcoming and past Repair & Cleaning jobs
+Status: IMPLEMENTED IN DRAFT PR #17 — NOT MERGED
+- [x] Ownership-scoped add/edit/archive vehicle contract and UI in PR #17
+- [x] Vehicle detail and history in PR #17
+- [x] Audited/idempotent Garage mutation path in PR #17
+- [ ] Hosted Supabase/PostgREST/session verification
+- [ ] Signed-in device QA
+- [ ] Customer-owned vehicle photo using the actual car with a clean/plain-background derived display image; original media remains private
+- [ ] Condition summary
+- [ ] Membership summary
+- [ ] Recommended actions
+- [ ] My Jobs integration for pending, upcoming and past Repair & Cleaning jobs
 
 ### Phase 2 — Repair & Cleaning
-Status: READY TO START IN PARALLEL
-- Service selection
-- Vehicle selection
-- Guided photo upload
-- Problem description
-- Quote / estimate flow
-- Durable request acknowledgement and customer next-update deadline
-- Customer status timeline / My Jobs contract
-- Availability selection
-- Technician offers containing price and actual appointment options
-- Race-safe booking acceptance
-- Payment lifecycle kept separate from quote/assignment/fulfilment state
-- Job status and proactive notifications
-- Technician travel / ETA controls for active appointments only
-- Before/after completion evidence
-- Review, guarantee and dispute flow
-- Same-technician rebooking and recurring cleaning after core booking flow
+Status: IN PROGRESS — PR #16 REVIEW-READY; PR #19/#20 DRAFT/STACKED
+- [x] Durable request acknowledgement and authoritative request status/events in PR #16
+- [x] Customer next-update deadline, overdue/no-match recovery and owner retry in PR #16
+- [x] Customer request detail/status timeline UI in PR #19
+- [x] Owner-scoped My Jobs request list backend in PR #20
+- [ ] Combined Garage/Care schema and permission acceptance
+- [ ] Service-first public entry for scratch/dent and detail/clean (#18)
+- [ ] Guided private photo upload / media processing
+- [ ] Coverage/capacity handling
+- [ ] Technician offers containing price and actual appointment options
+- [ ] Race-safe booking acceptance
+- [ ] Payment lifecycle kept separate from quote/assignment/fulfilment state
+- [ ] Proactive notification delivery adapter and retry visibility
+- [ ] Technician travel / ETA controls for active appointments only
+- [ ] Before/after completion evidence
+- [ ] Review, guarantee and dispute flow
+- [ ] Same-technician rebooking and recurring cleaning after core booking flow
 
-Approved requirements: Issue #14 defines the end-to-end booking, customer status, offer, payment/completion, rebooking and recurring-care contract. Approval is specification evidence only; it is not implementation or test completion.
+Approved requirements: Issue #14 defines the end-to-end booking, customer status, offer, payment/completion, rebooking and recurring-care contract. Approval is specification evidence only; it is not full implementation or release completion.
 
 ### Phase 3 — Technician
 Status: NOT STARTED
@@ -114,15 +121,14 @@ No public production release until:
 - Core error handling implemented
 - Backup/recovery plan documented
 
-## Latest verified checkpoint — 2026-09-20
-- PR #11 merged architecture contract.
-- PR #13 merged executable foundation scaffold as commit 23468048a391cc6c16ae87afcd34abadf82f9522.
-- GitHub Actions run #8 on main passed dependency install, lint, TypeScript checking, unit tests, Next.js build and environment-file guard.
-- Issue #14 records approved end-to-end Repair & Cleaning requirements and sequencing; no feature implementation or tests are claimed by that issue.
-- Issue #2 now records the approved actual-vehicle-photo/plain-background Garage requirement using the existing private vehicle media ownership model.
-- Feature branches `feature/garage-foundation` and `feature/care-backend` had not advanced beyond the prior main application commit at the time of this status update.
-- No production deployment, live billing/provider activation, DNS change or destructive database change occurred.
-- Issue #1 remains open for isolated database/RLS/storage verification and remaining operational foundation controls.
+## Latest verified checkpoint — 2026-09-20 23:58 ACST
+- `main` contains the merged foundation plus accepted D-007 service-acquisition/Garage-retention documentation; no current feature PR is merged.
+- PR #16 head `915acbb` is mergeable and exact-head application CI + PostgreSQL acceptance are green; acceptance/dependency review remains required before merge.
+- PR #17 head `bca07a5` is mergeable but draft; application CI + PostgreSQL verification are green. Hosted Supabase/PostgREST/session and signed-in device evidence remain missing.
+- PR #19 head `99998f6` is a mergeable draft stacked on #16. Exact-head Skycar CI and Care database acceptance are green; hosted/session/device acceptance remains open.
+- PR #20 head `4902335` is a mergeable draft stacked on #16. Application CI passed install/lint/typecheck/29 unit/API tests/build/env guard/built-route smoke; PostgreSQL 17 acceptance passed all five integration groups with no skipped checks.
+- Delivery review found that individual green suites do not yet prove the combined Garage/Care database boundary because the current Garage and Care database test bootstraps exercise their migrations separately. Combined migration/permission verification is therefore the immediate integration blocker, not a demonstrated runtime failure.
+- No production deployment, live billing/provider activation, DNS change, destructive database change or live migration occurred.
 
 ## Product priority update — 2026-09-20
 Decision D-007 approved: Services acquire customers; Garage retains them.
