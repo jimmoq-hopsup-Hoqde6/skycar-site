@@ -1,0 +1,4 @@
+import test from "node:test";import assert from "node:assert/strict";import{assignmentTransitions,canTransition,fulfilmentTransitions,quoteTransitions}from "../../src/domain/care/state.mjs";
+test("quote cannot skip review and issue",()=>{assert.equal(canTransition(quoteTransitions,"draft","accepted"),false);assert.equal(canTransition(quoteTransitions,"draft","in_review"),true)});
+test("assignment acceptance requires reservation",()=>{assert.equal(canTransition(assignmentTransitions,"offered","accepted"),false);assert.equal(canTransition(assignmentTransitions,"reserved","accepted"),true)});
+test("completion is not validation or closure",()=>{assert.equal(canTransition(fulfilmentTransitions,"completed","closed"),false);assert.equal(canTransition(fulfilmentTransitions,"completed","validated"),true)});
