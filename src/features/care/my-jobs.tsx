@@ -133,7 +133,7 @@ export function MyJobs() {
   return <main className="jobs-shell" aria-busy={loading || loadingMore}>
     <nav className="jobs-nav" aria-label="Main navigation">
       <Link className="jobs-wordmark" href="/">skycar<span>●</span></Link>
-      <div><Link href="/garage">Garage</Link><span aria-current="page">My Jobs</span></div>
+      <div><Link href="/garage">Garage</Link><Link href="/care/request">Book a service</Link><span aria-current="page">My Jobs</span></div>
     </nav>
     <header className="jobs-header"><div><p className="eyebrow">GARAGE · MY JOBS</p><h1>Your requests.<br /><span>Clearly tracked.</span></h1><p>See what Skycar has recorded and what needs to happen next.</p></div></header>
 
@@ -153,7 +153,7 @@ export function MyJobs() {
     {access === "access" && <section className="jobs-empty" role="alert"><div className="jobs-empty-icon" aria-hidden="true">!</div><h2>These requests are unavailable</h2><p>Check the selected vehicle and signed-in account. No saved request details are being shown.</p><button type="button" onClick={() => { setVehicleId(""); void load({ discard: true }); }}>Reset and try again</button></section>}
     {access === "error" && !items.length && !loading && <section className="jobs-empty" role="alert"><div className="jobs-empty-icon" aria-hidden="true">…</div><h2>We couldn’t load My Jobs</h2><p>{message}</p><button type="button" onClick={() => void load({ discard: true })}>Try again</button></section>}
     {loading && !items.length && access === "ready" && <div className="jobs-loading" role="status"><span>Loading your requests…</span><div /><div /></div>}
-    {!loading && access === "ready" && !items.length && <section className="jobs-empty"><div className="jobs-empty-icon" aria-hidden="true">+</div><h2>{vehicleId ? "No requests for this vehicle" : "No requests yet"}</h2><p>{vehicleId ? "Choose All vehicles to see other saved requests." : "Repair and cleaning requests you submit will appear here."}</p><Link className="jobs-link-button" href="/garage">Return to your Garage</Link></section>}
+    {!loading && access === "ready" && !items.length && <section className="jobs-empty"><div className="jobs-empty-icon" aria-hidden="true">+</div><h2>{vehicleId ? "No requests for this vehicle" : "No requests yet"}</h2><p>{vehicleId ? "Choose All vehicles to see other saved requests." : "Repair and cleaning requests you submit will appear here."}</p><Link className="jobs-link-button" href="/care/request">Start a repair or cleaning request</Link></section>}
 
     {!!items.length && <section className="jobs-list" aria-label="Saved Care requests">
       {items.map(item => {
