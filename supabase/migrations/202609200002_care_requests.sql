@@ -193,6 +193,7 @@ begin
   if not found then raise exception using errcode = 'P0001', message = 'NOT_FOUND'; end if;
   select * into policy from public.care_response_policy where singleton;
   if not found then raise exception using errcode = 'P0001', message = 'POLICY_UNAVAILABLE'; end if;
+  at_time := clock_timestamp(); -- deadline starts after lock waits, not before
   insert into public.care_requests(customer_id, vehicle_id, service, description, preferred_window,
     next_update_at, escalation_minutes, created_at, updated_at)
   values(actor, vehicle, normalized->>'service', normalized->>'description', normalized->>'preferred_window',
@@ -233,6 +234,7 @@ begin
   end if;
   select * into policy from public.care_response_policy where singleton;
   if not found then raise exception using errcode = 'P0001', message = 'POLICY_UNAVAILABLE'; end if;
+  at_time := clock_timestamp();
   update public.care_requests set customer_stage = 'request_received', next_action = 'review_request',
     responsible_role = 'operations', updated_at = at_time,
     next_update_at = at_time + make_interval(mins => policy.acknowledgement_minutes),

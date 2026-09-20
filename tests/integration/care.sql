@@ -40,6 +40,8 @@ select pg_temp.expect_error($q$select public.care_submit_request(gen_random_uuid
   '{"vehicle_id":"not-uuid","service":"repair","description":"Scratch on rear bumper","preferred_window":"flexible"}')$q$, 'VALIDATION_FAILED');
 select pg_temp.expect_error(format('select public.care_retry_request(%L, gen_random_uuid())', :'request_id'), 'INVALID_TRANSITION');
 select pg_temp.expect_error('update public.care_requests set customer_stage = ''no_match''', 'permission denied');
+select pg_temp.expect_error('insert into public.care_requests(customer_id) values(gen_random_uuid())', 'permission denied');
+select pg_temp.expect_error('insert into public.care_request_events(request_id,sequence,type,occurred_at) values(gen_random_uuid(),1,''request_received'',now())', 'permission denied');
 select pg_temp.expect_error('delete from public.care_request_events', 'permission denied');
 select pg_temp.expect_error('select * from public.care_request_commands', 'permission denied');
 select pg_temp.expect_error('select * from public.care_notification_outbox', 'permission denied');
@@ -113,4 +115,15 @@ reset role;
 select pg_temp.assert_ok((select count(*) = 1 from public.care_requests), 'outbox failure rolls back request');
 select pg_temp.assert_ok((select count(*) = 4 from public.care_request_events), 'outbox failure rolls back event');
 select pg_temp.assert_ok((select count(*) = 2 from public.care_request_commands), 'outbox failure rolls back idempotency command');
+update public.care_requests set next_update_at = now() - interval '1 second' where id = :'request_id';
+select pg_temp.expect_error('select public.care_escalate_overdue(100)', 'TEST_OUTBOX_FAILURE');
+select pg_temp.assert_ok((select customer_stage = 'request_received' from public.care_requests where id = :'request_id'), 'outbox failure rolls back escalation');
+select pg_temp.assert_ok((select count(*) = 4 from public.care_request_events), 'outbox failure rolls back escalation event');
+drop trigger fail_outbox on public.care_notification_outbox;
+
+-- A future quote/assignment workflow must not be overwritten by a stale worker.
+update public.care_requests set quote_state = 'issued' where id = :'request_id';
+select pg_temp.assert_ok(public.care_escalate_overdue(100) = 0, 'worker skips progressed quote');
+update public.care_requests set quote_state = 'in_review', assignment_state = 'offered' where id = :'request_id';
+select pg_temp.assert_ok(public.care_escalate_overdue(100) = 0, 'worker skips progressed assignment');
 rollback;
