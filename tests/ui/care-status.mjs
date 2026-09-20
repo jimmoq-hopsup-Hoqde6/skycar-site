@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const playwright = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const chromium = playwright.chromium ?? playwright.default?.chromium;
 const port = 3187;
 const origin = `http://127.0.0.1:${port}`;
 const server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '-p', String(port)], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -56,16 +57,23 @@ try {
   await page.screenshot({ path: new URL('mobile-no-match.png', evidence).pathname, fullPage: true });
   await page.getByRole('button', { name: 'Ask for another review' }).click();
   await page.getByRole('button', { name: 'Check reopening' }).waitFor();
+  const storedKey = await page.evaluate(requestId => JSON.parse(sessionStorage.getItem(`skycar:care-retry:v1:${requestId}`))?.idempotency_key, id);
+  assert.equal(storedKey, keys[0]);
+  await page.reload();
+  await page.getByRole('button', { name: 'Check reopening' }).waitFor();
+  await page.getByText('This tab saved the attempt and will reuse it after a reload.').waitFor();
+  await page.screenshot({ path: new URL('mobile-reload-recovery.png', evidence).pathname, fullPage: true });
   await page.getByRole('button', { name: 'Check reopening' }).click();
   await page.getByRole('heading', { name: 'We have your request' }).waitFor();
   assert.equal(keys.length, 2);
   assert.equal(keys[0], keys[1]);
+  assert.equal(await page.evaluate(requestId => sessionStorage.getItem(`skycar:care-retry:v1:${requestId}`), id), null);
   mode = 'unauthorized';
   await page.getByRole('button', { name: 'Refresh status' }).click();
   await page.getByText('Sign in to Skycar, then refresh this page to see your request.').waitFor();
   assert.equal(await page.getByText(received.description).count(), 0);
   await page.screenshot({ path: new URL('mobile-access-expired.png', evidence).pathname, fullPage: true });
-  console.log('PASS: overdue before worker, mobile overflow, stale failure notice, no-match, uncertain retry key reuse, reopened receipt, expired-session redaction');
+  console.log('PASS: overdue before worker, mobile overflow, stale failure notice, no-match, cross-reload retry key reuse, reopened receipt, expired-session redaction');
 } finally {
   if (browser) await browser.close();
   server.kill();
