@@ -9,7 +9,7 @@ Tracks Issue #1.
 - Supabase JS 2.116.0
 - @supabase/ssr 0.12.7
 
-Versions are intentionally exact in package.json. A generated package lock remains required before Issue #1 can close.
+Versions are intentionally exact in package.json. The dependency lockfile is committed. CI must install from it successfully before Issue #1 can close.
 
 ## Local application
 1. Copy .env.example to .env.local.
