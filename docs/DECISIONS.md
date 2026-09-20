@@ -63,3 +63,24 @@ Issue #1 is the blocking foundation. Issue #2 and Issues #3/#4 are unblocked onl
 
 Reference:
 docs/FOUNDATION_ARCHITECTURE.md
+
+## D-007 — Garage mutation boundary
+Date: 2026-09-20
+Status: IMPLEMENTATION OF ACCEPTED #2 / D-006
+
+Decision:
+Own-vehicle create/edit/archive goes through one authenticated, atomic database RPC.
+The RPC derives ownership from auth.uid(), rejects unknown fields, checks the expected
+vehicle revision, and records mutation history, audit metadata and idempotent results
+in the same transaction. Direct authenticated writes to public.vehicles are revoked.
+Vehicle identity, existing read policies and Care references remain unchanged.
+
+Reason:
+An HTTP-only check can be bypassed by clients of the exposed database API. The same
+ownership, retry and stale-edit rules must hold at both boundaries.
+
+Impact:
+Garage UI consumes docs/GARAGE_API.md. Other workstreams must not write vehicles
+directly or introduce another ownership model. New migration remains subject to
+isolated database and release verification under #1/#8. No live migration is authorised
+or performed by committing the implementation.
