@@ -11,12 +11,20 @@ Requires `psql` and Node 24. The runner refuses non-local URLs and any database
 name other than `skycar_test`; it also refuses a non-empty public schema.
 Never point these fixtures at a Supabase project or a customer database.
 
-The suite applies both migrations, supplies minimal auth/storage schema shims,
+The suite applies the foundation, Care receipt and My Jobs list migrations,
+supplies minimal auth/storage schema shims,
 then executes the actual PostgreSQL functions, grants, row-level policies,
 rollback and concurrent writes. SQL assertions run under authenticated, anon,
 service_role and bootstrap roles. The concurrency cases use separate psql
 connections and overlapping transactions. The CI service is isolated and
 discarded at job completion; no deployment secrets are needed.
+
+My Jobs assertions cover both ownership checks, archived history, strict list
+arguments, stable keyset order including equal timestamps and microseconds,
+updates/new arrivals between pages, honest overdue/no-match summaries and no
+read side effects. Application query/cursor tests additionally exercise filter
+binding and malformed tokens. List responses are current per-page reads, not a
+frozen multi-page snapshot.
 
 This does not prove Supabase JWT verification, hosted Storage isolation,
 notification delivery, scheduled deadline monitoring or browser behaviour.

@@ -28,6 +28,7 @@ test("built Next.js Care routes fail closed without activation/configuration", {
       }
       assert.ok(ready, `Local application failed to start: ${output}`);
       for (const [path, method] of [
+        ["/api/v1/care/requests", "GET"],
         ["/api/v1/care/requests", "POST"],
         ["/api/v1/care/requests/11111111-1111-4111-8111-111111111111", "GET"],
         ["/api/v1/care/requests/11111111-1111-4111-8111-111111111111/retry", "POST"],
