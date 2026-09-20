@@ -24,10 +24,11 @@ Active implementation evidence:
 - PR #19: customer Care request status/timeline UI with overdue/no-match handling and committed synthetic desktop/mobile evidence, stacked on #16.
 - PR #20: owner-scoped My Jobs/Care request list API with pagination, vehicle filtering and overdue summaries, stacked on #16.
 - PR #21: combined Garage/Care integration-verification branch applying every public migration together and testing the shared vehicle/permission boundary; Technical Lead accepted this combined boundary evidence only, not the full feature/release scope.
-- PR #22: authenticated Garage-linked My Jobs UI plus reload-safe Care reopening and the first authenticated service-first Care entry for scratch/dent and detail/clean, stacked on #21. Exact-head application and Care PostgreSQL checks pass, but the latest service-entry increment still requires acceptance review.
+- PR #22: authenticated Garage-linked My Jobs UI, reload-safe Care reopening and authenticated service-first Care entry. Technical Lead accepted the bounded My Jobs and reload-recovery slices; service-entry findings were corrected at exact head `a0458c8` with green exact-head checks, but Technical Lead re-review is still required before that slice is accepted.
+- PR #23: server-owned Repair/Cleaning service catalogue plus a strict coverage contract that fails closed with `COVERAGE_UNAVAILABLE` until an authoritative coverage resolver is approved and connected. Exact-head application and Care database checks pass; review is still required.
 
 ## Immediate priority
-Record the reviewed dependency/integration sequence for #16/#20/#17/#19/#21/#22 before any merge, then review PR #22 head `2ac83e9` as a bounded service-entry increment. The combined Garage/Care database-boundary evidence and the earlier My Jobs presentation slice are technically accepted, but individual feature acceptance, hosted Supabase/session/private-storage verification, signed-in device QA and remaining release gates are still open. If review finds no blocker, the next concrete frontend task is inline vehicle creation in the service journey through the existing audited Garage API, preserving one shared vehicle identity.
+Record the reviewed dependency/integration sequence for #16/#20/#17/#19/#21/#22/#23 before any merge. Re-review PR #22 head `a0458c8` for the service-entry privacy/error-handling corrections and review PR #23 head `b57ee5f` as the bounded catalogue/coverage contract. Inline vehicle creation remains queued until the returned #22 findings are accepted and the dependency route is documented. Hosted Supabase/session/private-storage verification, signed-in device QA and remaining #1/#8 release gates are still open.
 
 ### Phase 0 — Foundation
 Status: IN PROGRESS
@@ -61,7 +62,7 @@ Status: IMPLEMENTED IN DRAFT PRS — NOT MERGED
 - [ ] Recommended actions
 
 ### Phase 2 — Repair & Cleaning
-Status: IN PROGRESS — PR #16 REVIEW-READY; PR #19/#20/#21/#22 DRAFT
+Status: IN PROGRESS — PR #16 REVIEW-READY; PR #19/#20/#21/#22/#23 DRAFT
 - [x] Durable request acknowledgement and authoritative request status/events in PR #16
 - [x] Customer next-update deadline, overdue/no-match recovery and owner retry in PR #16
 - [x] Customer request detail/status timeline UI in PR #19
@@ -72,12 +73,16 @@ Status: IN PROGRESS — PR #16 REVIEW-READY; PR #19/#20/#21/#22 DRAFT
 - [x] Garage-linked account-wide My Jobs list UI in PR #22
 - [x] Technical Lead accepted the bounded synthetic My Jobs presentation slice in PR #22
 - [x] Cross-reload uncertain-write recovery for Care reopening in PR #22
-- [x] First service-first scratch/dent and detail/clean entry slice in PR #22
+- [x] Technical Lead accepted the bounded cross-reload recovery slice in PR #22
+- [x] First service-first scratch/dent and detail/clean entry implementation in PR #22
+- [x] Service-entry account-change privacy and malformed-response corrections implemented at PR #22 head `a0458c8`
+- [x] Server-owned Repair/Cleaning catalogue and fail-closed coverage API implemented in PR #23
 - [ ] Project Manager dependency/integration route and individual feature acceptance before merge
-- [ ] Latest PR #22 service-entry increment acceptance review
+- [ ] Technical Lead re-review/acceptance of PR #22 service-entry corrections
+- [ ] Technical/dependency review of PR #23 catalogue/coverage contract
 - [ ] Inline new-vehicle creation in the service journey using the audited Garage API
 - [ ] Guided private photo upload / media processing
-- [ ] Coverage/capacity handling
+- [ ] Approved authoritative coverage resolver and operational ownership
 - [ ] Technician offers containing price and actual appointment options
 - [ ] Race-safe booking acceptance
 - [ ] Payment lifecycle kept separate from quote/assignment/fulfilment state
@@ -132,13 +137,13 @@ No public production release until:
 - Core error handling implemented
 - Backup/recovery plan documented
 
-## Latest verified checkpoint — 2026-09-21 06:01 ACST
-- `main` still contains no merged current feature PR before this status-only alignment. PR #22 advanced two commits since the 04:01 checkpoint: `fd782da` (`Recover uncertain Care retry after reload`) and `2ac83e9` (`Add authenticated Care service entry`).
-- Relative to prior PR #22 head `5c5f741`, the two commits change 25 files. Material code/docs include `src/domain/care/retry-recovery.ts`, `src/domain/care/submission.ts`, `src/features/care/request-form.tsx`, `src/app/care/request/page.tsx`, Care status/My Jobs/Garage navigation updates, `tests/ui/care-entry.mjs`, `tests/unit/care-retry-recovery.test.mjs`, `tests/unit/care-submission.test.mjs`, `docs/CARE_ENTRY_UI.md`, `docs/CARE_STATUS_UI.md` and new/updated synthetic QA screenshots.
-- `fd782da` adds tab-scoped reload recovery for uncertain Care reopening, storing only request ID, idempotency key and start time, reusing the exact key after reload and clearing recovery on authoritative or definitive outcomes. Local verification passed lint, TypeScript, 45 unit/API tests, production build, built-route fail-closed smoke, Chromium reload/reconciliation acceptance and `git diff --check`; exact-head application CI and Care database acceptance both passed.
-- Current PR #22 head `2ac83e9` adds the approved service-first entry: public scratch/dent and detail/clean choices, authenticated `/care/request`, active owner-scoped Garage vehicle selection, exact published Care payload/idempotency handling, receipt navigation, Garage/My Jobs links and explicit failure/empty/session states. Local verification passed lint, TypeScript, 47 unit/API tests, production build, built Care-route smoke, Chromium service-entry acceptance and `git diff --check`; exact-head GitHub application and Care PostgreSQL checks both completed successfully.
-- Technical Lead acceptance exists for the earlier bounded My Jobs slice at `5c5f741`; no acceptance review for latest service-entry head `2ac83e9` is recorded yet. Merge remains blocked on the Project Manager dependency/integration sequence and individual feature acceptance.
-- Remaining release blockers/gates: hosted Supabase/PostgREST/session/private-storage verification, signed-in physical-device QA, inline new-vehicle creation for new service entrants, guided private photo/media intake, coverage/capacity handling, notification delivery/operational wiring and remaining #1/#8 controls.
+## Latest verified checkpoint — 2026-09-21 07:59 ACST
+- `main` still contains no merged current feature PR before this status-only alignment.
+- Since the 06:01 checkpoint, PR #22 advanced one corrective commit from `2ac83e9` to `a0458c8`. The change spans 8 files: Care entry UI docs/evidence, `src/domain/care/submission-recovery.ts`, `src/features/care/request-form.tsx`, the Care-entry Chromium test and submission unit coverage.
+- The PR #22 correction clears prior-account draft/service/window/vehicle/pending state during account revalidation, ignores stale in-flight results across account changes, treats unreadable 4xx as definitive/editable, and preserves exact-key/body recovery only for malformed 5xx/network uncertainty. Local lint, TypeScript, 48 unit/API tests, production build, Care smoke, targeted Chromium acceptance and `git diff --check` passed; exact-head Skycar CI run `35538212887` and Care database acceptance run `35538212889` passed. Technical Lead re-review remains pending.
+- New draft PR #23 at `b57ee5f` adds 9 files (+388/-1) for the server-owned Repair/Cleaning catalogue and strict coverage contract: `GET /api/v1/care/services`, same-origin `POST /api/v1/care/coverage`, contract docs, domain/server code and tests. Coverage returns authoritative available/unavailable only when a resolver can decide and otherwise fails closed with retryable `503 COVERAGE_UNAVAILABLE`.
+- PR #23 local verification passed ESLint, TypeScript, 50 unit/API tests, production build, built-route Care smoke and `git diff --check`; exact-head Skycar CI run `35541368809` and Care database acceptance run `35541368845` passed. No hosted coverage provider/resolver is connected or claimed.
+- Merge/integration remains blocked because the reviewed dependency route for #16/#20/#17/#19/#21/#22/#23 is not recorded; PR #9 also remains stale/unsuperseded. Hosted Supabase/PostgREST/JWT/RLS/private-storage verification, signed-in device QA and remaining #1/#8 operational/release controls remain open.
 - No production deployment, live billing/provider activation, DNS change, destructive database change or live migration occurred.
 
 ## Product priority update — 2026-09-20
