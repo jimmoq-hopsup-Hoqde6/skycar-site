@@ -84,7 +84,14 @@ export function careCatalogueHandlers(deps: Dependencies) {
     },
     check: (request: Request) => run(async () => {
       const input = coverageInput(await readBody(request));
-      const coverage = await deps.resolveCoverage(input);
+      let coverage: Coverage;
+      try {
+        coverage = await deps.resolveCoverage(input);
+      } catch {
+        // Resolver outages are one public condition regardless of provider or
+        // transport details. Do not let adapter exceptions change the API.
+        throw new CareCatalogueError("COVERAGE_UNAVAILABLE");
+      }
       if (coverage !== "available" && coverage !== "unavailable") {
         throw new CareCatalogueError("COVERAGE_UNAVAILABLE");
       }

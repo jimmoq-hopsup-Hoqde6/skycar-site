@@ -86,26 +86,37 @@ for (const [label, body, headers, status] of [
   });
 }
 
-test("resolver unavailability is retryable and never becomes a decision", async () => {
-  const { handlers } = setup(async () => { throw new CareCatalogueError("COVERAGE_UNAVAILABLE"); });
-  const response = await handlers.check(request());
-  assert.equal(response.status, 503);
-  const body = await response.json();
-  assert.deepEqual(body.error, {
-    code: "COVERAGE_UNAVAILABLE",
-    message: "Coverage cannot be confirmed right now.",
-    fieldErrors: {},
-    retryable: true,
+for (const [label, resolver] of [
+  ["explicit unavailability", async () => { throw new CareCatalogueError("COVERAGE_UNAVAILABLE"); }],
+  ["generic timeout or exception", async () => { throw new Error("secret provider timeout details"); }],
+  ["malformed decision", async () => "maybe"],
+]) {
+  test(`resolver ${label} is one retryable unavailable contract`, async () => {
+    const { handlers } = setup(resolver);
+    const response = await handlers.check(request());
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.deepEqual(body.error, {
+      code: "COVERAGE_UNAVAILABLE",
+      message: "Coverage cannot be confirmed right now.",
+      fieldErrors: {},
+      retryable: true,
+    });
+    assert.equal(body.data, undefined);
+    assert.doesNotMatch(JSON.stringify(body), /secret|provider|timeout|maybe/);
   });
-  assert.equal(body.data, undefined);
-});
+}
 
-test("malformed and unexpected resolver results fail closed without details", async () => {
-  const malformed = setup(async () => "maybe");
-  assert.equal((await malformed.handlers.check(request())).status, 503);
-
-  const failure = setup(async () => { throw new Error("secret provider details"); });
-  const response = await failure.handlers.check(request());
+test("unexpected failures outside the resolver boundary remain redacted 500", async () => {
+  const { handlers, calls } = setup();
+  const response = await handlers.check({
+    headers: { get: () => "https://skycar.test" },
+    get url() { throw new Error("secret framework failure"); },
+  });
   assert.equal(response.status, 500);
-  assert.doesNotMatch(await response.text(), /secret|provider details/);
+  const body = await response.json();
+  assert.equal(body.error.code, "INTERNAL_ERROR");
+  assert.equal(body.error.retryable, false);
+  assert.doesNotMatch(JSON.stringify(body), /secret|framework failure/);
+  assert.equal(calls.length, 0);
 });
