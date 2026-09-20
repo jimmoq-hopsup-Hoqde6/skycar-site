@@ -40,7 +40,25 @@ The standard Playwright CDN timed out. An npm-distributed Chromium package
 (@sparticuz/chromium 153.0.0) supplied the local executable; no browser change ships
 with the app. Direct git push lacked credentials; GitHub connector publication was used.
 
-## Reproduce optional checks
+## GitHub PostgreSQL verification
+
+After the local checks, [Garage PostgreSQL verification run 35514009724](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/actions/runs/35514009724)
+passed on implementation commit `ae9fc30bf1d40aa14959ce0b0edd90a1c0f683a4`:
+26 migration/RLS/RPC checks on PostgreSQL 17.6 plus 11 checks using independent
+connections. Competing transactions demonstrably waited for database locks. Duplicate
+create returned one vehicle; stale simultaneous update was rejected; archive blocked
+a competing edit; rejected operations produced no extra history/audit records.
+
+[Application CI run 35514009726](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/actions/runs/35514009726)
+also passed for that commit. These are recorded GitHub results, not deployment evidence.
+The server tests still use auth/storage schema stubs, so hosted Supabase/PostgREST,
+session verification and real-device gates remain outstanding.
+
+`.github/workflows/garage-postgres.yml` installs an isolated pg 8.16.3 test driver and
+starts a disposable PostgreSQL service. Both server runners refuse any database
+except localhost/127.0.0.1 with the name `garage_test`. They never target live data.
+
+## Reproduce optional local checks
 
 ```sh
 npm install --prefix /tmp/garage-validation --no-audit --no-fund @electric-sql/pglite@0.5.8 playwright@1.63.0
