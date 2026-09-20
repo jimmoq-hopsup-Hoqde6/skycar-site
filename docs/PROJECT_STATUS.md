@@ -16,10 +16,10 @@ Core product areas:
 - Payments, booking and notifications
 
 ## Current repository state
-The repository now contains the legacy small public website plus the merged Skycar V2 modular-monolith application scaffold. The V2 foundation is not production-ready and has not been deployed.
+The repository contains the legacy small public website plus the merged Skycar V2 modular-monolith application scaffold. The V2 foundation is not production-ready and has not been deployed. Garage and Repair & Cleaning feature work are cleared to start in parallel, but no executable feature implementation has yet landed on their feature branches.
 
 ## Immediate priority
-Build a stable application foundation before expanding features.
+Continue the remaining Foundation security/operational verification while delivering the first executable Garage and Repair & Cleaning slices in parallel. Backend contracts land before frontend integration.
 
 ### Phase 0 — Foundation
 Status: IN PROGRESS
@@ -41,12 +41,14 @@ Status: IN PROGRESS
 ### Phase 1 — Garage
 Status: READY TO START IN PARALLEL
 - Account onboarding
-- Add vehicle
+- Add/edit/archive vehicle
 - Vehicle profile
 - Vehicle history
+- Customer-owned vehicle photo using the actual car with a clean/plain-background derived display image; original media remains private
 - Condition summary
 - Membership summary
 - Recommended actions
+- My Jobs entry point for pending, upcoming and past Repair & Cleaning jobs
 
 ### Phase 2 — Repair & Cleaning
 Status: READY TO START IN PARALLEL
@@ -55,12 +57,19 @@ Status: READY TO START IN PARALLEL
 - Guided photo upload
 - Problem description
 - Quote / estimate flow
+- Durable request acknowledgement and customer next-update deadline
+- Customer status timeline / My Jobs contract
 - Availability selection
-- Booking
-- Payment
-- Job status
-- Before/after evidence
-- Review and guarantee flow
+- Technician offers containing price and actual appointment options
+- Race-safe booking acceptance
+- Payment lifecycle kept separate from quote/assignment/fulfilment state
+- Job status and proactive notifications
+- Technician travel / ETA controls for active appointments only
+- Before/after completion evidence
+- Review, guarantee and dispute flow
+- Same-technician rebooking and recurring cleaning after core booking flow
+
+Approved requirements: Issue #14 defines the end-to-end booking, customer status, offer, payment/completion, rebooking and recurring-care contract. Approval is specification evidence only; it is not implementation or test completion.
 
 ### Phase 3 — Technician
 Status: NOT STARTED
@@ -108,6 +117,9 @@ No public production release until:
 ## Latest verified checkpoint — 2026-09-20
 - PR #11 merged architecture contract.
 - PR #13 merged executable foundation scaffold as commit 23468048a391cc6c16ae87afcd34abadf82f9522.
-- GitHub Actions run #6 passed dependency install from committed lockfile, lint, TypeScript checking, unit tests, Next.js build and environment-file guard.
-- No production deployment or live billing/provider activation occurred.
+- GitHub Actions run #8 on main passed dependency install, lint, TypeScript checking, unit tests, Next.js build and environment-file guard.
+- Issue #14 records approved end-to-end Repair & Cleaning requirements and sequencing; no feature implementation or tests are claimed by that issue.
+- Issue #2 now records the approved actual-vehicle-photo/plain-background Garage requirement using the existing private vehicle media ownership model.
+- Feature branches `feature/garage-foundation` and `feature/care-backend` had not advanced beyond the prior main application commit at the time of this status update.
+- No production deployment, live billing/provider activation, DNS change or destructive database change occurred.
 - Issue #1 remains open for isolated database/RLS/storage verification and remaining operational foundation controls.
