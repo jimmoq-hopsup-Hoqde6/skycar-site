@@ -4,6 +4,15 @@ const CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,63}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const API_RESULT = Symbol('skycar.api-result');
 
+// Route values written to application logs must come from this reviewed registry.
+// Never add a concrete customer, vehicle, job or request identifier here.
+export const API_ROUTE_TEMPLATES = Object.freeze({
+  health: '/api/v1/health',
+  garageVehiclePhoto: '/api/v1/garage/vehicles/[vehicleId]/photo',
+});
+
+const REGISTERED_ROUTE_TEMPLATES = new Set(Object.values(API_ROUTE_TEMPLATES));
+
 function boundedFieldErrors(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).flatMap(([field, message]) => {
@@ -54,8 +63,8 @@ function writeLog(logger, level, entry) {
 }
 
 function assertRouteTemplate(route) {
-  if (typeof route !== 'string' || !route.startsWith('/api/v1/') || route.includes('?') || route.length > 160) {
-    throw new Error('API route logging requires a bounded /api/v1 route template.');
+  if (!REGISTERED_ROUTE_TEMPLATES.has(route)) {
+    throw new Error('API route logging requires a registered static route template.');
   }
   return route;
 }

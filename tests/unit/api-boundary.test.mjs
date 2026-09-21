@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ApiFault, apiResult, withApiBoundary } from '../../src/server/http/api-boundary.mjs';
+import {
+  API_ROUTE_TEMPLATES,
+  ApiFault,
+  apiResult,
+  withApiBoundary,
+} from '../../src/server/http/api-boundary.mjs';
 
 const requestId = '10000000-0000-4000-8000-000000000001';
 
@@ -17,7 +22,7 @@ function harness(handler, request = new Request('https://skycar.test/api/v1/heal
     info: value => records.push(['info', value]),
     error: value => records.push(['error', value]),
   };
-  return withApiBoundary(request, '/api/v1/health', handler, {
+  return withApiBoundary(request, API_ROUTE_TEMPLATES.health, handler, {
     makeRequestId: () => requestId,
     now: () => (tick += 7),
     logger,
@@ -84,7 +89,7 @@ test('unexpected failures are redacted from both response and structured log', a
 test('telemetry failures never replace the API response', async () => {
   const response = await withApiBoundary(
     new Request('https://skycar.test/api/v1/health'),
-    '/api/v1/health',
+    API_ROUTE_TEMPLATES.health,
     async () => ({ status: 'ok' }),
     {
       makeRequestId: () => requestId,
@@ -96,9 +101,47 @@ test('telemetry failures never replace the API response', async () => {
   assert.equal((await response.json()).data.status, 'ok');
 });
 
-test('raw URLs are rejected as log routes', async () => {
-  await assert.rejects(
-    () => withApiBoundary(new Request('https://skycar.test/api/v1/jobs/secret'), '/api/v1/jobs?customer=secret', async () => ({})),
-    /route template/,
+test('registered parameterised templates are safe to log', async () => {
+  const records = [];
+  const response = await withApiBoundary(
+    new Request('https://skycar.test/api/v1/garage/vehicles/30000000-0000-4000-8000-000000000003/photo'),
+    API_ROUTE_TEMPLATES.garageVehiclePhoto,
+    async () => ({ status: 'ok' }),
+    {
+      makeRequestId: () => requestId,
+      now: () => 1,
+      logger: {
+        info: value => records.push(value),
+        error: value => records.push(value),
+      },
+    },
   );
+
+  assert.equal(response.status, 200);
+  assert.equal(JSON.parse(records[0]).route, '/api/v1/garage/vehicles/[vehicleId]/photo');
+  assert.doesNotMatch(records[0], /30000000-0000-4000-8000-000000000003/);
+});
+
+test('unregistered literal and raw route values are rejected before execution', async () => {
+  const rejectedRoutes = [
+    '/api/v1/garage/vehicles/30000000-0000-4000-8000-000000000003/photo',
+    '/api/v1/jobs/12345',
+    '/api/v1/customers/customer@example.test',
+    '/api/v1/jobs?customer=secret',
+    'https://skycar.test/api/v1/health',
+    '/api/v1/unreviewed-static-route',
+  ];
+
+  for (const route of rejectedRoutes) {
+    let handlerCalled = false;
+    await assert.rejects(
+      () => withApiBoundary(
+        new Request('https://skycar.test/api/v1/health'),
+        route,
+        async () => { handlerCalled = true; return {}; },
+      ),
+      /registered static route template/,
+    );
+    assert.equal(handlerCalled, false, `handler should not run for ${route}`);
+  }
 });

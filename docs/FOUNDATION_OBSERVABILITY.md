@@ -37,6 +37,14 @@ allow-listed:
 - `retryable`
 - `durationMs`
 
+The logged route must be selected from the reviewed `API_ROUTE_TEMPLATES`
+registry. Runtime request paths and ad-hoc strings are rejected before the route
+handler executes. Parameterised routes use stable placeholder segments such as
+`/api/v1/garage/vehicles/[vehicleId]/photo`; a literal UUID, numeric identifier,
+email-bearing path, query string or absolute URL cannot be logged as the route.
+Adding a route requires an explicit source change and review of the static
+template.
+
 Logs must not include bodies, cookies, authorization/session headers, URL query
 strings, email addresses, user/customer/vehicle/job IDs, storage paths, payment
 details, provider/database messages or caught stack traces. Domain identifiers and
@@ -50,7 +58,8 @@ Feature routes must adopt the shared boundary when rebased/integrated; this PR d
 not rewrite unmerged feature branches.
 
 Unit tests cover canonical success, bounded expected errors, redacted unexpected
-failures, exact log fields, raw-route rejection and log-sink failure. CI must also
-pass lint, TypeScript and production build. Hosted log collection, retention,
+failures, exact log fields, registered placeholder templates, literal-identifier
+and raw-route rejection, and log-sink failure. CI must also pass lint, TypeScript
+and production build. Hosted log collection, retention,
 alerting, access controls and correlation with isolated Supabase remain release
 operations work; no external telemetry provider is configured here.
