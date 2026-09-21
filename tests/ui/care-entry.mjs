@@ -27,16 +27,30 @@ try {
   const received = { id: requestId, vehicle_id: vehicle.id, service: "repair", description: "Scratch on the left rear door", preferred_window: "flexible", quote_state: "in_review", assignment_state: "none", fulfilment_state: null, money_state: null, customer_stage: "request_received", next_action: "review_request", responsible_role: "operations", created_at: "2026-09-20T12:00:00Z", updated_at: "2026-09-20T12:00:00Z", next_update_at: "2026-09-20T13:00:00Z", events: [{ id: "22222222-2222-4222-8222-222222222222", sequence: 1, type: "request_received", occurred_at: "2026-09-20T12:00:00Z" }] };
   let vehicleMode = "ready";
   let vehicleLoads = 0;
+  let deferredVehicleLoadStarted;
   let attempts = 0;
   const keys = [];
   const bodies = [];
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-  await context.route("**/api/v1/garage/vehicles?*", route => {
+  await context.route("**/api/v1/garage/vehicles?*", async route => {
     vehicleLoads++;
-    if (vehicleMode === "session") return route.fulfill({ status: 401, json: { error: { code: "UNAUTHENTICATED", message: "Sign in." } } });
-    if (vehicleMode === "empty") return route.fulfill({ json: { data: { items: [], nextCursor: null } } });
-    if (vehicleMode === "other") return route.fulfill({ json: { data: { items: [otherVehicle], nextCursor: null } } });
-    return route.fulfill({ json: { data: { items: [vehicle], nextCursor: null } } });
+    let mode = vehicleMode;
+    if (mode.startsWith("deferred-")) {
+      mode = mode.slice("deferred-".length);
+      let release;
+      const released = new Promise(resolve => { release = resolve; });
+      deferredVehicleLoadStarted?.({ release });
+      await released;
+    }
+    try {
+      if (mode === "session") return await route.fulfill({ status: 401, json: { error: { code: "UNAUTHENTICATED", message: "Sign in." } } });
+      if (mode === "error") return await route.fulfill({ status: 503, json: { error: { code: "TEMPORARILY_UNAVAILABLE", message: "Try again.", retryable: true } } });
+      if (mode === "empty") return await route.fulfill({ json: { data: { items: [], nextCursor: null } } });
+      if (mode === "other") return await route.fulfill({ json: { data: { items: [otherVehicle], nextCursor: null } } });
+      return await route.fulfill({ json: { data: { items: [vehicle], nextCursor: null } } });
+    } catch {
+      // A superseded validation request is deliberately aborted by the client.
+    }
   });
   let submissionMode = "malformed503-then-success";
   let releaseDeferredSubmission;
@@ -151,30 +165,106 @@ try {
   assert.equal(keys.length, inFlightStart + 1);
   assert.equal(bodies.length, inFlightStart + 1);
 
+  // A POST completing first must wait for the latest same-account validation.
+  // Superseding an earlier validation cannot make the POST navigate early.
+  vehicleMode = "ready";
+  submissionMode = "deferred-success";
+  const samePostFirstPage = await context.newPage();
+  await samePostFirstPage.goto(`${origin}/care/request`);
+  await samePostFirstPage.getByLabel("Describe the damage or cleaning work").fill("Keep the original command through validation replacement");
+  const samePostFirstStart = keys.length;
+  const samePostStarted = new Promise(resolve => { deferredSubmissionStarted = resolve; });
+  const samePostResponse = samePostFirstPage.waitForResponse(response => response.url().endsWith("/api/v1/care/requests") && response.request().method() === "POST");
+  await samePostFirstPage.getByRole("button", { name: "Submit for review" }).click();
+  await samePostStarted;
+  vehicleMode = "deferred-ready";
+  const firstValidationStarted = new Promise(resolve => { deferredVehicleLoadStarted = resolve; });
+  await samePostFirstPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const firstValidation = await firstValidationStarted;
+  const latestValidationStarted = new Promise(resolve => { deferredVehicleLoadStarted = resolve; });
+  await samePostFirstPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const latestValidation = await latestValidationStarted;
+  releaseDeferredSubmission();
+  await samePostResponse;
+  await samePostFirstPage.waitForTimeout(100);
+  assert.equal(samePostFirstPage.url(), `${origin}/care/request`);
+  assert.equal(keys.length, samePostFirstStart + 1);
+  firstValidation.release();
+  await samePostFirstPage.waitForTimeout(50);
+  assert.equal(samePostFirstPage.url(), `${origin}/care/request`);
+  const latestValidationResponse = samePostFirstPage.waitForResponse(response => response.url().includes("/api/v1/garage/vehicles?") && response.request().method() === "GET");
+  latestValidation.release();
+  await latestValidationResponse;
+  await samePostFirstPage.waitForURL(`${origin}/care/requests/${requestId}`);
+  assert.equal(keys.length, samePostFirstStart + 1);
+  assert.equal(bodies.length, samePostFirstStart + 1);
+
   // An account change during an in-flight POST must clear prior-account UI and
-  // make the old success incapable of navigating the new session.
+  // make the old success incapable of navigating even when POST finishes first.
   vehicleMode = "ready";
   submissionMode = "deferred-success";
   const switchedInFlightPage = await context.newPage();
   await switchedInFlightPage.goto(`${origin}/care/request`);
   await switchedInFlightPage.getByLabel("Describe the damage or cleaning work").fill("Private in-flight request from the first account");
   const switchedStarted = new Promise(resolve => { deferredSubmissionStarted = resolve; });
-  const switchedClick = switchedInFlightPage.getByRole("button", { name: "Submit for review" }).click();
+  const switchedPostResponse = switchedInFlightPage.waitForResponse(response => response.url().endsWith("/api/v1/care/requests") && response.request().method() === "POST");
+  await switchedInFlightPage.getByRole("button", { name: "Submit for review" }).click();
   await switchedStarted;
-  vehicleMode = "other";
+  vehicleMode = "deferred-other";
+  const switchedValidationStarted = new Promise(resolve => { deferredVehicleLoadStarted = resolve; });
   const switchedRefresh = switchedInFlightPage.waitForResponse(response => response.url().includes("/api/v1/garage/vehicles?") && response.request().method() === "GET");
   await switchedInFlightPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const switchedValidation = await switchedValidationStarted;
+  releaseDeferredSubmission();
+  await switchedPostResponse;
+  await switchedInFlightPage.waitForTimeout(100);
+  assert.equal(switchedInFlightPage.url(), `${origin}/care/request`);
+  switchedValidation.release();
   await switchedRefresh;
   await switchedInFlightPage.getByLabel("Active Garage vehicle").waitFor();
   assert.equal(await switchedInFlightPage.getByLabel("Active Garage vehicle").inputValue(), otherVehicle.id);
   assert.equal(await switchedInFlightPage.getByText("Private in-flight request from the first account").count(), 0);
   assert.equal(await switchedInFlightPage.getByLabel("Describe the damage or cleaning work").isEnabled(), true);
   assert.equal(await switchedInFlightPage.getByRole("button", { name: "Submit for review" }).isEnabled(), true);
-  releaseDeferredSubmission();
-  await switchedClick;
   await switchedInFlightPage.waitForTimeout(100);
   assert.equal(switchedInFlightPage.url(), `${origin}/care/request`);
   assert.equal(await switchedInFlightPage.getByText(received.description).count(), 0);
+
+  // A failed validation also fences a completed POST. Reloading the same owner
+  // exposes only a safe replay of the original key/body.
+  vehicleMode = "ready";
+  submissionMode = "deferred-success";
+  const failedValidationPage = await context.newPage();
+  await failedValidationPage.goto(`${origin}/care/request`);
+  await failedValidationPage.getByLabel("Describe the damage or cleaning work").fill("Retain this exact request after validation failure");
+  const failedValidationStart = keys.length;
+  const failedPostStarted = new Promise(resolve => { deferredSubmissionStarted = resolve; });
+  const failedPostResponse = failedValidationPage.waitForResponse(response => response.url().endsWith("/api/v1/care/requests") && response.request().method() === "POST");
+  await failedValidationPage.getByRole("button", { name: "Submit for review" }).click();
+  await failedPostStarted;
+  vehicleMode = "deferred-error";
+  const failedGetStarted = new Promise(resolve => { deferredVehicleLoadStarted = resolve; });
+  const failedGetResponse = failedValidationPage.waitForResponse(response => response.url().includes("/api/v1/garage/vehicles?") && response.request().method() === "GET");
+  await failedValidationPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const failedValidation = await failedGetStarted;
+  releaseDeferredSubmission();
+  await failedPostResponse;
+  await failedValidationPage.waitForTimeout(100);
+  assert.equal(failedValidationPage.url(), `${origin}/care/request`);
+  failedValidation.release();
+  await failedGetResponse;
+  await failedValidationPage.getByRole("heading", { name: "We couldn’t load your vehicles" }).waitFor();
+  assert.equal(failedValidationPage.url(), `${origin}/care/request`);
+  vehicleMode = "ready";
+  await failedValidationPage.getByRole("button", { name: "Try again" }).click();
+  await failedValidationPage.getByRole("button", { name: "Check same request" }).waitFor();
+  assert.equal(await failedValidationPage.getByLabel("Describe the damage or cleaning work").inputValue(), "Retain this exact request after validation failure");
+  submissionMode = "success";
+  await failedValidationPage.getByRole("button", { name: "Check same request" }).click();
+  await failedValidationPage.waitForURL(`${origin}/care/requests/${requestId}`);
+  assert.equal(keys.length, failedValidationStart + 2);
+  assert.equal(keys[failedValidationStart], keys[failedValidationStart + 1]);
+  assert.equal(bodies[failedValidationStart], bodies[failedValidationStart + 1]);
 
   // An uncertain command retains its exact key/body for the same account, but
   // sign-out/access loss must redact it instead of suppressing revalidation.
@@ -240,7 +330,7 @@ try {
   await emptyPage.goto(`${origin}/care/request`);
   await emptyPage.getByRole("heading", { name: "Add a vehicle first" }).waitFor();
   assert.equal(await emptyPage.getByRole("link", { name: "Add a vehicle in Garage" }).getAttribute("href"), "/garage");
-  console.log("PASS: service entry contract, same-account pending preservation, pending-session revalidation, in-flight account-change isolation, malformed response recovery, account-switch draft redaction, receipt navigation and empty Garage");
+  console.log("PASS: service entry contract, GET/POST ordering fences, same-account pending preservation, pending-session revalidation, in-flight account-change isolation, validation-failure replay, malformed response recovery, account-switch draft redaction, receipt navigation and empty Garage");
 } finally {
   if (browser) await browser.close();
   server.kill();

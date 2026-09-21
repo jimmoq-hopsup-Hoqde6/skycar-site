@@ -11,6 +11,12 @@ import "./request-form.css";
 
 type AccessState = "ready" | "session" | "access" | "vehicle" | "conflict" | "error";
 type Pending = { key: string; body: string };
+type ValidationOutcome = "verified" | "failed" | "superseded";
+type ValidationRun = {
+  status: "pending" | ValidationOutcome;
+  settled: Promise<ValidationOutcome>;
+  settle: (outcome: ValidationOutcome) => void;
+};
 
 class SubmitError extends Error {
   constructor(public code: string, message: string, public status: number, public retryable: boolean) { super(message); }
@@ -70,6 +76,18 @@ function accessState(error: unknown): AccessState {
   return "error";
 }
 
+function createValidationRun(): ValidationRun {
+  let settle!: (outcome: ValidationOutcome) => void;
+  const settled = new Promise<ValidationOutcome>(resolve => { settle = resolve; });
+  return { status: "pending", settled, settle };
+}
+
+function settleValidation(run: ValidationRun, outcome: ValidationOutcome) {
+  if (run.status !== "pending") return;
+  run.status = outcome;
+  run.settle(outcome);
+}
+
 export function CareRequestForm() {
   const router = useRouter();
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -86,6 +104,7 @@ export function CareRequestForm() {
   const pending = useRef<Pending | null>(null);
   const controller = useRef<AbortController | null>(null);
   const accountEpoch = useRef(0);
+  const validation = useRef<ValidationRun | null>(null);
 
   const selectVehicle = useCallback((id: string) => {
     selectedVehicle.current = id;
@@ -111,6 +130,9 @@ export function CareRequestForm() {
     // still owned by the current session; an account/access change clears it and
     // increments accountEpoch so an old response cannot navigate the new session.
     controller.current?.abort();
+    if (validation.current?.status === "pending") settleValidation(validation.current, "superseded");
+    const validationRun = createValidationRun();
+    validation.current = validationRun;
     const current = new AbortController(); controller.current = current;
     const previousVehicle = selectedVehicle.current;
     setLoading(true); setAccess("ready");
@@ -121,13 +143,40 @@ export function CareRequestForm() {
       if (previousVehicle && !stillOwned) clearAccountState();
       setVehicles(result);
       selectVehicle(stillOwned ? previousVehicle : (result[0]?.id ?? ""));
+      settleValidation(validationRun, "verified");
     } catch (caught) {
-      if (current.signal.aborted) return;
+      if (current.signal.aborted) {
+        settleValidation(validationRun, "superseded");
+        return;
+      }
       const nextAccess = accessState(caught);
       if (["session", "access"].includes(nextAccess)) clearAccountState();
       setAccess(nextAccess);
+      settleValidation(validationRun, "failed");
     } finally { if (!current.signal.aborted) setLoading(false); }
   }, [clearAccountState, selectVehicle]);
+
+  async function latestValidationAllows(epoch: number) {
+    while (epoch === accountEpoch.current) {
+      const current = validation.current;
+      if (!current) return false;
+      if (current.status === "pending") await current.settled;
+      if (validation.current !== current || current.status === "superseded") continue;
+      return current.status === "verified" && epoch === accountEpoch.current;
+    }
+    return false;
+  }
+
+  function retainUncertainAttempt(epoch: number, attempt: Pending) {
+    if (epoch !== accountEpoch.current || pending.current !== attempt) return;
+    setUncertain(true);
+    setError(new SubmitError(
+      "OWNERSHIP_REVALIDATION_REQUIRED",
+      "We could not verify the signed-in account after this attempt. Check the same request after your Garage reloads.",
+      0,
+      true,
+    ));
+  }
 
   useEffect(() => {
     let active = true;
@@ -158,11 +207,17 @@ export function CareRequestForm() {
     setSaving(true); setError(null);
     try {
       const result = await submitCare(attempt.body, attempt.key);
-      if (epoch !== accountEpoch.current) return;
+      if (!(await latestValidationAllows(epoch))) {
+        retainUncertainAttempt(epoch, attempt);
+        return;
+      }
       pending.current = null; setUncertain(false);
       router.push(`/care/requests/${encodeURIComponent(result.request.id)}`);
     } catch (caught) {
-      if (epoch !== accountEpoch.current) return;
+      if (!(await latestValidationAllows(epoch))) {
+        retainUncertainAttempt(epoch, attempt);
+        return;
+      }
       const next = caught instanceof SubmitError ? caught : new SubmitError("INTERNAL_ERROR", "We could not save your request.", 0, true);
       if (!next.retryable) pending.current = null;
       setUncertain(next.retryable && !!pending.current);
