@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CareReceipt } from "@/domain/care/request";
 import { eventLabels, readReceipt, statusSummary } from "@/domain/care/presentation";
 import { clearPendingCareRetry, readPendingCareRetry, savePendingCareRetry } from "@/domain/care/retry-recovery";
@@ -14,9 +14,10 @@ class RequestError extends Error {
 function date(value: string) {
   return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
-async function load(id: string, retryKey?: string): Promise<CareReceipt> {
+async function load(id: string, retryKey?: string, signal?: AbortSignal): Promise<CareReceipt> {
   const response = await fetch(`/api/v1/care/requests/${encodeURIComponent(id)}${retryKey ? "/retry" : ""}`, {
-    cache: "no-store", credentials: "same-origin", signal: AbortSignal.timeout(15000),
+    cache: "no-store", credentials: "same-origin",
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
     ...(retryKey ? { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": retryKey }, body: "{}" } : {}),
   });
   if (!response.ok) throw new RequestError(response.status);
@@ -42,34 +43,63 @@ export default function RequestStatus({ id }: { id: string }) {
   const [recoverable, setRecoverable] = useState(false);
   const locked = useRef(false);
   const retryKey = useRef<string | null>(null);
+  const controller = useRef<AbortController | null>(null);
+  const privacyEpoch = useRef(0);
 
-  useEffect(() => {
-    let active = true;
-    const recoveredKey = readPendingCareRetry(window.sessionStorage, id);
-    retryKey.current = recoveredKey;
-    if (recoveredKey) queueMicrotask(() => { if (active) { setUncertain(true); setRecoverable(true); } });
-    load(id).then(r => { if (active) {
+  const verify = useCallback(async (discard = false) => {
+    controller.current?.abort();
+    const current = new AbortController(); controller.current = current;
+    const epoch = discard ? ++privacyEpoch.current : privacyEpoch.current;
+    if (discard) {
+      // Account/session revalidation is fail-closed: hide previously verified
+      // private request details until the current session proves access again.
+      setReceipt(null); setChecked(null); setError("");
+    }
+    setBusy(true);
+    try {
+      const r = await load(id, undefined, current.signal);
+      if (current.signal.aborted || epoch !== privacyEpoch.current) return;
       setReceipt(r); setChecked(new Date().toISOString()); setNow(Date.now());
-      if (recoveredKey && r.customer_stage !== "no_match") {
+      if (retryKey.current && r.customer_stage !== "no_match") {
         clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
         setUncertain(false); setRecoverable(false);
       }
-    } })
-      .catch(e => { if (active) {
-        setError(errorMessage(e));
-        if (e instanceof RequestError && [400, 401, 403, 404].includes(e.status)) {
-          clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
-          setReceipt(null); setUncertain(false); setRecoverable(false);
-        }
-      } })
-      .finally(() => { if (active) setBusy(false); });
-    const timer = setInterval(() => setNow(Date.now()), 15000);
-    return () => { active = false; clearInterval(timer); };
+    } catch (e) {
+      if (current.signal.aborted || epoch !== privacyEpoch.current) return;
+      setError(errorMessage(e));
+      if (e instanceof RequestError && [400, 401, 403, 404].includes(e.status)) {
+        clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
+        setReceipt(null); setUncertain(false); setRecoverable(false);
+      }
+    } finally {
+      if (!current.signal.aborted && epoch === privacyEpoch.current) setBusy(false);
+    }
   }, [id]);
+
+  useEffect(() => {
+    const recoveredKey = readPendingCareRetry(window.sessionStorage, id);
+    retryKey.current = recoveredKey;
+    if (recoveredKey) queueMicrotask(() => { setUncertain(true); setRecoverable(true); });
+    queueMicrotask(() => { void verify(); });
+    const revalidate = () => { void verify(true); };
+    const revalidateVisible = () => { if (document.visibilityState === "visible") revalidate(); };
+    window.addEventListener("focus", revalidate);
+    window.addEventListener("pageshow", revalidate);
+    document.addEventListener("visibilitychange", revalidateVisible);
+    const timer = setInterval(() => setNow(Date.now()), 15000);
+    return () => {
+      controller.current?.abort();
+      window.removeEventListener("focus", revalidate);
+      window.removeEventListener("pageshow", revalidate);
+      document.removeEventListener("visibilitychange", revalidateVisible);
+      clearInterval(timer);
+    };
+  }, [id, verify]);
 
   async function update(reopen = false) {
     if (locked.current) return;
     locked.current = true;
+    const epoch = privacyEpoch.current;
     setBusy(true); setError("");
     try {
       if (reopen && !retryKey.current) {
@@ -77,12 +107,14 @@ export default function RequestStatus({ id }: { id: string }) {
         setRecoverable(savePendingCareRetry(window.sessionStorage, id, retryKey.current));
       }
       const r = await load(id, reopen ? retryKey.current! : undefined);
+      if (epoch !== privacyEpoch.current) return;
       setReceipt(r); setChecked(new Date().toISOString()); setNow(Date.now());
       if (r.customer_stage !== "no_match") {
         clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
         setUncertain(false); setRecoverable(false);
       } else if (retryKey.current) setUncertain(true);
     } catch (e) {
+      if (epoch !== privacyEpoch.current) return;
       setError(errorMessage(e));
       // Never retain previously loaded private details after access is lost.
       if (e instanceof RequestError && [400, 401, 403, 404].includes(e.status)) {
@@ -97,7 +129,10 @@ export default function RequestStatus({ id }: { id: string }) {
         }
         else setUncertain(true); // The write may have committed; reuse its key.
       }
-    } finally { locked.current = false; setBusy(false); }
+    } finally {
+      locked.current = false;
+      if (epoch === privacyEpoch.current) setBusy(false);
+    }
   }
 
   const summary = receipt ? statusSummary(receipt, now) : null;
