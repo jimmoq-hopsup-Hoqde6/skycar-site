@@ -46,6 +46,8 @@ export function apiResult(data, options = {}) {
 function responseHeaders(requestId, supplied = {}) {
   const headers = new Headers(supplied);
   headers.set('Cache-Control', 'private, no-store');
+  headers.set('Content-Type', 'application/json; charset=utf-8');
+  headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('X-Request-Id', requestId);
   return headers;
 }

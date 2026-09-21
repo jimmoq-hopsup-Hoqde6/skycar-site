@@ -17,8 +17,11 @@ Success and failure use the documented envelopes:
 ```
 
 The same ID is returned as `X-Request-Id`. Responses default to
-`Cache-Control: private, no-store`. An incoming client header never selects the
-authoritative request ID.
+`Cache-Control: private, no-store`, authoritative
+`Content-Type: application/json; charset=utf-8` and
+`X-Content-Type-Options: nosniff`. Adopted handlers may return reviewed custom
+headers, but cannot override those boundary-owned headers. An incoming client
+header never selects the authoritative request ID.
 
 Expected failures use `ApiFault` with a stable uppercase code, bounded public
 message and optional bounded field errors. Unknown exceptions always become the

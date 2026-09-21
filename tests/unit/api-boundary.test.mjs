@@ -49,9 +49,19 @@ test('success uses the canonical envelope, server request ID and no-store respon
 test('explicit success metadata cannot be confused with domain fields', async () => {
   const { response } = await harness(async () => apiResult({ status: 'queued', data: 'domain-value' }, {
     status: 201,
-    headers: { 'X-Skycar-Test': 'accepted' },
+    headers: {
+      'Cache-Control': 'public, max-age=3600',
+      'Content-Type': 'text/html',
+      'X-Content-Type-Options': 'off',
+      'X-Request-Id': 'client-controlled',
+      'X-Skycar-Test': 'accepted',
+    },
   }));
   assert.equal(response.status, 201);
+  assert.equal(response.headers.get('cache-control'), 'private, no-store');
+  assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(response.headers.get('x-request-id'), requestId);
   assert.equal(response.headers.get('x-skycar-test'), 'accepted');
   assert.deepEqual((await response.json()).data, { status: 'queued', data: 'domain-value' });
 });
