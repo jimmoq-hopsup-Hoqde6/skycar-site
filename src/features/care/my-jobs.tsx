@@ -92,13 +92,18 @@ export function MyJobs() {
     cursor ? setLoadingMore(true) : setLoading(true);
     setMessage(""); setAccess("ready");
     try {
-      const jobsPromise = fetchJobs(vehicleId, cursor, current.signal);
-      const vehiclesPromise = cursor || vehicles.length ? Promise.resolve(vehicles) : Promise.all([
+      // A discard is an identity/ownership revalidation boundary. Never reuse
+      // the previous render's vehicle filter or vehicle closure here: both may
+      // belong to a different account after sign-out/account replacement.
+      const effectiveVehicleId = discard ? "" : vehicleId;
+      const jobsPromise = fetchJobs(effectiveVehicleId, cursor, current.signal);
+      const vehiclesPromise = cursor || (!discard && vehicles.length) ? Promise.resolve(vehicles) : Promise.all([
         fetchVehicleSet(false, current.signal), fetchVehicleSet(true, current.signal),
       ]).then(([active, archived]) => [...active, ...archived]);
       const [jobs, ownedVehicles] = await Promise.all([jobsPromise, vehiclesPromise]);
       if (current.signal.aborted) return;
       setVehicles(ownedVehicles);
+      if (discard && vehicleId) setVehicleId("");
       setItems(previous => cursor ? [...new Map([...previous, ...jobs.items].map(item => [item.id, item])).values()] : jobs.items);
       setNextCursor(jobs.next_cursor); setChecked(jobs.evaluated_at); setStale(false);
     } catch (error) {
