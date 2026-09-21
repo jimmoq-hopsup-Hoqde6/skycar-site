@@ -45,7 +45,7 @@ Status: IN PROGRESS
 - [x] CI install/lint/typecheck/unit/build checks passing on PR #13
 - [ ] Execute migration against isolated hosted Supabase test project
 - [ ] Prove hosted two-user negative RLS/storage authorization tests
-- [ ] Complete application logging/audit/error middleware baseline
+- [x] Application request-ID, canonical error and redacted structured-log boundary
 - [ ] Verify staging environment and rollback/restore setup
 
 ### Phase 1 — Garage
