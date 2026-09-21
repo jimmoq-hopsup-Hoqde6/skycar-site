@@ -40,6 +40,8 @@ try {
   let mode = "ready";
   let firstList = true;
   let vehicleLoads = 0;
+  let releaseDelayedJobs;
+  let delayedJobsStarted;
   const requestedCursors = [];
   await page.route("**/api/v1/garage/vehicles?*", async route => {
     vehicleLoads++;
@@ -60,7 +62,12 @@ try {
     if (mode === "offline") return route.abort();
     if (mode === "session") return route.fulfill({ status: 401, json: { error: { code: "UNAUTHENTICATED" } } });
     if (mode === "access") return route.fulfill({ status: 403, json: { error: { code: "FORBIDDEN" } } });
-    if (mode === "accountB") return route.fulfill({ json: { data: { items: [accountBJob], next_cursor: null, evaluated_at: "2026-09-20T14:02:00Z" } } });
+    const requestMode = mode;
+    if (requestMode === "delayedA") {
+      delayedJobsStarted?.();
+      await new Promise(resolve => { releaseDelayedJobs = resolve; });
+    }
+    if (requestMode === "accountB") return route.fulfill({ json: { data: { items: [accountBJob], next_cursor: null, evaluated_at: "2026-09-20T14:02:00Z" } } });
     if (mode === "empty") return route.fulfill({ json: { data: { items: [], next_cursor: null, evaluated_at: "2026-09-20T14:00:00Z" } } });
     if (url.searchParams.get("vehicle_id") === archivedVehicle.id) return route.fulfill({ json: { data: { items: [noMatch], next_cursor: null, evaluated_at: "2026-09-20T14:00:00Z" } } });
     return route.fulfill({ json: { data: cursor ? { items: [delayed], next_cursor: null, evaluated_at: "2026-09-20T14:01:00Z" } : { items: [base, noMatch], next_cursor: "page-two", evaluated_at: "2026-09-20T14:00:00Z" } } });
@@ -97,6 +104,22 @@ try {
   assert.ok(vehicleLoads >= beforePageShowLoads + 2, "pageshow revalidation must reread vehicle ownership");
   assert.equal(await page.getByText("Toyota Corolla · SKY123").count(), 0);
 
+  // A late response started under account A must not repopulate after account B
+  // wins a newer focus revalidation.
+  mode = "delayedA";
+  const delayedStarted = new Promise(resolve => { delayedJobsStarted = resolve; });
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await delayedStarted;
+  mode = "accountB";
+  const newerAccountB = page.waitForResponse(response => response.url().includes("/api/v1/care/requests?") && response.request().method() === "GET");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await newerAccountB;
+  await page.getByRole("heading", { name: "PRIVATE_B Car B · B456" }).waitFor();
+  releaseDelayedJobs();
+  await page.waitForTimeout(100);
+  assert.equal(await page.getByText("Toyota Corolla · SKY123").count(), 0);
+  assert.equal(await page.getByRole("heading", { name: "PRIVATE_B Car B · B456" }).count(), 1);
+
   // Restore the first synthetic account for the remaining archived/stale cases.
   mode = "ready";
   const accountARestore = page.waitForResponse(response => response.url().includes("/api/v1/care/requests?") && response.request().method() === "GET");
@@ -128,7 +151,7 @@ try {
   await page.getByRole("button", { name: "Refresh" }).click();
   await page.getByRole("heading", { name: "These requests are unavailable" }).waitFor();
   assert.equal(await page.getByRole("link", { name: /View request and timeline/ }).count(), 0);
-  console.log("PASS: loading, owner list, A→B focus/pageshow vehicle revalidation, prior-account label redaction, archived history, pagination, stale retry, session redaction, empty and access-denied states");
+  console.log("PASS: loading, owner list, A→B focus/pageshow vehicle revalidation, prior-account label redaction, late-response isolation, archived history, pagination, stale retry, session redaction, empty and access-denied states");
 } finally {
   if (browser) await browser.close();
   server.kill();
