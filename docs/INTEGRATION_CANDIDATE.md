@@ -8,8 +8,9 @@ unchanged. This candidate is reviewable preparation, not independent approval,
 authorization to merge main, or release acceptance.
 
 PR #9's old routing proposal is superseded. PR #21 contributes only combined
-workflow/test/documentation evidence; its parents are not merged twice. Both remain
-open for traceability until review records their final disposition.
+workflow/test/documentation evidence; its parents are not merged twice. PR #9 was
+closed without merging after recording supersession. PR #21 remains open for
+traceability pending review of the extracted evidence.
 
 ## Inputs and order
 Main baseline: `d717760145ae438560a1d469c4f9500cdab5baef`.
@@ -57,8 +58,9 @@ the source. Catalogue/photo/My Jobs are extracted as deltas from #21.
 | Browser | Garage, Care entry account-order regressions, My Jobs, status recovery, connected journey |
 
 Local locked offline install, lint, types, 84 tests, build and two smoke suites
-passed before the small navigation/test addition. Final exact-candidate GitHub
-results belong in the PR review. Chromium could not launch locally because socket
+passed including the navigation addition. Final exact-candidate GitHub results
+belong in the PR review. The connected browser fixture was corrected to match
+nested detail URLs; all browser runners now wait explicitly for server readiness. Chromium could not launch locally because socket
 creation is prohibited; no local browser pass is claimed. PostgreSQL is not
 installed locally; disposable CI databases supply that evidence.
 
