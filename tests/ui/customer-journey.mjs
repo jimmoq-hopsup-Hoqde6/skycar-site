@@ -17,10 +17,13 @@ try {
   const vehicle = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', make: 'Toyota', model: 'Corolla', variant: null, year: 2020, registration: 'SKY123', registration_state: 'SA', revision: 1, archived_at: null, created_at: now, updated_at: now };
   let receipt;
   let submissions = 0;
+  page.on('pageerror', error => console.error('Synthetic journey page error:', error.message));
+  page.on('console', message => { if (message.type() === 'error') console.error('Synthetic journey console:', message.text()); });
   await page.route('**/api/v1/garage/vehicles?*', route => route.fulfill({ json: { data: { items: new URL(route.request().url()).searchParams.get('archived') === 'true' ? [] : [vehicle], nextCursor: null } } }));
   await page.route('**/api/v1/care/requests**', async route => {
     const request = route.request();
     const url = new URL(request.url());
+    console.log('Synthetic API', request.method(), url.pathname);
     if (request.method() === 'POST') {
       submissions++;
       const input = request.postDataJSON();
@@ -39,7 +42,7 @@ try {
   await page.getByLabel('Describe the damage or cleaning work').fill('Scratch on the left rear door');
   await page.getByRole('button', { name: 'Submit for review' }).click();
   await page.waitForURL(`**/care/requests/11111111-1111-4111-8111-111111111111`);
-  await page.getByText('Scratch on the left rear door', { exact: true }).waitFor();
+  try { await page.getByText('Scratch on the left rear door', { exact: true }).waitFor(); } catch (error) { console.error('Fixture receipt:', JSON.stringify(receipt)); console.error('Rendered receipt page:', await page.locator('body').innerText()); throw error; }
   await page.getByRole('link', { name: 'My Jobs', exact: true }).click();
   await page.getByRole('heading', { name: 'Toyota Corolla · SKY123' }).waitFor();
   await page.getByRole('link', { name: /View request and timeline/ }).click();
