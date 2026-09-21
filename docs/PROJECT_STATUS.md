@@ -24,11 +24,11 @@ Active implementation evidence:
 - PR #19: customer Care request status/timeline UI with overdue/no-match handling and committed synthetic desktop/mobile evidence, stacked on #16.
 - PR #20: owner-scoped My Jobs/Care request list API with pagination, vehicle filtering and overdue summaries, stacked on #16.
 - PR #21: combined Garage/Care integration-verification branch applying every public migration together and testing the shared vehicle/permission boundary; Technical Lead accepted this combined boundary evidence only, not the full feature/release scope.
-- PR #22: authenticated Garage-linked My Jobs UI, reload-safe Care reopening and authenticated service-first Care entry. Technical Lead accepted the bounded My Jobs and reload-recovery slices; service-entry findings were corrected at exact head `a0458c8` with green exact-head checks, but Technical Lead re-review is still required before that slice is accepted.
-- PR #23: server-owned Repair/Cleaning service catalogue plus a strict coverage contract that fails closed with `COVERAGE_UNAVAILABLE` until an authoritative coverage resolver is approved and connected. Exact-head application and Care database checks pass; review is still required.
+- PR #22: authenticated Garage-linked My Jobs UI, reload-safe Care reopening and authenticated service-first Care entry. Technical Lead accepted the bounded My Jobs and reload-recovery slices. The first service-entry privacy/error findings were corrected at `a0458c8`, but re-review found a remaining same-account focus/in-flight revalidation defect that can discard drafts/pending idempotency state; service-entry acceptance remains blocked until corrected.
+- PR #23: server-owned Repair/Cleaning service catalogue plus a strict coverage contract that fails closed with `COVERAGE_UNAVAILABLE` until an authoritative coverage resolver is approved and connected. Technical Lead found resolver exceptions could violate the published 503 contract; corrective head `a0f2aed` now normalizes thrown/invalid resolver outcomes to redacted retryable 503 responses and has green exact-head application/Care checks. Technical Lead re-review remains required.
 
 ## Immediate priority
-Record the reviewed dependency/integration sequence for #16/#20/#17/#19/#21/#22/#23 before any merge. Re-review PR #22 head `a0458c8` for the service-entry privacy/error-handling corrections and review PR #23 head `b57ee5f` as the bounded catalogue/coverage contract. Inline vehicle creation remains queued until the returned #22 findings are accepted and the dependency route is documented. Hosted Supabase/session/private-storage verification, signed-in device QA and remaining #1/#8 release gates are still open.
+Correct PR #22 so same-account focus/page-return revalidation preserves the current draft and never clears/supersedes an in-flight or uncertain submission, while still clearing state on access loss/account change. Then obtain Technical Lead re-review of PR #22 and PR #23 exact head `a0f2aed`, and record the reviewed dependency/integration sequence for #16/#20/#17/#19/#21/#22/#23 before any merge. Inline vehicle creation remains blocked until the #22 service-entry slice is accepted. Hosted Supabase/session/private-storage verification, signed-in device QA and remaining #1/#8 release gates are still open.
 
 ### Phase 0 — Foundation
 Status: IN PROGRESS
@@ -75,11 +75,13 @@ Status: IN PROGRESS — PR #16 REVIEW-READY; PR #19/#20/#21/#22/#23 DRAFT
 - [x] Cross-reload uncertain-write recovery for Care reopening in PR #22
 - [x] Technical Lead accepted the bounded cross-reload recovery slice in PR #22
 - [x] First service-first scratch/dent and detail/clean entry implementation in PR #22
-- [x] Service-entry account-change privacy and malformed-response corrections implemented at PR #22 head `a0458c8`
+- [x] Initial service-entry account-change privacy and malformed-response corrections implemented at PR #22 head `a0458c8`
+- [ ] Correct PR #22 same-account focus/page-return draft preservation and in-flight idempotency handling
 - [x] Server-owned Repair/Cleaning catalogue and fail-closed coverage API implemented in PR #23
+- [x] PR #23 resolver-failure contract corrected at `a0f2aed` so thrown/invalid resolver outcomes return the documented retryable 503 contract
 - [ ] Project Manager dependency/integration route and individual feature acceptance before merge
-- [ ] Technical Lead re-review/acceptance of PR #22 service-entry corrections
-- [ ] Technical/dependency review of PR #23 catalogue/coverage contract
+- [ ] Technical Lead re-review/acceptance of PR #22 service-entry correction
+- [ ] Technical Lead re-review/acceptance of PR #23 corrected catalogue/coverage contract
 - [ ] Inline new-vehicle creation in the service journey using the audited Garage API
 - [ ] Guided private photo upload / media processing
 - [ ] Approved authoritative coverage resolver and operational ownership
@@ -137,13 +139,12 @@ No public production release until:
 - Core error handling implemented
 - Backup/recovery plan documented
 
-## Latest verified checkpoint — 2026-09-21 07:59 ACST
-- `main` still contains no merged current feature PR before this status-only alignment.
-- Since the 06:01 checkpoint, PR #22 advanced one corrective commit from `2ac83e9` to `a0458c8`. The change spans 8 files: Care entry UI docs/evidence, `src/domain/care/submission-recovery.ts`, `src/features/care/request-form.tsx`, the Care-entry Chromium test and submission unit coverage.
-- The PR #22 correction clears prior-account draft/service/window/vehicle/pending state during account revalidation, ignores stale in-flight results across account changes, treats unreadable 4xx as definitive/editable, and preserves exact-key/body recovery only for malformed 5xx/network uncertainty. Local lint, TypeScript, 48 unit/API tests, production build, Care smoke, targeted Chromium acceptance and `git diff --check` passed; exact-head Skycar CI run `35538212887` and Care database acceptance run `35538212889` passed. Technical Lead re-review remains pending.
-- New draft PR #23 at `b57ee5f` adds 9 files (+388/-1) for the server-owned Repair/Cleaning catalogue and strict coverage contract: `GET /api/v1/care/services`, same-origin `POST /api/v1/care/coverage`, contract docs, domain/server code and tests. Coverage returns authoritative available/unavailable only when a resolver can decide and otherwise fails closed with retryable `503 COVERAGE_UNAVAILABLE`.
-- PR #23 local verification passed ESLint, TypeScript, 50 unit/API tests, production build, built-route Care smoke and `git diff --check`; exact-head Skycar CI run `35541368809` and Care database acceptance run `35541368845` passed. No hosted coverage provider/resolver is connected or claimed.
-- Merge/integration remains blocked because the reviewed dependency route for #16/#20/#17/#19/#21/#22/#23 is not recorded; PR #9 also remains stale/unsuperseded. Hosted Supabase/PostgREST/JWT/RLS/private-storage verification, signed-in device QA and remaining #1/#8 operational/release controls remain open.
+## Latest verified checkpoint — 2026-09-21 09:59 ACST
+- `main` had no merged feature changes since the 07:59 checkpoint before this status-only alignment.
+- PR #22 remains at `a0458c8`; no new implementation commit landed in the interval. Technical Lead re-review resolved the earlier account-change draft leak and malformed-4xx retry lock but found a new blocker: ordinary same-account focus/page-return currently clears draft/selected-vehicle/pending submission state, and focus during an in-flight POST can discard the existing idempotency attempt and permit a second-key submission. Service-entry acceptance and inline vehicle creation remain blocked pending this correction.
+- PR #23 advanced one corrective commit from `b57ee5f` to `a0f2aed` (`Normalize Care coverage resolver failures`), changing 2 files with +38/-20: `src/server/care/catalogue-http.ts` and `tests/unit/care-catalogue.test.mjs`. Generic resolver timeout/exception, explicit unavailable errors and malformed decisions now converge on the documented redacted retryable `503 COVERAGE_UNAVAILABLE`; unexpected failures outside the resolver boundary remain redacted non-retryable 500.
+- PR #23 exact-head local evidence reports ESLint, TypeScript, 52 unit/API tests, production build, built Care catalogue/coverage smoke and `git diff --check` passed. Exact-head GitHub `application` run `35543637375` and `care-postgres` run `35543637372` both completed successfully. Technical Lead re-review of `a0f2aed` is still pending.
+- Merge/integration remains blocked because the reviewed dependency route for #16/#20/#17/#19/#21/#22/#23 is not recorded; hosted Supabase/PostgREST/JWT/RLS/private-storage verification, signed-in device QA and remaining #1/#8 operational/release controls remain open. No authoritative coverage resolver/provider is approved or connected.
 - No production deployment, live billing/provider activation, DNS change, destructive database change or live migration occurred.
 
 ## Product priority update — 2026-09-20
