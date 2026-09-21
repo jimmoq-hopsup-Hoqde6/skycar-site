@@ -32,15 +32,23 @@ try {
   await mkdir(evidence, { recursive: true });
   const activeVehicle = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", make: "Toyota", model: "Corolla", variant: "Ascent Sport", year: 2020, registration: "SKY123", registration_state: "SA", revision: 1, archived_at: null, created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" };
   const archivedVehicle = { ...activeVehicle, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", make: "Mazda", model: "3", registration: null, archived_at: "2026-09-19T00:00:00Z" };
+  const accountBVehicle = { ...activeVehicle, id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", make: "PRIVATE_B", model: "Car B", registration: "B456" };
   const base = { id: "11111111-1111-4111-8111-111111111111", vehicle_id: activeVehicle.id, vehicle_archived: false, service: "repair", quote_state: "in_review", assignment_state: "none", fulfilment_state: null, money_state: null, customer_stage: "request_received", next_action: "review_request", responsible_role: "operations", created_at: "2026-09-20T12:00:00Z", updated_at: "2026-09-20T12:00:00Z", next_update_at: "2026-09-20T13:00:00Z", is_overdue: true };
   const noMatch = { ...base, id: "22222222-2222-4222-8222-222222222222", vehicle_id: archivedVehicle.id, vehicle_archived: true, service: "cleaning", customer_stage: "no_match", next_action: "choose_recovery", responsible_role: "customer", next_update_at: null, is_overdue: false };
   const delayed = { ...base, id: "33333333-3333-4333-8333-333333333333", customer_stage: "delayed", next_action: "review_overdue_request", created_at: "2026-09-18T12:00:00Z" };
+  const accountBJob = { ...base, id: "44444444-4444-4444-8444-444444444444", vehicle_id: accountBVehicle.id, description: "Account B only" };
   let mode = "ready";
   let firstList = true;
+  let vehicleLoads = 0;
   const requestedCursors = [];
   await page.route("**/api/v1/garage/vehicles?*", async route => {
+    vehicleLoads++;
     const url = new URL(route.request().url());
     if (mode === "session") return route.fulfill({ status: 401, json: { error: { code: "UNAUTHENTICATED" } } });
+    if (mode === "accountB") {
+      const items = url.searchParams.get("archived") === "true" ? [] : [accountBVehicle];
+      return route.fulfill({ json: { data: { items, nextCursor: null } } });
+    }
     const items = url.searchParams.get("archived") === "true" ? [archivedVehicle] : [activeVehicle];
     return route.fulfill({ json: { data: { items, nextCursor: null } } });
   });
@@ -52,6 +60,7 @@ try {
     if (mode === "offline") return route.abort();
     if (mode === "session") return route.fulfill({ status: 401, json: { error: { code: "UNAUTHENTICATED" } } });
     if (mode === "access") return route.fulfill({ status: 403, json: { error: { code: "FORBIDDEN" } } });
+    if (mode === "accountB") return route.fulfill({ json: { data: { items: [accountBJob], next_cursor: null, evaluated_at: "2026-09-20T14:02:00Z" } } });
     if (mode === "empty") return route.fulfill({ json: { data: { items: [], next_cursor: null, evaluated_at: "2026-09-20T14:00:00Z" } } });
     if (url.searchParams.get("vehicle_id") === archivedVehicle.id) return route.fulfill({ json: { data: { items: [noMatch], next_cursor: null, evaluated_at: "2026-09-20T14:00:00Z" } } });
     return route.fulfill({ json: { data: cursor ? { items: [delayed], next_cursor: null, evaluated_at: "2026-09-20T14:01:00Z" } : { items: [base, noMatch], next_cursor: "page-two", evaluated_at: "2026-09-20T14:00:00Z" } } });
@@ -67,6 +76,34 @@ try {
   await page.getByRole("heading", { name: "Toyota Corolla · SKY123" }).nth(1).waitFor();
   assert.equal(await page.getByRole("link", { name: /View request and timeline/ }).count(), 3);
   assert.ok(requestedCursors.includes("page-two"));
+
+  // Successful account replacement must refetch ownership and never restore
+  // account A's vehicle labels from a stale React closure.
+  const beforeAccountSwitchLoads = vehicleLoads;
+  mode = "accountB";
+  const accountBJobs = page.waitForResponse(response => response.url().includes("/api/v1/care/requests?") && response.request().method() === "GET");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await accountBJobs;
+  await page.getByRole("heading", { name: "PRIVATE_B Car B · B456" }).waitFor();
+  assert.equal(await page.getByText("Toyota Corolla · SKY123").count(), 0);
+  assert.equal(await page.getByRole("option", { name: /Toyota/ }).count(), 0);
+  assert.equal(await page.getByRole("option", { name: /PRIVATE_B/ }).count(), 1);
+  assert.ok(vehicleLoads >= beforeAccountSwitchLoads + 2, "account replacement must reread active and archived vehicles");
+
+  const beforePageShowLoads = vehicleLoads;
+  const pageShowJobs = page.waitForResponse(response => response.url().includes("/api/v1/care/requests?") && response.request().method() === "GET");
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow")));
+  await pageShowJobs;
+  assert.ok(vehicleLoads >= beforePageShowLoads + 2, "pageshow revalidation must reread vehicle ownership");
+  assert.equal(await page.getByText("Toyota Corolla · SKY123").count(), 0);
+
+  // Restore the first synthetic account for the remaining archived/stale cases.
+  mode = "ready";
+  const accountARestore = page.waitForResponse(response => response.url().includes("/api/v1/care/requests?") && response.request().method() === "GET");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await accountARestore;
+  await page.getByRole("heading", { name: "Toyota Corolla · SKY123" }).first().waitFor();
+
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.getByLabel("Vehicle").selectOption(archivedVehicle.id);
@@ -91,7 +128,7 @@ try {
   await page.getByRole("button", { name: "Refresh" }).click();
   await page.getByRole("heading", { name: "These requests are unavailable" }).waitFor();
   assert.equal(await page.getByRole("link", { name: /View request and timeline/ }).count(), 0);
-  console.log("PASS: loading, owner list, vehicle labels/filter, archived history, pagination, stale retry, session redaction, empty and access-denied states");
+  console.log("PASS: loading, owner list, A→B focus/pageshow vehicle revalidation, prior-account label redaction, archived history, pagination, stale retry, session redaction, empty and access-denied states");
 } finally {
   if (browser) await browser.close();
   server.kill();
