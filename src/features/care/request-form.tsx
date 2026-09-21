@@ -105,9 +105,10 @@ export function CareRequestForm() {
   }, [selectVehicle]);
 
   const loadVehicles = useCallback(async () => {
-    // A pending key/body is the customer's one durable command. Background
-    // focus/page-return refreshes must not invalidate it or create a second one.
-    if (pending.current) return;
+    // Revalidate identity/ownership on focus even while a command is in flight or
+    // uncertain. The pending key/body survives only when the selected vehicle is
+    // still owned by the current session; an account/access change clears it and
+    // increments accountEpoch so an old response cannot navigate the new session.
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
     const previousVehicle = selectedVehicle.current;
