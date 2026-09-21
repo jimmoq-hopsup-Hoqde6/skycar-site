@@ -64,6 +64,20 @@ Issue #1 is the blocking foundation. Issue #2 and Issues #3/#4 are unblocked onl
 Reference:
 docs/FOUNDATION_ARCHITECTURE.md
 
+## Approved implementation reference — Issue #14
+Date: 2026-09-20
+Status: APPROVED REQUIREMENTS (implementation acceptance remains separate)
+
+Issue #14 records the approved end-to-end Care journey, server-owned customer
+status projection, durable acknowledgement/deadlines, offers and repeat care.
+It preserves D-006's separate quote/assignment/fulfilment/money boundaries.
+The first API increment is documented in docs/CARE_API.md. Provider, commercial
+and production release gates remain in force.
+
+Source boundary: this public repository implements its approved specifications.
+The separate private pilot is not synchronized or imported. Its source,
+identifiers, infrastructure and validation records are not public-repository
+implementation evidence. This work does not migrate or deploy that pilot.
 
 ## D-007 — Services acquire customers; Garage retains them
 Date: 2026-09-20
