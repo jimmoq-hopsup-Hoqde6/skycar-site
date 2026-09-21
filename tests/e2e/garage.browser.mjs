@@ -26,7 +26,7 @@ try {
   check(await page.getByText('Garage is not available yet.').count() === 1, 'unavailable state is explicit');
 
   let mode = 'normal'; const retries = []; const ledger = new Map();
-  await page.route('**/api/v1/garage/vehicles**', async route => {
+  await page.route(/\/api\/v1\/garage\/vehicles(?:[/?].*)?$/, async route => {
     const request = route.request(), url = new URL(request.url());
     const success = data => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data, meta: { requestId: 'fixture' } }) });
     const failure = (status, code, message, retryable = false) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ error: { code, message, fieldErrors: {}, retryable } }) });
