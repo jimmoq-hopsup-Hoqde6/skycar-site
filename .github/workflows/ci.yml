@@ -44,3 +44,5 @@ jobs:
           SKYCAR_ENV: demo
       - name: Reject committed environment files
         run: '! git ls-files | grep -E "(^|/)\.env($|\.)" | grep -v "\.env\.example$"'
+      - name: Verify built Care routes fail closed
+        run: node --test tests/api/care-smoke.test.mjs
