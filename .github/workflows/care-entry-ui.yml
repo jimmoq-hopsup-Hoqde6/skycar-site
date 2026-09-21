@@ -1,0 +1,57 @@
+name: Customer journey UI acceptance
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  care-entry-ui:
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [head, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.revision == 'head' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Verify tested revision
+        run: node scripts/verify-ci-checkout.mjs
+        env:
+          CI_CHECKOUT_MODE: ${{ matrix.revision }}
+      - name: Install application dependencies
+        run: npm ci --ignore-scripts
+      - name: Install pinned Playwright browser runner
+        run: |
+          npm install --prefix "$RUNNER_TEMP/skycar-browser" --ignore-scripts --no-audit --no-fund playwright@1.55.0
+          "$RUNNER_TEMP/skycar-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Build
+        run: npm run build
+        env:
+          SKYCAR_ENV: demo
+      - name: Run all customer browser regressions
+        run: |
+          export PLAYWRIGHT_MODULE="$RUNNER_TEMP/skycar-browser/node_modules/playwright/index.mjs"
+          node tests/ui/care-entry.mjs
+          node tests/ui/care-my-jobs.mjs
+          node tests/ui/care-status.mjs
+          node tests/ui/customer-journey.mjs
+          npm run start -- --hostname 127.0.0.1 -p 3100 > "$RUNNER_TEMP/skycar-garage.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:3100/ >/dev/null && break; sleep 1; done
+          GARAGE_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE" node tests/e2e/garage.browser.mjs
+        env:
+          SKYCAR_ENV: demo
+      - name: Preserve synthetic browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: customer-ui-${{ matrix.revision }}
+          path: |
+            docs/qa/
+            .garage-qa/
+          include-hidden-files: true

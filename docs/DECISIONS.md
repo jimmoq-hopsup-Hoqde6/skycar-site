@@ -64,6 +64,20 @@ Issue #1 is the blocking foundation. Issue #2 and Issues #3/#4 are unblocked onl
 Reference:
 docs/FOUNDATION_ARCHITECTURE.md
 
+## Approved implementation reference — Issue #14
+Date: 2026-09-20
+Status: APPROVED REQUIREMENTS (implementation acceptance remains separate)
+
+Issue #14 records the approved end-to-end Care journey, server-owned customer
+status projection, durable acknowledgement/deadlines, offers and repeat care.
+It preserves D-006's separate quote/assignment/fulfilment/money boundaries.
+The first API increment is documented in docs/CARE_API.md. Provider, commercial
+and production release gates remain in force.
+
+Source boundary: this public repository implements its approved specifications.
+The separate private pilot is not synchronized or imported. Its source,
+identifiers, infrastructure and validation records are not public-repository
+implementation evidence. This work does not migrate or deploy that pilot.
 
 ## D-007 — Services acquire customers; Garage retains them
 Date: 2026-09-20
@@ -91,3 +105,26 @@ Impact:
 - Prioritise a short service request path and manual/operational fulfilment before advanced automation.
 - Do not broaden V1 into mechanical repairs, roadside, insurance, nationwide coverage or a full vehicle marketplace.
 - Sale-Ready becomes the next acquisition extension after the core service flow, without replacing Garage.
+
+## D-GARAGE-001 — Garage mutation boundary
+Date: 2026-09-20
+Status: IMPLEMENTATION OF ACCEPTED #2 / D-006
+
+Decision:
+Own-vehicle create/edit/archive goes through one authenticated, atomic database RPC.
+The RPC derives ownership from auth.uid(), rejects unknown fields, checks the expected
+vehicle revision, and records mutation history, audit metadata and idempotent results
+in the same transaction. Direct authenticated writes to public.vehicles and its
+system-created vehicle_history are revoked; owner-entered events require a future
+validated Garage event API rather than direct database inserts.
+Vehicle identity, existing read policies and Care references remain unchanged.
+
+Reason:
+An HTTP-only check can be bypassed by clients of the exposed database API. The same
+ownership, retry and stale-edit rules must hold at both boundaries.
+
+Impact:
+Garage UI consumes docs/GARAGE_API.md. Other workstreams must not write vehicles
+directly or introduce another ownership model. New migration remains subject to
+isolated database and release verification under #1/#8. No live migration is authorised
+or performed by committing the implementation.

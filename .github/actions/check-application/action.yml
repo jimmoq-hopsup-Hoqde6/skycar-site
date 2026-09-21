@@ -32,6 +32,9 @@ runs:
       run: npm run build
       env:
         SKYCAR_ENV: demo
+    - name: Built API fail-closed smoke
+      shell: bash
+      run: node --test tests/api/*.test.mjs
     - name: Reject committed environment files
       shell: bash
       run: '! git ls-files | grep -E "(^|/)\.env($|\.)" | grep -v "\.env\.example$"'
