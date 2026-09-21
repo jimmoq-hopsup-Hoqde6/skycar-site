@@ -190,6 +190,27 @@ try {
   await uncertainSessionPage.getByRole("heading", { name: "Sign in to request care" }).waitFor();
   assert.equal(await uncertainSessionPage.getByText("Private uncertain request from the first account").count(), 0);
 
+  // A different authenticated account must also clear an uncertain command.
+  // It cannot inherit the previous account's request body or retry control.
+  vehicleMode = "ready";
+  submissionMode = "malformed503";
+  const uncertainAccountPage = await context.newPage();
+  await uncertainAccountPage.goto(`${origin}/care/request`);
+  await uncertainAccountPage.getByLabel("Describe the damage or cleaning work").fill("Private uncertain request before account switch");
+  await uncertainAccountPage.getByRole("button", { name: "Submit for review" }).click();
+  await uncertainAccountPage.getByRole("button", { name: "Check same request" }).waitFor();
+  vehicleMode = "other";
+  const uncertainAccountRefresh = uncertainAccountPage.waitForResponse(response => response.url().includes("/api/v1/garage/vehicles?") && response.request().method() === "GET");
+  await uncertainAccountPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await uncertainAccountRefresh;
+  await uncertainAccountPage.getByLabel("Active Garage vehicle").waitFor();
+  assert.equal(await uncertainAccountPage.getByLabel("Active Garage vehicle").inputValue(), otherVehicle.id);
+  assert.equal(await uncertainAccountPage.getByText("Private uncertain request before account switch").count(), 0);
+  assert.equal(await uncertainAccountPage.getByRole("button", { name: "Check same request" }).count(), 0);
+  assert.equal(await uncertainAccountPage.getByText("Submission not confirmed").count(), 0);
+  assert.equal(await uncertainAccountPage.getByLabel("Describe the damage or cleaning work").inputValue(), "");
+  assert.equal(await uncertainAccountPage.getByRole("button", { name: "Submit for review" }).isEnabled(), true);
+
   vehicleMode = "ready";
   const sessionPage = await context.newPage();
   await sessionPage.setViewportSize({ width: 390, height: 844 });
