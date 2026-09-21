@@ -11,11 +11,14 @@ idempotency key. A transient or uncertain response locks the form and reuses the
 exact key and body. A verified receipt navigates to `/care/requests/:id`. Archived
 vehicles are excluded and no second vehicle ownership model is created.
 
-Account revalidation on focus, page return or an explicit retry first clears the
-prior account's vehicle list, draft, preferences and pending request key/body. A
-received malformed 4xx is definitive and unlocks the form for correction; an
-unreadable 5xx or network failure remains uncertain and preserves the exact
-idempotent attempt.
+Account revalidation on focus, page return or an explicit retry preserves the
+draft when the selected owned vehicle is still present. An access failure or a
+vehicle set that no longer contains the selection clears the prior vehicle list,
+draft, preferences and pending request key/body. Revalidation is deferred while
+an idempotent attempt is in flight or uncertain, so focus cannot discard the
+attempt or create a second command. A received malformed 4xx is definitive and
+unlocks the form for correction; an unreadable 5xx or network failure remains
+uncertain and preserves the exact idempotent attempt.
 
 ## Honest boundary
 
@@ -34,8 +37,10 @@ PLAYWRIGHT_MODULE=<playwright-index.js> CHROMIUM_PATH=<chromium-binary> node tes
 
 The fixture contains no customer data. It verifies the public entry link, active
 vehicle selection, exact request payload, same-key/same-body uncertain retry,
-receipt navigation, mobile layout, empty Garage, populated-draft redaction across
-an account change, malformed-4xx correction and malformed-5xx exact retry.
+same-account focus preservation, one-command behavior across in-flight and
+uncertain focus, receipt navigation, mobile layout, empty Garage,
+populated-draft redaction across an account change, malformed-4xx correction and
+malformed-5xx exact retry.
 Screenshots are synthetic UI evidence—not hosted Supabase, real sign-in, physical
 device or production deployment evidence.
 

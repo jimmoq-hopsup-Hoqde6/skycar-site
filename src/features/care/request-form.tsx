@@ -82,36 +82,50 @@ export function CareRequestForm() {
   const [access, setAccess] = useState<AccessState>("ready");
   const [error, setError] = useState<SubmitError | null>(null);
   const [uncertain, setUncertain] = useState(false);
+  const selectedVehicle = useRef("");
   const pending = useRef<Pending | null>(null);
   const controller = useRef<AbortController | null>(null);
   const accountEpoch = useRef(0);
+
+  const selectVehicle = useCallback((id: string) => {
+    selectedVehicle.current = id;
+    setVehicleId(id);
+  }, []);
 
   const clearAccountState = useCallback(() => {
     accountEpoch.current += 1;
     pending.current = null;
     setVehicles([]);
-    setVehicleId("");
+    selectVehicle("");
     setService("repair");
     setDescription("");
     setPreferredWindow("flexible");
     setError(null);
     setUncertain(false);
-  }, []);
+  }, [selectVehicle]);
 
   const loadVehicles = useCallback(async () => {
+    // A pending key/body is the customer's one durable command. Background
+    // focus/page-return refreshes must not invalidate it or create a second one.
+    if (pending.current) return;
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
-    clearAccountState();
+    const previousVehicle = selectedVehicle.current;
     setLoading(true); setAccess("ready");
     try {
       const result = await loadActiveVehicles(current.signal);
       if (current.signal.aborted) return;
-      setVehicles(result); setVehicleId(result[0]?.id ?? "");
+      const stillOwned = previousVehicle && result.some(vehicle => vehicle.id === previousVehicle);
+      if (previousVehicle && !stillOwned) clearAccountState();
+      setVehicles(result);
+      selectVehicle(stillOwned ? previousVehicle : (result[0]?.id ?? ""));
     } catch (caught) {
       if (current.signal.aborted) return;
-      setAccess(accessState(caught));
+      const nextAccess = accessState(caught);
+      if (["session", "access"].includes(nextAccess)) clearAccountState();
+      setAccess(nextAccess);
     } finally { if (!current.signal.aborted) setLoading(false); }
-  }, [clearAccountState]);
+  }, [clearAccountState, selectVehicle]);
 
   useEffect(() => {
     let active = true;
@@ -154,7 +168,7 @@ export function CareRequestForm() {
         clearAccountState();
         setAccess(next.status === 401 ? "session" : "access");
       }
-      if (next.status === 404) { setVehicles([]); setVehicleId(""); setAccess("vehicle"); }
+      if (next.status === 404) { clearAccountState(); setAccess("vehicle"); }
       if (next.status === 409) setAccess("conflict");
       setError(next);
     } finally { setSaving(false); }
@@ -178,7 +192,7 @@ export function CareRequestForm() {
         <label><input type="radio" name="service" value="repair" checked={service === "repair"} onChange={() => setService("repair")} /><span><strong>Fix scratches or dents</strong><small>Cosmetic repair request for review</small></span></label>
         <label><input type="radio" name="service" value="cleaning" checked={service === "cleaning"} onChange={() => setService("cleaning")} /><span><strong>Detail or clean my car</strong><small>Interior, exterior or full detailing need</small></span></label>
       </div></fieldset>
-      <fieldset disabled={disabled}><legend>2. Select your vehicle</legend><label className="care-field" htmlFor="care-vehicle">Active Garage vehicle<select id="care-vehicle" required value={vehicleId} onChange={event => setVehicleId(event.target.value)}>{vehicles.map(vehicle => <option value={vehicle.id} key={vehicle.id}>{vehicleName(vehicle)}</option>)}</select></label><p className="care-help">Archived vehicles are history-only and cannot receive a new request.</p></fieldset>
+      <fieldset disabled={disabled}><legend>2. Select your vehicle</legend><label className="care-field" htmlFor="care-vehicle">Active Garage vehicle<select id="care-vehicle" required value={vehicleId} onChange={event => selectVehicle(event.target.value)}>{vehicles.map(vehicle => <option value={vehicle.id} key={vehicle.id}>{vehicleName(vehicle)}</option>)}</select></label><p className="care-help">Archived vehicles are history-only and cannot receive a new request.</p></fieldset>
       <fieldset disabled={disabled}><legend>3. Tell us what you need</legend><label className="care-field" htmlFor="care-description">Describe the damage or cleaning work<textarea id="care-description" required minLength={10} maxLength={2000} rows={6} value={description} onChange={event => setDescription(event.target.value)} placeholder={service === "repair" ? "Example: Scratch on the left rear door and a small dent near the handle." : "Example: Full interior detail with attention to the rear seats."} /></label><span className="care-count">{[...description].length} / 2000</span></fieldset>
       <fieldset disabled={disabled}><legend>4. Preferred timing</legend><label className="care-field" htmlFor="care-window">When would you prefer the work?<select id="care-window" value={preferredWindow} onChange={event => setPreferredWindow(event.target.value as CareInput["preferred_window"])}><option value="one_to_two_business_days">Within 1–2 business days</option><option value="seven_to_fourteen_days">Within 7–14 days</option><option value="flexible">I’m flexible</option></select></label><p className="care-help">This is a preference only—not confirmed technician availability.</p></fieldset>
       {error && <div className="care-entry-warning" role="alert"><strong>{uncertain ? "Submission not confirmed" : "Request not submitted"}</strong><p>{error.message}</p>{uncertain && <p>Use “Check same request” to safely repeat the exact attempt. Do not change the details yet.</p>}{error.status === 404 && <button type="button" onClick={() => void loadVehicles()}>Reload active vehicles</button>}</div>}
