@@ -168,6 +168,8 @@ try {
   await switchedInFlightPage.getByLabel("Active Garage vehicle").waitFor();
   assert.equal(await switchedInFlightPage.getByLabel("Active Garage vehicle").inputValue(), otherVehicle.id);
   assert.equal(await switchedInFlightPage.getByText("Private in-flight request from the first account").count(), 0);
+  assert.equal(await switchedInFlightPage.getByLabel("Describe the damage or cleaning work").isEnabled(), true);
+  assert.equal(await switchedInFlightPage.getByRole("button", { name: "Submit for review" }).isEnabled(), true);
   releaseDeferredSubmission();
   await switchedClick;
   await switchedInFlightPage.waitForTimeout(100);

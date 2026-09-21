@@ -95,6 +95,7 @@ export function CareRequestForm() {
   const clearAccountState = useCallback(() => {
     accountEpoch.current += 1;
     pending.current = null;
+    setSaving(false);
     setVehicles([]);
     selectVehicle("");
     setService("repair");
@@ -168,11 +169,16 @@ export function CareRequestForm() {
       if ([401, 403].includes(next.status)) {
         clearAccountState();
         setAccess(next.status === 401 ? "session" : "access");
+        return;
       }
-      if (next.status === 404) { clearAccountState(); setAccess("vehicle"); }
+      if (next.status === 404) { clearAccountState(); setAccess("vehicle"); return; }
       if (next.status === 409) setAccess("conflict");
       setError(next);
-    } finally { setSaving(false); }
+    } finally {
+      // Account revalidation may have replaced this submission with a fresh
+      // session. A stale completion must not lock or unlock the new form.
+      if (epoch === accountEpoch.current) setSaving(false);
+    }
   }
 
   const disabled = saving || uncertain;
