@@ -15,6 +15,9 @@ const vehicles = [
   { id: '00000000-0000-4000-8000-000000000001', make: 'Toyota', model: 'Corolla', variant: 'Ascent Sport', year: 2020, registration: 'DEMO001', registration_state: 'SA', revision: 1, archived_at: null, created_at: '2026-09-20T00:00:00Z', updated_at: '2026-09-20T00:00:00Z' },
   { id: '00000000-0000-4000-8000-000000000002', make: 'Mazda', model: 'CX-5', variant: 'Touring', year: 2022, registration: 'DEMO002', registration_state: 'SA', revision: 1, archived_at: null, created_at: '2026-09-20T00:00:00Z', updated_at: '2026-09-20T00:00:00Z' },
 ];
+const accountBVehicles = [
+  { id: '00000000-0000-4000-8000-000000000099', make: 'PRIVATE_B', model: 'Account B Car', variant: 'Only B', year: 2024, registration: 'B456', registration_state: 'SA', revision: 1, archived_at: null, created_at: '2026-09-21T00:00:00Z', updated_at: '2026-09-21T00:00:00Z' },
+];
 try {
   const page = await browser.newPage({ viewport: { width: 1365, height: 1000 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
@@ -26,14 +29,23 @@ try {
   check(await page.getByText('Garage is not available yet.').count() === 1, 'unavailable state is explicit');
 
   let mode = 'normal'; const retries = []; const ledger = new Map();
+  let releaseDelayedGarage;
+  let delayedGarageStarted;
   await page.route(/\/api\/v1\/garage\/vehicles(?:[/?].*)?$/, async route => {
     const request = route.request(), url = new URL(request.url());
     const success = data => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data, meta: { requestId: 'fixture' } }) });
     const failure = (status, code, message, retryable = false) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ error: { code, message, fieldErrors: {}, retryable } }) });
     if (mode === 'unauthenticated') return failure(401, 'UNAUTHENTICATED', 'Sign in to access your Garage.');
+    if (mode === 'failure' && request.method() === 'GET') return failure(503, 'TEMPORARILY_UNAVAILABLE', 'Garage verification failed.', true);
     if (request.method() === 'GET') {
       if (url.pathname.endsWith('/history')) return success({ items: [{ id: 'history-1', event_type: 'vehicle_added', occurred_at: '2026-09-20T00:00:00Z', source: 'garage', payload: {} }], nextCursor: null });
-      return success({ items: vehicles.filter(v => !!v.archived_at === (url.searchParams.get('archived') === 'true')), nextCursor: null });
+      const requestMode = mode;
+      if (requestMode === 'delayedA') {
+        delayedGarageStarted?.();
+        await new Promise(resolve => { releaseDelayedGarage = resolve; });
+      }
+      const source = requestMode === 'accountB' ? accountBVehicles : vehicles;
+      return success({ items: source.filter(v => !!v.archived_at === (url.searchParams.get('archived') === 'true')), nextCursor: null });
     }
     const body = request.postDataJSON();
     if (request.method() === 'PATCH') return failure(409, 'REVISION_CONFLICT', 'This vehicle changed. Reload it before saving again.');
@@ -56,6 +68,32 @@ try {
   await page.getByRole('heading', { name: 'Corolla', exact: true }).waitFor();
   check(await page.getByRole('heading', { name: 'CX-5', exact: true }).count() === 1, 'desktop lists both fixtures');
   await page.screenshot({ path: `${output}/garage-desktop.png`, fullPage: true });
+
+  // Focus/page-return is an account boundary. A late account-A response must not
+  // repopulate the screen after account B has already been revalidated.
+  mode = 'delayedA';
+  const delayedStarted = new Promise(resolve => { delayedGarageStarted = resolve; });
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await delayedStarted;
+  mode = 'accountB';
+  const accountBResponse = page.waitForResponse(response => response.url().includes('/api/v1/garage/vehicles?') && response.request().method() === 'GET');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await accountBResponse;
+  await page.getByRole('heading', { name: 'Account B Car', exact: true }).waitFor();
+  check(await page.getByText('DEMO001').count() === 0 && await page.getByText('DEMO002').count() === 0, 'account replacement hides prior-account vehicle details');
+  releaseDelayedGarage();
+  await page.waitForTimeout(100);
+  check(await page.getByRole('heading', { name: 'Account B Car', exact: true }).count() === 1 && await page.getByRole('heading', { name: 'Corolla', exact: true }).count() === 0, 'late prior-account response cannot repopulate Garage');
+
+  mode = 'failure';
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow')));
+  await page.getByRole('heading', { name: 'We couldn’t load your Garage' }).waitFor();
+  check(await page.locator('.vehicle-card').count() === 0 && await page.getByText('B456').count() === 0, 'failed revalidation keeps prior-account Garage details hidden');
+
+  mode = 'normal';
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.getByRole('heading', { name: 'Corolla', exact: true }).waitFor();
+  check(await page.getByRole('heading', { name: 'CX-5', exact: true }).count() === 1, 'same screen can recover after successful ownership revalidation');
   await page.getByRole('button', { name: 'History +' }).first().click();
   await page.getByText('Added to Garage').waitFor();
   check(await page.getByText('Added to Garage').count() === 1, 'history renders');
