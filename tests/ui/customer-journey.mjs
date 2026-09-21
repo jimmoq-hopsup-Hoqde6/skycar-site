@@ -6,10 +6,18 @@ const origin = 'http://127.0.0.1:3190';
 const server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '-p', '3190'], { stdio: 'ignore' });
 let browser;
 try {
-  for (let i = 0; i < 50; i++) {
-    try { if ((await fetch(origin)).ok) break; } catch {}
+  let ready = false;
+  const readyDeadline = Date.now() + 30000;
+  while (Date.now() < readyDeadline) {
+    if (server.exitCode !== null) throw new Error('Fixture server exited before readiness');
+    try {
+      const response = await fetch(origin, { signal: AbortSignal.timeout(1000) });
+      await response.text();
+      if (response.ok) { ready = true; break; }
+    } catch {}
     await new Promise(resolve => setTimeout(resolve, 100));
   }
+  if (!ready) throw new Error('Fixture server was not ready within 30 seconds');
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   page.setDefaultTimeout(10000);
@@ -20,7 +28,7 @@ try {
   page.on('pageerror', error => console.error('Synthetic journey page error:', error.message));
   page.on('console', message => { if (message.type() === 'error') console.error('Synthetic journey console:', message.text()); });
   await page.route('**/api/v1/garage/vehicles?*', route => route.fulfill({ json: { data: { items: new URL(route.request().url()).searchParams.get('archived') === 'true' ? [] : [vehicle], nextCursor: null } } }));
-  await page.route('**/api/v1/care/requests**', async route => {
+  await page.route(/\/api\/v1\/care\/requests(?:[/?].*)?$/, async route => {
     const request = route.request();
     const url = new URL(request.url());
     console.log('Synthetic API', request.method(), url.pathname);

@@ -13,10 +13,18 @@ server.stdout.on("data", chunk => { output += chunk; });
 server.stderr.on("data", chunk => { output += chunk; });
 let browser;
 try {
-  for (let i = 0; i < 20; i++) {
-    try { if ((await fetch(origin, { signal: AbortSignal.timeout(1000) })).ok) break; } catch {}
+  let ready = false;
+  const readyDeadline = Date.now() + 30000;
+  while (Date.now() < readyDeadline) {
+    if (server.exitCode !== null) throw new Error('Fixture server exited before readiness');
+    try {
+      const response = await fetch(origin, { signal: AbortSignal.timeout(1000) });
+      await response.text();
+      if (response.ok) { ready = true; break; }
+    } catch {}
     await new Promise(resolve => setTimeout(resolve, 100));
   }
+  if (!ready) throw new Error('Fixture server was not ready within 30 seconds');
   console.log("Starting My Jobs browser", output);
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage", "--no-zygote", "--single-process", "--use-gl=angle", "--use-angle=swiftshader"], timeout: 15000 });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
