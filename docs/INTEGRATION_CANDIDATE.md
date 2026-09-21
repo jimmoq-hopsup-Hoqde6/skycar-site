@@ -1,8 +1,8 @@
 # Customer journey integration candidate — 21 September 2026
 
 ## Ownership and disposition
-Marcel explicitly requested execution of review/integration recovery. This session
-owns `fix/customer-journey-integration` exclusively. It adopts the technically
+Marcel explicitly requested execution of review/integration recovery. Writer ownership and explicit release/handoff are recorded in the PR #27
+conversation; an old session reservation must not be treated as a perpetual lock. It adopts the technically
 accepted PR #26 sequence for isolated preparation. Existing feature branches stay
 unchanged. This candidate is reviewable preparation, not independent approval,
 authorization to merge main, or release acceptance.
@@ -51,7 +51,7 @@ the source. Catalogue/photo/My Jobs are extracted as deltas from #21.
 ## Test matrix
 | Boundary | Required evidence on both revisions |
 | --- | --- |
-| Application | locked install, lint, types, 84 unit/API tests, production build, two built API smoke tests |
+| Application | locked install, lint, types, 87 unit/API tests, production build, two built API smoke tests |
 | Garage database | permissions, mutation rollback and independent-session concurrency |
 | Care database | deadlines, duplicate submissions, owner lists, retry and cursor behavior |
 | Combined database | every migration, shared vehicle ownership, archive/submit/retry races |
@@ -64,9 +64,19 @@ nested detail URLs; all browser runners now wait explicitly for server readiness
 creation is prohibited; no local browser pass is claimed. PostgreSQL is not
 installed locally; disposable CI databases supply that evidence.
 
-No API contract, dependency, pricing, provider or feature activation changes.
+Recovery adds the backward-compatible account metadata/write precondition in
+`GARAGE_API.md`. No dependency, pricing, provider or feature activation changes.
 Existing feature routes retain their published envelopes; #25 logging adoption
 outside health remains separate reviewed work, not silently completed here.
+
+## Recovery of the reviewed blockers
+
+See `PR27_RECOVERY.md` for the corrected source revision, exact successful checks
+and the 43 browser recovery cases. Ordinary My Jobs filtering retains selection;
+Garage commands survive disposable editors and are bound to their original
+account. Late results wait for account verification and cannot alter replacement
+session state. Missing identity metadata or failed validation blocks further writes.
+The PR conversation is the authoritative current revision and handoff record.
 
 ## Release control — still a main-merge gate
 GitHub reports main unprotected. The connector lacks settings mutation capability;

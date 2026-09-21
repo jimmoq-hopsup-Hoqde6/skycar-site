@@ -18,19 +18,52 @@ Core product areas:
 ## Current repository state
 The repository contains the legacy small public website plus the merged Skycar V2 modular-monolith application scaffold. The V2 foundation is not production-ready and has not been deployed. Executable Garage and Repair & Cleaning work exists in open pull requests, but none of those feature PRs has been merged to `main` or accepted for production use.
 
-Active implementation evidence:
-- PR #16: durable Care request receipt, authoritative status/events, overdue/no-match recovery and restricted worker contract.
-- PR #17: ownership-scoped Garage vehicle list/create/detail/edit/archive/history with audited mutation controls and responsive UI.
-- PR #19: customer Care request status/timeline UI with overdue/no-match handling and committed synthetic desktop/mobile evidence, stacked on #16.
-- PR #20: owner-scoped My Jobs/Care request list API with pagination, vehicle filtering and overdue summaries, stacked on #16.
-- PR #21: combined Garage/Care integration-verification branch applying every public migration together and testing the shared vehicle/permission boundary; Technical Lead accepted this combined boundary evidence only, not the full feature/release scope.
-- PR #22: authenticated Garage-linked My Jobs UI, reload-safe Care reopening and authenticated service-first Care entry. Technical Lead accepted the bounded My Jobs and reload-recovery slices. Exact head `cef948a` fixes the same-account focus/page-return draft-loss and duplicate-key issue, but re-review found a remaining pending-session privacy/stale-navigation blocker: pending/uncertain state can suppress identity revalidation, leaving prior-account data visible or allowing an old response to navigate a changed session. Service-entry acceptance remains blocked.
-- PR #23: server-owned Repair/Cleaning service catalogue plus a strict coverage contract that fails closed with `COVERAGE_UNAVAILABLE` until an authoritative coverage resolver is approved and connected. Corrective head `a0f2aed` is technically accepted for the bounded catalogue/coverage contract. No resolver/provider, real coverage area, price or appointment is approved or connected.
-- PR #24: first private Garage vehicle-photo intake contract and backend implementation. Security-correction head `4a2900d` moves all photo mutation behind a server-only trusted client, revokes authenticated Storage/RPC mutation, reserves authoritative metadata before upload, and adds durable reconciliation/quarantine behavior. Exact-head application, Garage PostgreSQL, Care database and combined Garage/Care checks are green. Technical Lead re-review and hosted Supabase two-account/private-Storage plus signed-in-device verification remain open; no frontend or derivative processor may consume the contract before review clears.
-- PR #25: new main-based foundation observability draft at `11a53dd` adds server-owned request IDs, canonical API envelopes, no-store headers, redacted allow-listed completion logs, logging-failure isolation, and first adoption by `GET /api/v1/health`. Exact-head application CI is green. Technical Lead review and hosted log collection/retention/access/alerting remain open; it is unmerged and undeployed.
+## Current integration candidate
+
+PR #27 (`fix/customer-journey-integration`) combines the accepted input route
+#26 → #25 → #17 → #16 → #20 → #19 → #21 evidence only → #23 → #24 → #22.
+PR #9 is closed as superseded; #21 remains open for evidence traceability.
+Original feature branches are inputs, not separate current integration candidates.
+
+The correction at `bdd1fdff4228e655c249cb878208836a1f3ed37e` fixes the three
+blocking findings from `b880b6e`: archived My Jobs filtering, late Garage archive
+completion, and loss of pending/uncertain Garage saves on focus/page return.
+It retains the earlier account-switch privacy corrections in My Jobs, Garage,
+Care entry and request status. The API now reports the caller's own account ID
+and accepts an account precondition on writes; see `GARAGE_API.md`.
+
+Both exact source head and merge candidate passed all five workflows (10 jobs):
+87 unit/API tests, lint/types/build and two built API smoke tests; Garage, Care
+and combined PostgreSQL acceptance; six browser suites including 43 new Garage
+recovery scenarios. Exact evidence is in `PR27_RECOVERY.md` and the PR conversation.
+Documentation-only follow-up revisions must also pass the configured matrix.
+
+| Delivery state | Current evidence |
+| --- | --- |
+| Implemented | Combined journey and three recovery corrections in PR #27 |
+| CI verified | Both source head and merge candidate green; synthetic browser evidence |
+| Independently accepted | Pending qualified Technical Lead/QA review of this correction |
+| Merged | No V2 feature merge to main |
+| Deployed | No V2 deployment |
 
 ## Immediate priority
-Correct PR #22 so pending/in-flight/uncertain Care attempts preserve the exact idempotency key/body for the same account while still revalidating current session and vehicle ownership on focus/page return; account/access changes must clear prior-account UI and ignore stale outcomes. Obtain Technical Lead re-review of PR #24's corrected trusted photo boundary and Technical Lead review of PR #25's observability boundary. The Project Manager still needs to publish the reviewed dependency/integration sequence for #16/#20/#17/#19/#21/#22/#23/#24 and decide the safe reviewed merge/rebase point for independent main-based PR #25 before feature integration. PR #9 also needs an explicit corrected or superseded disposition. Hosted Supabase/session/private-storage verification, signed-in device QA, hosted logging controls and remaining #1/#8 release gates are still open.
+
+Review the corrected PR #27 revision after the writer's explicit handoff in its
+conversation. Do not retain an abandoned exclusive-writer reservation after that
+handoff. Any subsequent source correction must be acknowledged by one writer and
+rerun against both exact head and merge candidate.
+
+Main merge/release remains blocked by authenticated Pages publishing controls and
+required-check enforcement (#8), isolated hosted Supabase/auth/private-storage and
+signed-in physical-device evidence, and independent acceptance. The browser settings
+session is signed out; the connected GitHub app has no settings-mutation tool.
+No hosted test project or test-account credentials were available to this recovery.
+
+Next product work after integration acceptance: reviewed quotes → technician
+availability → customer booking confirmation → payments → completion evidence.
+No coverage provider, payment flow, membership pricing or live activation is approved
+by this repair. Catalogue #23, photo #24 and observability #25 are present as bounded
+inputs; their outstanding hosted/provider/release gates are not waived by CI.
 
 ### Phase 0 — Foundation
 Status: IN PROGRESS
