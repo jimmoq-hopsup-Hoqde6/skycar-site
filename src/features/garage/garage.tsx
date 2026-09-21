@@ -44,7 +44,12 @@ function VehicleEditor({ vehicle, onClose, onSaved }: { vehicle: Vehicle | null;
   const [error, setError] = useState<ApiError | null>(null);
   const pending = useRef<{ key: string; body: string } | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
-  useEffect(() => { heading.current?.focus(); }, []);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    heading.current?.focus();
+    return () => { mounted.current = false; pending.current = null; };
+  }, []);
   const uncertain = !!error?.retryable;
 
   async function save(event: React.FormEvent) {
@@ -55,10 +60,12 @@ function VehicleEditor({ vehicle, onClose, onSaved }: { vehicle: Vehicle | null;
     setSaving(true); setError(null);
     try {
       const result = await garageApi<Vehicle>(vehicle ? `/${vehicle.id}` : '', { method: vehicle ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': pending.current.key }, body: pending.current.body });
+      if (!mounted.current) return;
       pending.current = null; onSaved(result);
     } catch (err) {
+      if (!mounted.current) return;
       const next = asError(err); if (!next.retryable) pending.current = null; setError(next);
-    } finally { setSaving(false); }
+    } finally { if (mounted.current) setSaving(false); }
   }
   function field(name: keyof Draft, label: string, required = false, maxLength?: number) {
     return <label key={name}>{label}{!required && <span className="optional"> · Optional</span>}
@@ -98,15 +105,44 @@ export function Garage() {
   const [archiveError, setArchiveError] = useState<ApiError | null>(null);
   const pendingArchive = useRef<{ vehicle: Vehicle; key: string } | null>(null);
   const controller = useRef<AbortController | null>(null);
+  const clearPrivateState = useCallback(() => {
+    setPage({ items: [], nextCursor: null });
+    setEditor(null);
+    setHistory(null);
+    setNotice('');
+    setArchiveError(null);
+    pendingArchive.current = null;
+  }, []);
   const load = useCallback((cursor: string | null = null) => {
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
     return garageApi<Page<Vehicle>>(`?archived=${archived}&limit=20${cursor ? `&after=${cursor}` : ''}`, { signal: current.signal }).then(result => {
       if (!current.signal.aborted) setPage(previous => ({ items: cursor ? [...previous.items, ...result.items] : result.items, nextCursor: result.nextCursor }));
-    }).catch(err => { if (!current.signal.aborted) setError(asError(err)); })
-      .finally(() => { if (!current.signal.aborted) setLoading(false); });
-  }, [archived]);
+    }).catch(err => {
+      if (current.signal.aborted) return;
+      const next = asError(err);
+      if (['UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND'].includes(next.code)) clearPrivateState();
+      setError(next);
+    }).finally(() => { if (!current.signal.aborted) setLoading(false); });
+  }, [archived, clearPrivateState]);
   useEffect(() => { void load(); return () => controller.current?.abort(); }, [load]);
+  useEffect(() => {
+    const revalidate = () => {
+      clearPrivateState();
+      setLoading(true);
+      setError(null);
+      void load();
+    };
+    const revalidateVisible = () => { if (document.visibilityState === 'visible') revalidate(); };
+    window.addEventListener('focus', revalidate);
+    window.addEventListener('pageshow', revalidate);
+    document.addEventListener('visibilitychange', revalidateVisible);
+    return () => {
+      window.removeEventListener('focus', revalidate);
+      window.removeEventListener('pageshow', revalidate);
+      document.removeEventListener('visibilitychange', revalidateVisible);
+    };
+  }, [clearPrivateState, load]);
   function refresh(cursor: string | null = null) { setLoading(true); setError(null); void load(cursor); }
   function changeFilter(value: boolean) { if (value === archived) return; setPage({ items: [], nextCursor: null }); setLoading(true); setError(null); setArchived(value); setHistory(null); }
 
