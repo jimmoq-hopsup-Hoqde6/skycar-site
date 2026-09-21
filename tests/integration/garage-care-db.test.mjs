@@ -89,6 +89,7 @@ before(() => {
     '202609200002_care_requests.sql',
     '202609200003_care_my_jobs.sql',
     '202609200100_garage_mutations.sql',
+    '202609200300_garage_vehicle_photos.sql',
   ], 'combined verification must include every public migration in filename order');
   for (const migration of migrations) file(`supabase/migrations/${migration}`);
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
