@@ -47,6 +47,7 @@ try {
     keys.push(route.request().headers()["idempotency-key"]);
     bodies.push(route.request().postData());
     if (submissionMode === "malformed400") return route.fulfill({ status: 400, contentType: "text/plain", body: "not-json" });
+    if (submissionMode === "malformed503") return route.fulfill({ status: 503, contentType: "text/plain", body: "not-json" });
     if (submissionMode === "malformed503-then-success" && attempts === 1) return route.fulfill({ status: 503, contentType: "text/plain", body: "not-json" });
     if (submissionMode === "deferred-success") {
       deferredSubmissionStarted?.();
@@ -70,9 +71,12 @@ try {
   await page.getByText("Do not change the details yet.").waitFor();
   assert.equal(await page.getByLabel("Describe the damage or cleaning work").isDisabled(), true);
   const uncertainVehicleLoads = vehicleLoads;
+  const uncertainRefresh = page.waitForResponse(response => response.url().includes("/api/v1/garage/vehicles?") && response.request().method() === "GET");
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await page.waitForTimeout(100);
-  assert.equal(vehicleLoads, uncertainVehicleLoads);
+  await uncertainRefresh;
+  assert.equal(vehicleLoads, uncertainVehicleLoads + 1);
+  assert.equal(await page.getByLabel("Active Garage vehicle").inputValue(), vehicle.id);
+  assert.equal(await page.getByLabel("Describe the damage or cleaning work").inputValue(), received.description);
   await page.screenshot({ path: new URL("mobile-uncertain-retry.png", evidence).pathname, fullPage: true });
   await page.getByRole("button", { name: "Check same request" }).click();
   await page.waitForURL(`${origin}/care/requests/${requestId}`);
@@ -134,9 +138,11 @@ try {
   const submitClick = inFlightPage.getByRole("button", { name: "Submit for review" }).click();
   await started;
   const inFlightVehicleLoads = vehicleLoads;
+  const inFlightRefresh = inFlightPage.waitForResponse(response => response.url().includes("/api/v1/garage/vehicles?") && response.request().method() === "GET");
   await inFlightPage.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await inFlightPage.waitForTimeout(100);
-  assert.equal(vehicleLoads, inFlightVehicleLoads);
+  await inFlightRefresh;
+  assert.equal(vehicleLoads, inFlightVehicleLoads + 1);
+  assert.equal(await inFlightPage.getByLabel("Describe the damage or cleaning work").inputValue(), "Keep one request while focus changes");
   assert.equal(keys.length, inFlightStart + 1);
   assert.equal(await inFlightPage.getByRole("button", { name: "Submitting…" }).isDisabled(), true);
   releaseDeferredSubmission();
@@ -144,6 +150,45 @@ try {
   await inFlightPage.waitForURL(`${origin}/care/requests/${requestId}`);
   assert.equal(keys.length, inFlightStart + 1);
   assert.equal(bodies.length, inFlightStart + 1);
+
+  // An account change during an in-flight POST must clear prior-account UI and
+  // make the old success incapable of navigating the new session.
+  vehicleMode = "ready";
+  submissionMode = "deferred-success";
+  const switchedInFlightPage = await context.newPage();
+  await switchedInFlightPage.goto(`${origin}/care/request`);
+  await switchedInFlightPage.getByLabel("Describe the damage or cleaning work").fill("Private in-flight request from the first account");
+  const switchedStarted = new Promise(resolve => { deferredSubmissionStarted = resolve; });
+  const switchedClick = switchedInFlightPage.getByRole("button", { name: "Submit for review" }).click();
+  await switchedStarted;
+  vehicleMode = "other";
+  const switchedRefresh = switchedInFlightPage.waitForResponse(response => response.url().includes("/api/v1/garage/vehicles?") && response.request().method() === "GET");
+  await switchedInFlightPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await switchedRefresh;
+  await switchedInFlightPage.getByLabel("Active Garage vehicle").waitFor();
+  assert.equal(await switchedInFlightPage.getByLabel("Active Garage vehicle").inputValue(), otherVehicle.id);
+  assert.equal(await switchedInFlightPage.getByText("Private in-flight request from the first account").count(), 0);
+  releaseDeferredSubmission();
+  await switchedClick;
+  await switchedInFlightPage.waitForTimeout(100);
+  assert.equal(switchedInFlightPage.url(), `${origin}/care/request`);
+  assert.equal(await switchedInFlightPage.getByText(received.description).count(), 0);
+
+  // An uncertain command retains its exact key/body for the same account, but
+  // sign-out/access loss must redact it instead of suppressing revalidation.
+  vehicleMode = "ready";
+  submissionMode = "malformed503";
+  const uncertainSessionPage = await context.newPage();
+  await uncertainSessionPage.goto(`${origin}/care/request`);
+  await uncertainSessionPage.getByLabel("Describe the damage or cleaning work").fill("Private uncertain request from the first account");
+  await uncertainSessionPage.getByRole("button", { name: "Submit for review" }).click();
+  await uncertainSessionPage.getByRole("button", { name: "Check same request" }).waitFor();
+  vehicleMode = "session";
+  const uncertainSessionRefresh = uncertainSessionPage.waitForResponse(response => response.url().includes("/api/v1/garage/vehicles?") && response.request().method() === "GET");
+  await uncertainSessionPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await uncertainSessionRefresh;
+  await uncertainSessionPage.getByRole("heading", { name: "Sign in to request care" }).waitFor();
+  assert.equal(await uncertainSessionPage.getByText("Private uncertain request from the first account").count(), 0);
 
   vehicleMode = "ready";
   const sessionPage = await context.newPage();
@@ -172,7 +217,7 @@ try {
   await emptyPage.goto(`${origin}/care/request`);
   await emptyPage.getByRole("heading", { name: "Add a vehicle first" }).waitFor();
   assert.equal(await emptyPage.getByRole("link", { name: "Add a vehicle in Garage" }).getAttribute("href"), "/garage");
-  console.log("PASS: service entry contract, same-account focus preservation, in-flight and uncertain idempotency, malformed response recovery, account-switch draft redaction, receipt navigation and empty Garage");
+  console.log("PASS: service entry contract, same-account pending preservation, pending-session revalidation, in-flight account-change isolation, malformed response recovery, account-switch draft redaction, receipt navigation and empty Garage");
 } finally {
   if (browser) await browser.close();
   server.kill();
