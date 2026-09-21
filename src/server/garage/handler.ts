@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/server/supabase/server';
+import { createSupabaseServerClient, createSupabaseTrustedServerClient } from '@/server/supabase/server';
 import { featureEnabled } from '@/server/env';
 import { GarageError } from '@/domain/garage/vehicles.mjs';
 import { createGarageHandler } from './http.mjs';
@@ -23,5 +23,9 @@ export const handleGarage = createGarageHandler(async () => {
 
 export const handleGaragePhoto = createGaragePhotoHandler(async () => {
   const { client, userId } = await garageContext();
-  return { repository: garagePhotoRepository(client, userId) };
+  try {
+    return { repository: garagePhotoRepository(createSupabaseTrustedServerClient(), userId) };
+  } catch {
+    throw new GarageError('GARAGE_UNAVAILABLE', 503, 'Garage is not available yet. Please try again later.');
+  }
 });

@@ -6,8 +6,9 @@ that clean/plain-background display processing is available.
 
 ## POST `/api/v1/garage/vehicles/{vehicleId}/photo`
 
-Requires `FEATURE_GARAGE=true`, configured Supabase, a verified cookie session and
-an active vehicle owned by that session. Missing and other-owner vehicle IDs return
+Requires `FEATURE_GARAGE=true`, configured public Supabase session settings, the
+server-only `SUPABASE_SECRET_KEY`, a verified cookie session and an active vehicle
+owned by that session. Missing and other-owner vehicle IDs return
 the same `404 NOT_FOUND`; archived vehicles return `409 VEHICLE_ARCHIVED`.
 
 The request body is the image bytes, not JSON:
@@ -54,8 +55,11 @@ display access before the Garage UI consumes this endpoint.
 
 The same actor/key/vehicle/media type/exact bytes replays one metadata record and
 one history/audit event. Reusing the key with different bytes, media type or vehicle
-returns `409 IDEMPOTENCY_CONFLICT`. If storage succeeded but metadata confirmation
-was interrupted, retrying the exact bytes reconciles the same private path.
+returns `409 IDEMPOTENCY_CONFLICT`. The trusted server reserves authoritative
+metadata before storage. If storage succeeded but final confirmation was interrupted,
+retrying the exact bytes reconciles that reservation and deterministic private path.
+Definitive upload failures remain recorded as failed/quarantined metadata rather than
+deleting an object that a concurrent successful attempt may have committed.
 
 | Status | Code | Meaning / client action |
 | --- | --- | --- |
@@ -75,9 +79,13 @@ All responses use `Cache-Control: private, no-store` and `Vary: Cookie`.
 ## Security and verification boundary
 
 Migration `202609200300_garage_vehicle_photos.sql` revokes direct authenticated
-metadata writes and exposes one security-definer function that validates ownership,
-active state, server-derived path, idempotency and audit/history writes atomically.
-The storage bucket remains private and path-scoped by the existing D-006 policy.
+metadata writes and direct execution of all photo mutation functions. Reservation,
+finalisation and quarantine functions are executable only by `service_role`; the
+application obtains the actor from the separately verified cookie session and passes
+only server-derived metadata through that trusted server client. Reservation validates
+ownership and active state before upload. Finalisation verifies storage and records
+history/audit exactly once. Direct authenticated Storage writes/deletes are revoked;
+the bucket remains private and owner-readable under the existing D-006 policy.
 
 Disposable PostgreSQL and injected-handler tests do not establish hosted Supabase
 Storage/JWT behavior. Release still requires isolated two-user PostgREST/storage

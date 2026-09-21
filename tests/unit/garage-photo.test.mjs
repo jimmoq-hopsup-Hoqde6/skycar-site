@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { GarageError } from '../../src/domain/garage/vehicles.mjs';
 import { readVehiclePhoto } from '../../src/domain/garage/photo.mjs';
 import { createGaragePhotoHandler } from '../../src/server/garage/photo-http.mjs';
+import { garagePhotoRepository } from '../../src/server/garage/photo-repository.ts';
 
 const vehicleId = randomUUID();
 const key = randomUUID();
@@ -82,4 +83,68 @@ test('exact replay is 200 and stable Garage errors stay actionable without discl
   assert.equal(response.status, 500);
   assert.equal(body.error.code, 'INTERNAL_ERROR');
   assert.ok(!JSON.stringify(body).includes('storage-secret'));
+});
+
+test('trusted repository reserves before upload and reconciles an uncertain finalization', async () => {
+  const calls = [];
+  let object = null;
+  let failFinalize = true;
+  const trustedClient = {
+    rpc: async (name, args) => {
+      calls.push(name);
+      if (name === 'garage_reserve_vehicle_photo') {
+        return { data: { id: args.p_asset_id, vehicle_id: args.p_vehicle_id, purpose: 'vehicle_original',
+          mime_type: args.p_mime_type, size_bytes: args.p_size_bytes, processing_state: 'uploading',
+          created_at: saved.created_at, replayed: false }, error: null };
+      }
+      if (name === 'garage_finalize_vehicle_photo' && failFinalize) {
+        return { data: null, error: { message: 'database connection lost' } };
+      }
+      if (name === 'garage_finalize_vehicle_photo') return { data: saved, error: null };
+      throw new Error(`unexpected RPC ${name}`);
+    },
+    storage: { from: () => ({
+      upload: async (_path, bytes) => {
+        calls.push('storage.upload');
+        if (object) return { data: null, error: { message: 'already exists' } };
+        object = Buffer.from(bytes);
+        return { data: {}, error: null };
+      },
+      download: async () => ({ data: new Blob([object]), error: null }),
+    }) },
+  };
+  const repository = garagePhotoRepository(trustedClient, randomUUID());
+  const upload = await readVehiclePhoto(request());
+  await assert.rejects(() => repository.save(vehicleId, upload, randomUUID()),
+    error => error.code === 'TEMPORARILY_UNAVAILABLE');
+  assert.deepEqual(calls.slice(0, 3), ['garage_reserve_vehicle_photo', 'storage.upload', 'garage_finalize_vehicle_photo']);
+  assert.ok(!calls.includes('garage_fail_vehicle_photo'), 'uncertain finalization must preserve its reconciliation record');
+
+  failFinalize = false;
+  const reconciled = await repository.save(vehicleId, upload, randomUUID());
+  assert.equal(reconciled.original_status, 'stored');
+  assert.equal(calls.filter(call => call === 'garage_finalize_vehicle_photo').length, 2);
+});
+
+test('definitive storage failure is quarantined instead of reported as success', async () => {
+  const calls = [];
+  const trustedClient = {
+    rpc: async (name, args) => {
+      calls.push(name);
+      if (name === 'garage_reserve_vehicle_photo') {
+        return { data: { id: args.p_asset_id, vehicle_id: args.p_vehicle_id, processing_state: 'uploading' }, error: null };
+      }
+      if (name === 'garage_fail_vehicle_photo') return { data: null, error: null };
+      throw new Error(`unexpected RPC ${name}`);
+    },
+    storage: { from: () => ({
+      upload: async () => ({ data: null, error: { message: 'unavailable' } }),
+      download: async () => ({ data: null, error: { message: 'unavailable' } }),
+    }) },
+  };
+  const repository = garagePhotoRepository(trustedClient, randomUUID());
+  const upload = await readVehiclePhoto(request());
+  await assert.rejects(() => repository.save(vehicleId, upload, randomUUID()),
+    error => error.code === 'TEMPORARILY_UNAVAILABLE');
+  assert.deepEqual(calls, ['garage_reserve_vehicle_photo', 'garage_fail_vehicle_photo']);
 });

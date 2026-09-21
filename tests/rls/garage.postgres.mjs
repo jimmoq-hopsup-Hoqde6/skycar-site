@@ -24,7 +24,7 @@ let checks = 0;
 const check = (condition, message) => { assert.ok(condition, message); checks++; };
 try {
   await db.exec(`
-    create role anon; create role authenticated;
+    create role anon; create role authenticated; create role service_role bypassrls;
     create schema auth; create schema storage;
     create table auth.users(id uuid primary key);
     create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
@@ -32,10 +32,11 @@ try {
     create table storage.objects(id uuid primary key default gen_random_uuid(), bucket_id text, name text);
     alter table storage.objects enable row level security;
     create function storage.foldername(text) returns text[] language sql immutable as $$ select string_to_array($1, '/') $$;
-    grant usage on schema public, auth, storage to authenticated;
+    grant usage on schema public, auth, storage to authenticated, service_role;
     grant select, insert, delete on storage.objects to authenticated;
-    grant execute on function auth.uid() to authenticated;
-    alter default privileges in schema public grant all on tables to authenticated, anon;
+    grant select, insert, delete on storage.objects to service_role;
+    grant execute on function auth.uid() to authenticated, service_role;
+    alter default privileges in schema public grant all on tables to authenticated, anon, service_role;
   `);
   for (const filename of ['202609200001_foundation.sql', '202609200100_garage_mutations.sql', '202609200300_garage_vehicle_photos.sql']) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${filename}`, import.meta.url), 'utf8'));
@@ -45,6 +46,17 @@ try {
   const login = async user => { await db.query("select set_config('request.jwt.claim.sub', $1, false)", [user]); await db.exec('set role authenticated'); };
   const mutate = async (command, id, payload, key = randomUUID()) => (await db.query('select public.garage_mutate_vehicle($1,$2,$3::jsonb,$4,$5) as result', [command, id, JSON.stringify(payload), key, randomUUID()])).rows[0].result;
   const rejects = async (call, code) => { await assert.rejects(call, error => error.message.includes(code)); checks++; };
+  const service = async (sql, args = []) => {
+    await db.exec('reset role; set role service_role');
+    try { return await db.query(sql, args); }
+    finally { await db.exec('reset role'); }
+  };
+  const reservePhoto = async (actor, vehicle, asset, path, hash, uploadKey, size = 1024) =>
+    (await service('select public.garage_reserve_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8) as result',
+      [actor, vehicle, asset, path, 'image/jpeg', size, hash, uploadKey])).rows[0].result;
+  const finalizePhoto = async (actor, uploadKey) =>
+    (await service('select public.garage_finalize_vehicle_photo($1,$2,$3) as result',
+      [actor, uploadKey, randomUUID()])).rows[0].result;
   const input = { make: 'Toyota', model: 'Corolla', variant: null, year: 2020, registration: 'ABC123', registration_state: 'SA' };
   await login(a);
   const key = randomUUID();
@@ -56,26 +68,46 @@ try {
   const photoKey = randomUUID(), assetId = randomUUID();
   const photoPath = `${a}/vehicles/${first.id}/${assetId}/original.jpg`;
   await rejects(() => db.query(
-    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8)',
-    [first.id, assetId, photoPath, 'image/jpeg', 1024, 'a'.repeat(64), photoKey, randomUUID()],
-  ), 'PHOTO_NOT_UPLOADED');
-  await db.query("insert into storage.objects(bucket_id,name) values ('private-media',$1)", [photoPath]);
-  const photo = (await db.query(
-    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8) as result',
-    [first.id, assetId, photoPath, 'image/jpeg', 1024, 'a'.repeat(64), photoKey, randomUUID()],
-  )).rows[0].result;
+    'select public.garage_reserve_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8)',
+    [a, first.id, assetId, photoPath, 'image/jpeg', 1024, 'a'.repeat(64), photoKey],
+  ), 'permission denied');
+  const reservation = await reservePhoto(a, first.id, assetId, photoPath, 'a'.repeat(64), photoKey);
+  check(reservation.processing_state === 'uploading', 'trusted server reserves metadata before storage');
+  await login(a);
+  await rejects(() => db.query("insert into storage.objects(bucket_id,name) values ('private-media',$1)", [photoPath]), 'permission denied');
+  await rejects(() => finalizePhoto(a, photoKey), 'PHOTO_NOT_UPLOADED');
+  await service("insert into storage.objects(bucket_id,name) values ('private-media',$1)", [photoPath]);
+  const photo = await finalizePhoto(a, photoKey);
   check(photo.id === assetId && photo.original_status === 'stored' && photo.display_status === 'unavailable', 'photo metadata records private original without claiming a display derivative');
   check(!('object_path' in photo) && !('content_sha256' in photo) && !('owner_id' in photo), 'photo response redacts storage and ownership internals');
-  const photoReplay = (await db.query(
-    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8) as result',
-    [first.id, assetId, photoPath, 'image/jpeg', 1024, 'a'.repeat(64), photoKey, randomUUID()],
-  )).rows[0].result;
+  const photoReplay = await finalizePhoto(a, photoKey);
   check(photoReplay.replayed === true, 'photo metadata retry is idempotent');
+  await rejects(() => reservePhoto(a, first.id, assetId, photoPath, 'b'.repeat(64), photoKey), 'IDEMPOTENCY_CONFLICT');
+  await login(a);
   await rejects(() => db.query(
-    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8)',
-    [first.id, assetId, photoPath, 'image/jpeg', 1024, 'b'.repeat(64), photoKey, randomUUID()],
-  ), 'IDEMPOTENCY_CONFLICT');
+    'select public.garage_finalize_vehicle_photo($1,$2,$3)',
+    [a, photoKey, randomUUID()],
+  ), 'permission denied');
+  await rejects(() => db.query('select public.garage_fail_vehicle_photo($1,$2)', [a, photoKey]), 'permission denied');
+  await rejects(() => db.query('select object_path from public.media_assets where id=$1', [assetId]), 'permission denied');
   await rejects(() => db.query("insert into public.media_assets(owner_id,vehicle_id,object_path,purpose) values ($1,$2,'forged','vehicle_display')", [a, first.id]), 'permission denied');
+  await db.exec('reset role');
+  const recoveryKey = randomUUID(), recoveryAsset = randomUUID();
+  const recoveryPath = `${a}/vehicles/${first.id}/${recoveryAsset}/original.jpg`;
+  await reservePhoto(a, first.id, recoveryAsset, recoveryPath, 'e'.repeat(64), recoveryKey);
+  await service("insert into storage.objects(bucket_id,name) values ('private-media',$1)", [recoveryPath]);
+  await db.exec("create function public.test_photo_audit_fail() returns trigger language plpgsql as $$ begin raise exception 'TEST_PHOTO_AUDIT_FAILURE'; end $$; create trigger test_photo_audit_fail before insert on public.audit_events for each row execute function public.test_photo_audit_fail();");
+  await rejects(() => finalizePhoto(a, recoveryKey), 'TEST_PHOTO_AUDIT_FAILURE');
+  check((await service('select processing_state from public.media_assets where id=$1', [recoveryAsset])).rows[0].processing_state === 'uploading',
+    'post-upload database failure retains a durable reconciliation reservation');
+  check((await service("select count(*)::int as n from storage.objects where bucket_id='private-media' and name=$1", [recoveryPath])).rows[0].n === 1,
+    'post-upload database failure does not race-delete the private object');
+  await db.exec('drop trigger test_photo_audit_fail on public.audit_events');
+  const recovered = await finalizePhoto(a, recoveryKey);
+  check(recovered.id === recoveryAsset && recovered.processing_state === 'stored', 'exact retry reconciles upload after database failure');
+  check((await service("select count(*)::int as n from public.vehicle_history where vehicle_id=$1 and payload->>'asset_id'=$2", [first.id, recoveryAsset])).rows[0].n === 1,
+    'reconciliation records one photo history event');
+  await login(a);
   await rejects(() => mutate('create', null, { ...input, model: 'Changed' }, key), 'IDEMPOTENCY_CONFLICT');
   await rejects(() => mutate('create', null, { ...input, owner_id: b }), 'VALIDATION_FAILED');
   await rejects(() => mutate('create', null, { ...input, year: '2020' }), 'VALIDATION_FAILED');
@@ -90,29 +122,34 @@ try {
   await rejects(() => mutate('update', first.id, { ...input, expected_revision: 1 }), 'NOT_FOUND');
   await rejects(() => mutate('archive', first.id, { expected_revision: 1 }), 'NOT_FOUND');
   const foreignAsset = randomUUID();
-  await rejects(() => db.query(
-    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8)',
-    [first.id, foreignAsset, `${b}/vehicles/${first.id}/${foreignAsset}/original.jpg`, 'image/jpeg', 1024, 'c'.repeat(64), randomUUID(), randomUUID()],
-  ), 'NOT_FOUND');
+  await rejects(() => reservePhoto(b, first.id, foreignAsset,
+    `${b}/vehicles/${first.id}/${foreignAsset}/original.jpg`, 'c'.repeat(64), randomUUID()), 'NOT_FOUND');
   const other = await mutate('create', null, input, key);
   check(other.id !== first.id, 'same key is isolated by actor');
   await login(a);
   const edited = await mutate('update', first.id, { ...input, model: 'Camry', expected_revision: 1 });
   check(edited.revision === 2 && edited.model === 'Camry', 'edit increments revision');
   await rejects(() => mutate('update', first.id, { ...input, expected_revision: 1 }), 'REVISION_CONFLICT');
+  const racingKey = randomUUID(), racingAsset = randomUUID();
+  const racingPath = `${a}/vehicles/${first.id}/${racingAsset}/original.jpg`;
+  await reservePhoto(a, first.id, racingAsset, racingPath, 'f'.repeat(64), racingKey);
+  await service("insert into storage.objects(bucket_id,name) values ('private-media',$1)", [racingPath]);
+  await login(a);
   const archiveKey = randomUUID();
   const archived = await mutate('archive', first.id, { expected_revision: 2 }, archiveKey);
   check(archived.revision === 3 && !!archived.archived_at, 'archive retains vehicle with new revision');
+  const racingFinal = await finalizePhoto(a, racingKey);
+  check(racingFinal.processing_state === 'stored', 'photo reserved before a concurrent archive finalizes to one reconciled record');
+  await login(a);
   check((await mutate('archive', first.id, { expected_revision: 2 }, archiveKey)).revision === 3, 'archive retry is idempotent');
   await rejects(() => mutate('update', first.id, { ...input, expected_revision: 3 }), 'VEHICLE_ARCHIVED');
   const archivedAsset = randomUUID();
-  await rejects(() => db.query(
-    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8)',
-    [first.id, archivedAsset, `${a}/vehicles/${first.id}/${archivedAsset}/original.jpg`, 'image/jpeg', 1024, 'd'.repeat(64), randomUUID(), randomUUID()],
-  ), 'VEHICLE_ARCHIVED');
-  check((await db.query('select count(*)::int as n from public.vehicle_history where vehicle_id = $1', [first.id])).rows[0].n === 4, 'history recorded once per committed mutation/photo');
+  await rejects(() => reservePhoto(a, first.id, archivedAsset,
+    `${a}/vehicles/${first.id}/${archivedAsset}/original.jpg`, 'd'.repeat(64), randomUUID()), 'VEHICLE_ARCHIVED');
+  await login(a);
+  check((await db.query('select count(*)::int as n from public.vehicle_history where vehicle_id = $1', [first.id])).rows[0].n === 6, 'history recorded once per committed mutation/photo');
   await db.exec('reset role');
-  check((await db.query('select count(*)::int as n from public.audit_events where resource_id = $1', [first.id])).rows[0].n === 4, 'audit recorded atomically without retry duplicates');
+  check((await db.query('select count(*)::int as n from public.audit_events where resource_id = $1', [first.id])).rows[0].n === 6, 'audit recorded atomically without retry duplicates');
   // A failing audit insert must roll back vehicle/history/ledger, not return partial success.
   await db.exec("create function public.test_audit_fail() returns trigger language plpgsql as $$ begin raise exception 'TEST_AUDIT_FAILURE'; end $$; create trigger test_audit_fail before insert on public.audit_events for each row execute function public.test_audit_fail();");
   await login(a);

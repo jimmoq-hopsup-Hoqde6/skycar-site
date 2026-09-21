@@ -15,9 +15,11 @@ Versions are intentionally exact in package.json. The dependency lockfile is com
 1. Copy .env.example to .env.local.
 2. Set SKYCAR_ENV=demo for UI-only development.
 3. For authenticated/database work, create an isolated Supabase project and set the public URL and publishable key.
-4. Install dependencies with npm install.
-5. Run npm run check.
-6. Run npm run dev.
+4. Server-owned media intake additionally requires `SUPABASE_SECRET_KEY`. Keep it
+   server-only; never prefix it with `NEXT_PUBLIC_` or expose it to browser code.
+5. Install dependencies with npm install.
+6. Run npm run check.
+7. Run npm run dev.
 
 Do not place a Supabase secret/service key in browser code. Do not use production credentials for local development.
 
