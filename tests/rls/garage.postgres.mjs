@@ -33,10 +33,11 @@ try {
     alter table storage.objects enable row level security;
     create function storage.foldername(text) returns text[] language sql immutable as $$ select string_to_array($1, '/') $$;
     grant usage on schema public, auth, storage to authenticated;
+    grant select, insert, delete on storage.objects to authenticated;
     grant execute on function auth.uid() to authenticated;
     alter default privileges in schema public grant all on tables to authenticated, anon;
   `);
-  for (const filename of ['202609200001_foundation.sql', '202609200100_garage_mutations.sql']) {
+  for (const filename of ['202609200001_foundation.sql', '202609200100_garage_mutations.sql', '202609200300_garage_vehicle_photos.sql']) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${filename}`, import.meta.url), 'utf8'));
   }
   const a = randomUUID(), b = randomUUID();
@@ -52,6 +53,29 @@ try {
   const replay = await mutate('create', null, input, key);
   check(replay.id === first.id, 'replay reuses committed vehicle');
   check((await db.query('select count(*)::int as n from public.vehicles')).rows[0].n === 1, 'one vehicle after replay');
+  const photoKey = randomUUID(), assetId = randomUUID();
+  const photoPath = `${a}/vehicles/${first.id}/${assetId}/original.jpg`;
+  await rejects(() => db.query(
+    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8)',
+    [first.id, assetId, photoPath, 'image/jpeg', 1024, 'a'.repeat(64), photoKey, randomUUID()],
+  ), 'PHOTO_NOT_UPLOADED');
+  await db.query("insert into storage.objects(bucket_id,name) values ('private-media',$1)", [photoPath]);
+  const photo = (await db.query(
+    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8) as result',
+    [first.id, assetId, photoPath, 'image/jpeg', 1024, 'a'.repeat(64), photoKey, randomUUID()],
+  )).rows[0].result;
+  check(photo.id === assetId && photo.original_status === 'stored' && photo.display_status === 'unavailable', 'photo metadata records private original without claiming a display derivative');
+  check(!('object_path' in photo) && !('content_sha256' in photo) && !('owner_id' in photo), 'photo response redacts storage and ownership internals');
+  const photoReplay = (await db.query(
+    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8) as result',
+    [first.id, assetId, photoPath, 'image/jpeg', 1024, 'a'.repeat(64), photoKey, randomUUID()],
+  )).rows[0].result;
+  check(photoReplay.replayed === true, 'photo metadata retry is idempotent');
+  await rejects(() => db.query(
+    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8)',
+    [first.id, assetId, photoPath, 'image/jpeg', 1024, 'b'.repeat(64), photoKey, randomUUID()],
+  ), 'IDEMPOTENCY_CONFLICT');
+  await rejects(() => db.query("insert into public.media_assets(owner_id,vehicle_id,object_path,purpose) values ($1,$2,'forged','vehicle_display')", [a, first.id]), 'permission denied');
   await rejects(() => mutate('create', null, { ...input, model: 'Changed' }, key), 'IDEMPOTENCY_CONFLICT');
   await rejects(() => mutate('create', null, { ...input, owner_id: b }), 'VALIDATION_FAILED');
   await rejects(() => mutate('create', null, { ...input, year: '2020' }), 'VALIDATION_FAILED');
@@ -65,6 +89,11 @@ try {
   check((await db.query('select * from public.vehicle_history where vehicle_id = $1', [first.id])).rows.length === 0, 'RLS hides another user history');
   await rejects(() => mutate('update', first.id, { ...input, expected_revision: 1 }), 'NOT_FOUND');
   await rejects(() => mutate('archive', first.id, { expected_revision: 1 }), 'NOT_FOUND');
+  const foreignAsset = randomUUID();
+  await rejects(() => db.query(
+    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8)',
+    [first.id, foreignAsset, `${b}/vehicles/${first.id}/${foreignAsset}/original.jpg`, 'image/jpeg', 1024, 'c'.repeat(64), randomUUID(), randomUUID()],
+  ), 'NOT_FOUND');
   const other = await mutate('create', null, input, key);
   check(other.id !== first.id, 'same key is isolated by actor');
   await login(a);
@@ -76,9 +105,14 @@ try {
   check(archived.revision === 3 && !!archived.archived_at, 'archive retains vehicle with new revision');
   check((await mutate('archive', first.id, { expected_revision: 2 }, archiveKey)).revision === 3, 'archive retry is idempotent');
   await rejects(() => mutate('update', first.id, { ...input, expected_revision: 3 }), 'VEHICLE_ARCHIVED');
-  check((await db.query('select count(*)::int as n from public.vehicle_history where vehicle_id = $1', [first.id])).rows[0].n === 3, 'history recorded once per committed mutation');
+  const archivedAsset = randomUUID();
+  await rejects(() => db.query(
+    'select public.garage_record_vehicle_photo($1,$2,$3,$4,$5,$6,$7,$8)',
+    [first.id, archivedAsset, `${a}/vehicles/${first.id}/${archivedAsset}/original.jpg`, 'image/jpeg', 1024, 'd'.repeat(64), randomUUID(), randomUUID()],
+  ), 'VEHICLE_ARCHIVED');
+  check((await db.query('select count(*)::int as n from public.vehicle_history where vehicle_id = $1', [first.id])).rows[0].n === 4, 'history recorded once per committed mutation/photo');
   await db.exec('reset role');
-  check((await db.query('select count(*)::int as n from public.audit_events where resource_id = $1', [first.id])).rows[0].n === 3, 'audit recorded atomically without retry duplicates');
+  check((await db.query('select count(*)::int as n from public.audit_events where resource_id = $1', [first.id])).rows[0].n === 4, 'audit recorded atomically without retry duplicates');
   // A failing audit insert must roll back vehicle/history/ledger, not return partial success.
   await db.exec("create function public.test_audit_fail() returns trigger language plpgsql as $$ begin raise exception 'TEST_AUDIT_FAILURE'; end $$; create trigger test_audit_fail before insert on public.audit_events for each row execute function public.test_audit_fail();");
   await login(a);
