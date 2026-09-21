@@ -33,6 +33,8 @@ try {
   const id = '11111111-1111-4111-8111-111111111111';
   const received = { id, vehicle_id: id, service: 'repair', description: 'Synthetic request for a door scratch', preferred_window: 'flexible', customer_stage: 'request_received', responsible_role: 'operations', next_action: 'review_request', created_at: '2026-09-20T12:00:00Z', updated_at: '2026-09-20T12:00:00Z', next_update_at: '2020-01-01T00:00:00Z', events: [{ id: 'event-1', sequence: 1, type: 'request_received', occurred_at: '2026-09-20T12:00:00Z' }] };
   let mode = 'received';
+  let releaseDelayedStatus;
+  let delayedStatusStarted;
   const keys = [];
   await page.route('**/api/v1/care/requests/**', async route => {
     if (route.request().method() === 'POST') {
@@ -43,7 +45,12 @@ try {
     }
     if (mode === 'unauthorized') return route.fulfill({ status: 401, json: { error: { code: 'UNAUTHENTICATED' } } });
     if (mode === 'offline') return route.abort();
-    const data = mode === 'no_match' ? { ...received, customer_stage: 'no_match', responsible_role: 'customer', next_update_at: null } : received;
+    const requestMode = mode;
+    if (requestMode === 'delayed_received') {
+      delayedStatusStarted?.();
+      await new Promise(resolve => { releaseDelayedStatus = resolve; });
+    }
+    const data = requestMode === 'no_match' ? { ...received, customer_stage: 'no_match', responsible_role: 'customer', next_update_at: null } : received;
     return route.fulfill({ json: { data } });
   });
   page.setDefaultTimeout(10000);
@@ -54,6 +61,29 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: new URL('mobile-overdue.png', evidence).pathname, fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+
+  // A delayed prior-session response must not restore private details after a
+  // focus-triggered session replacement/access failure.
+  mode = 'delayed_received';
+  const delayedStarted = new Promise(resolve => { delayedStatusStarted = resolve; });
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await delayedStarted;
+  mode = 'unauthorized';
+  const deniedRevalidation = page.waitForResponse(response => response.url().includes(`/api/v1/care/requests/${id}`) && response.request().method() === 'GET');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await deniedRevalidation;
+  await page.getByText('Sign in to Skycar, then refresh this page to see your request.').waitFor();
+  assert.equal(await page.getByText(received.description).count(), 0);
+  releaseDelayedStatus();
+  await page.waitForTimeout(100);
+  assert.equal(await page.getByText(received.description).count(), 0);
+
+  mode = 'received';
+  const restoredStatus = page.waitForResponse(response => response.url().includes(`/api/v1/care/requests/${id}`) && response.request().method() === 'GET');
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow')));
+  await restoredStatus;
+  await page.getByText(received.description).waitFor();
+
   mode = 'offline';
   await page.getByRole('button', { name: 'Refresh status' }).click();
   await page.getByRole('alert').filter({ hasText: 'may have changed' }).waitFor();
@@ -81,7 +111,7 @@ try {
   await page.getByText('Sign in to Skycar, then refresh this page to see your request.').waitFor();
   assert.equal(await page.getByText(received.description).count(), 0);
   await page.screenshot({ path: new URL('mobile-access-expired.png', evidence).pathname, fullPage: true });
-  console.log('PASS: overdue before worker, mobile overflow, stale failure notice, no-match, cross-reload retry key reuse, reopened receipt, expired-session redaction');
+  console.log('PASS: overdue before worker, mobile overflow, focus/pageshow session revalidation, delayed prior-session response isolation, stale failure notice, no-match, cross-reload retry key reuse, reopened receipt, expired-session redaction');
 } finally {
   if (browser) await browser.close();
   server.kill();
