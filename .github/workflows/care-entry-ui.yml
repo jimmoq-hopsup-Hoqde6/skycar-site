@@ -1,0 +1,32 @@
+name: Care entry UI acceptance
+on:
+  pull_request:
+    paths:
+      - "src/features/care/**"
+      - "src/app/care/request/**"
+      - "tests/ui/care-entry.mjs"
+      - ".github/workflows/care-entry-ui.yml"
+permissions:
+  contents: read
+jobs:
+  care-entry-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Install application dependencies
+        run: npm ci --ignore-scripts
+      - name: Install pinned Playwright browser runner
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Build
+        run: npm run build
+        env:
+          SKYCAR_ENV: demo
+      - name: Run Care entry browser regression
+        run: PLAYWRIGHT_MODULE=playwright node tests/ui/care-entry.mjs
+        env:
+          SKYCAR_ENV: demo
