@@ -132,6 +132,9 @@ try {
   await page.getByLabel("Vehicle").selectOption(archivedVehicle.id);
   await page.getByText("Showing saved history for archived vehicle").waitFor();
   await page.getByText("Archived vehicle history").waitFor();
+  await page.waitForFunction(() => !document.querySelector("#vehicle-filter").disabled);
+  assert.equal(await page.getByLabel("Vehicle").inputValue(), archivedVehicle.id, "ordinary filtering retains the archived selection");
+  assert.equal(await page.getByRole("link", { name: /View request and timeline/ }).count(), 1, "archived filter loads only archived history");
   await page.screenshot({ path: new URL("mobile-archived-filter.png", evidence).pathname, fullPage: true });
   mode = "offline";
   await page.getByRole("button", { name: "Refresh" }).click();

@@ -33,7 +33,7 @@ try {
   let delayedGarageStarted;
   await page.route(/\/api\/v1\/garage\/vehicles(?:[/?].*)?$/, async route => {
     const request = route.request(), url = new URL(request.url());
-    const success = data => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data, meta: { requestId: 'fixture' } }) });
+    const success = data => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data, meta: { requestId: 'fixture', accountId: mode === 'accountB' ? 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' : 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } }) });
     const failure = (status, code, message, retryable = false) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ error: { code, message, fieldErrors: {}, retryable } }) });
     if (mode === 'unauthenticated') return failure(401, 'UNAUTHENTICATED', 'Sign in to access your Garage.');
     if (mode === 'failure' && request.method() === 'GET') return failure(503, 'TEMPORARILY_UNAVAILABLE', 'Garage verification failed.', true);

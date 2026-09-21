@@ -85,17 +85,16 @@ export function MyJobs() {
     setItems([]); setNextCursor(null); setVehicles([]); setChecked(null); setStale(false);
   }, []);
 
-  const load = useCallback(async ({ cursor = null, discard = false }: { cursor?: string | null; discard?: boolean } = {}) => {
+  const load = useCallback(async ({ cursor = null, discard = false, revalidate = false }: { cursor?: string | null; discard?: boolean; revalidate?: boolean } = {}) => {
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
     if (discard) clearPrivateState();
     cursor ? setLoadingMore(true) : setLoading(true);
     setMessage(""); setAccess("ready");
     try {
-      // A discard is an identity/ownership revalidation boundary. Never reuse
-      // the previous render's vehicle filter or vehicle closure here: both may
-      // belong to a different account after sign-out/account replacement.
-      const effectiveVehicleId = discard ? "" : vehicleId;
+      // Ordinary filtering discards the old list but retains the selected ID.
+      // Session revalidation also resets the filter and refetches ownership.
+      const effectiveVehicleId = revalidate ? "" : vehicleId;
       const jobsPromise = fetchJobs(effectiveVehicleId, cursor, current.signal);
       const vehiclesPromise = cursor || (!discard && vehicles.length) ? Promise.resolve(vehicles) : Promise.all([
         fetchVehicleSet(false, current.signal), fetchVehicleSet(true, current.signal),
@@ -103,14 +102,14 @@ export function MyJobs() {
       const [jobs, ownedVehicles] = await Promise.all([jobsPromise, vehiclesPromise]);
       if (current.signal.aborted) return;
       setVehicles(ownedVehicles);
-      if (discard && vehicleId) setVehicleId("");
+      if (revalidate && vehicleId) setVehicleId("");
       setItems(previous => cursor ? [...new Map([...previous, ...jobs.items].map(item => [item.id, item])).values()] : jobs.items);
       setNextCursor(jobs.next_cursor); setChecked(jobs.evaluated_at); setStale(false);
     } catch (error) {
       if (current.signal.aborted) return;
       const state = errorState(error); setAccess(state);
       if (privateAccessLost(error)) { clearPrivateState(); setVehicleId(""); }
-      else if (items.length) {
+      else if (!discard && items.length) {
         setStale(true); setMessage("We could not verify the latest requests. The list below is from your last successful check.");
       } else setMessage("We could not load your requests. Check your connection and try again.");
     } finally {
@@ -127,10 +126,11 @@ export function MyJobs() {
   }, [vehicleId]);
 
   useEffect(() => {
-    const revalidateSession = () => { if (document.visibilityState === "visible") void load({ discard: true }); };
+    const revalidateSession = () => { if (document.visibilityState === "visible") void load({ discard: true, revalidate: true }); };
     window.addEventListener("focus", revalidateSession);
     window.addEventListener("pageshow", revalidateSession);
-    return () => { window.removeEventListener("focus", revalidateSession); window.removeEventListener("pageshow", revalidateSession); };
+    document.addEventListener("visibilitychange", revalidateSession);
+    return () => { window.removeEventListener("focus", revalidateSession); window.removeEventListener("pageshow", revalidateSession); document.removeEventListener("visibilitychange", revalidateSession); };
   }, [load]);
 
   const vehicleMap = new Map(vehicles.map(vehicle => [vehicle.id, vehicle]));

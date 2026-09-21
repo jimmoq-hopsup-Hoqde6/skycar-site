@@ -38,18 +38,24 @@ export function createGarageHandler(getContext) {
     const requestId = randomUUID();
     const headers = { 'Cache-Control': 'private, no-store', Vary: 'Cookie' };
     try {
-      const { repository } = await getContext();
+      const { repository, userId } = await getContext();
       let data;
       if (operation === 'list') data = await repository.list(parseVehicleQuery(request.url));
       else if (operation === 'get') data = publicVehicle(await repository.get(requireUuid(id)));
       else if (operation === 'history') data = await repository.history(requireUuid(id), parseVehicleQuery(request.url, true));
       else {
+        // Bind a UI retry to the identity that started it, before touching data.
+        // Authentication is still authoritative; this header grants no access.
+        const expectedAccount = request.headers.get('x-skycar-account');
+        if (expectedAccount !== null && (!userId || expectedAccount !== userId)) {
+          throw new GarageError('ACCOUNT_CHANGED', 409, 'Your signed-in account changed. Reload your Garage before making changes.');
+        }
         const { key, input } = await readWrite(request);
         const vehicleId = operation === 'create' ? null : requireUuid(id);
         const payload = validateVehicleInput(input, operation);
         data = publicVehicle(await repository.mutate(operation, vehicleId, payload, key, requestId));
       }
-      return Response.json({ data, meta: { requestId } }, { status: operation === 'create' ? 201 : 200, headers });
+      return Response.json({ data, meta: { requestId, accountId: userId } }, { status: operation === 'create' ? 201 : 200, headers });
     } catch (error) {
       const known = error instanceof GarageError;
       return Response.json({ error: {

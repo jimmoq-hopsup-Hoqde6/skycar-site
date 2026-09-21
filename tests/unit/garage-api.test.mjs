@@ -86,3 +86,39 @@ test('mutation conflicts stay 409 and unexpected errors do not disclose database
   const { status, body } = await resultBody(await handle(request(), 'create'));
   assert.equal(status, 500); assert.equal(body.error.code, 'INTERNAL_ERROR'); assert.ok(!JSON.stringify(body).includes('private-database-secret'));
 });
+
+test('Garage identifies only the authenticated caller, including an empty list', async () => {
+  const handle = createGarageHandler(async () => ({ userId: owner, repository: { list: async () => ({ items: [], nextCursor: null }) } }));
+  const response = await handle(new Request('https://skycar.test/api/v1/garage/vehicles'), 'list');
+  const body = await response.json();
+  assert.equal(body.meta.accountId, owner);
+  assert.deepEqual(body.data, { items: [], nextCursor: null });
+  assert.equal(response.headers.get('cache-control'), 'private, no-store');
+});
+
+test('account precondition rejects create, update and archive before persistence after account replacement', async () => {
+  let currentAccount = owner;
+  let calls = 0;
+  const handle = createGarageHandler(async () => ({ userId: currentAccount, repository: { mutate: async () => { calls++; return vehicle; } } }));
+  const headers = { 'X-Skycar-Account': owner, 'Idempotency-Key': randomUUID() };
+  assert.equal((await handle(request(input, headers), 'create')).status, 201);
+  currentAccount = randomUUID();
+  for (const operation of ['create', 'update', 'archive']) {
+    const body = operation === 'archive' ? { expected_revision: 1 } : { ...input, ...(operation === 'update' ? { expected_revision: 1 } : {}) };
+    const response = await handle(request(body, headers), operation, vehicle.id);
+    assert.equal(response.status, 409);
+    const result = await response.json();
+    assert.equal(result.error.code, 'ACCOUNT_CHANGED');
+    assert.equal(result.error.retryable, false);
+    assert.equal(result.meta.accountId, undefined, 'mismatch never discloses replacement identity');
+  }
+  assert.equal(calls, 1, 'replacement account never reaches the mutation or ledger');
+});
+
+test('empty account precondition fails closed and no precondition preserves existing callers', async () => {
+  let calls = 0;
+  const handle = createGarageHandler(async () => ({ userId: owner, repository: { mutate: async () => { calls++; return vehicle; } } }));
+  assert.equal((await handle(request(input, { 'X-Skycar-Account': '' }), 'create')).status, 409);
+  assert.equal(calls, 0);
+  assert.equal((await handle(request(), 'create')).status, 201);
+});

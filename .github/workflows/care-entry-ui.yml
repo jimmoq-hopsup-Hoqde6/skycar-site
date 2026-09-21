@@ -45,6 +45,7 @@ jobs:
           trap 'kill "$server_pid"' EXIT
           for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:3100/ >/dev/null && break; sleep 1; done
           GARAGE_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE" node tests/e2e/garage.browser.mjs
+          GARAGE_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE" node tests/e2e/garage-recovery.browser.mjs
         env:
           SKYCAR_ENV: demo
       - name: Preserve synthetic browser evidence

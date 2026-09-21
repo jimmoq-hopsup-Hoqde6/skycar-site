@@ -18,7 +18,7 @@ async function garageContext() {
 
 export const handleGarage = createGarageHandler(async () => {
   const { client, userId } = await garageContext();
-  return { repository: garageRepository(client, userId) };
+  return { repository: garageRepository(client, userId), userId };
 });
 
 export const handleGaragePhoto = createGaragePhotoHandler(async () => {

@@ -27,7 +27,7 @@ try {
   let submissions = 0;
   page.on('pageerror', error => console.error('Synthetic journey page error:', error.message));
   page.on('console', message => { if (message.type() === 'error') console.error('Synthetic journey console:', message.text()); });
-  await page.route('**/api/v1/garage/vehicles?*', route => route.fulfill({ json: { data: { items: new URL(route.request().url()).searchParams.get('archived') === 'true' ? [] : [vehicle], nextCursor: null } } }));
+  await page.route('**/api/v1/garage/vehicles?*', route => route.fulfill({ json: { meta: { accountId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, data: { items: new URL(route.request().url()).searchParams.get('archived') === 'true' ? [] : [vehicle], nextCursor: null } } }));
   await page.route(/\/api\/v1\/care\/requests(?:[/?].*)?$/, async route => {
     const request = route.request();
     const url = new URL(request.url());

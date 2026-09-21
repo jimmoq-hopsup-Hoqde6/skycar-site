@@ -11,7 +11,7 @@ session. No service-role key is used by the HTTP application. Unauthenticated re
 return 401; missing configuration/disabled feature returns 503. Private responses use
 `Cache-Control: private, no-store` and `Vary: Cookie`.
 
-Success: `{ "data": ..., "meta": { "requestId": "uuid" } }`.
+Success: `{ "data": ..., "meta": { "requestId": "uuid", "accountId": "authenticated-user-uuid" } }`.
 Error: `{ "error": { "code": "...", "message": "...", "fieldErrors": {},
 "retryable": false }, "meta": { "requestId": "uuid" } }`.
 
@@ -27,6 +27,26 @@ ledger. Replaying the same command/vehicle/payload returns the original committe
 vehicle snapshot. Reusing a key with different input returns 409. Mutations and their
 history/audit/ledger records commit atomically. Retry an uncertain result with the
 same key and input. A fresh user edit must use a new key.
+
+## Account-bound recovery
+
+Successful responses include `meta.accountId`, the verified caller's own ID, even
+for an empty list. Vehicle records still exclude `owner_id`. Errors do not return
+account metadata. The Garage screen requires this metadata before allowing writes.
+
+Writes optionally accept `X-Skycar-Account`, the ID verified when the command was
+created. A mismatch with the authenticated caller returns `409 ACCOUNT_CHANGED`
+before any mutation or idempotency lookup. It grants no permissions; authentication
+and database ownership remain authoritative. Existing callers remain compatible.
+The Garage screen sends the precondition on every create/edit/archive, including retries.
+
+During focus/pageshow/visible revalidation, private UI is hidden. The original
+command (account, key, exact body, method and path) stays in the parent component
+while the editor is unmounted. Same-account verification restores it; failed or
+missing identity verification blocks mutations; verified account replacement drops
+it without replay. Late results are applied only to the current command after
+successful identity verification. This is in-memory page-return recovery, not
+cross-tab or hard-reload command persistence.
 
 ## Routes
 
@@ -72,6 +92,7 @@ changed field names; never duplicate private registration values into logs.
 | 403 | ORIGIN_REJECTED | Stop mutation; do not retry cross-origin |
 | 404 | NOT_FOUND | Reload list; no existence disclosure |
 | 409 | REVISION_CONFLICT / VEHICLE_ARCHIVED | Preserve input; reload current vehicle before another edit |
+| 409 | ACCOUNT_CHANGED | Redact and revalidate; never replay under the replacement account |
 | 409 | IDEMPOTENCY_CONFLICT | Do not silently retry with another key |
 | 413 | PAYLOAD_TOO_LARGE | Ask for smaller input |
 | 415 | UNSUPPORTED_MEDIA_TYPE | JSON only |
