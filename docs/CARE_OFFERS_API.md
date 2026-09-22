@@ -20,6 +20,9 @@ URL, query, session data and offer contents. A logging failure cannot change the
 customer response.
 The application decoder independently requires every returned offer to match the
 route request ID and the documented field, timestamp, expiry and slot bounds.
+Quote text must already be trimmed. Offer creation/update/expiry and option
+creation/start timestamps must retain a possible chronological order; impossible
+repository chronology fails closed rather than becoming customer-visible.
 Repository drift or malformed data fails the whole response closed with a
 retryable 503; private and unrecognised fields are never copied to the response.
 

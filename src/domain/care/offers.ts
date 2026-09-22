@@ -53,17 +53,23 @@ export function careOffers(value: unknown, expectedRequestId: string): CareOffer
     const offerId = repositoryUuid(offer.id);
     const offerRequestId = repositoryUuid(offer.request_id);
     if (offerIds.has(offerId) || offerRequestId !== requestId ||
-      typeof offer.scope_summary !== "string" || [...offer.scope_summary].length < 10 || [...offer.scope_summary].length > 2000 ||
+      typeof offer.scope_summary !== "string" || offer.scope_summary !== offer.scope_summary.trim() ||
+      [...offer.scope_summary].length < 10 || [...offer.scope_summary].length > 2000 ||
       !Number.isSafeInteger(offer.total_price_cents) || Number(offer.total_price_cents) <= 0 || Number(offer.total_price_cents) > 2147483647 ||
       offer.currency !== "AUD" || offer.status !== "issued" ||
       !(offer.adjustment_reason === null ||
-        (typeof offer.adjustment_reason === "string" && [...offer.adjustment_reason].length >= 3 && [...offer.adjustment_reason].length <= 1000)) ||
+        (typeof offer.adjustment_reason === "string" && offer.adjustment_reason === offer.adjustment_reason.trim() &&
+          [...offer.adjustment_reason].length >= 3 && [...offer.adjustment_reason].length <= 1000)) ||
       !Array.isArray(offer.slots) || offer.slots.length < 1 || offer.slots.length > 20) unavailable();
     offerIds.add(offerId);
 
     const expires_at = isoDate(offer.expires_at);
     const created_at = isoDate(offer.created_at);
     const updated_at = isoDate(offer.updated_at);
+    const offerCreatedAt = Date.parse(created_at);
+    const offerUpdatedAt = Date.parse(updated_at);
+    const offerExpiresAt = Date.parse(expires_at);
+    if (offerUpdatedAt < offerCreatedAt || offerExpiresAt <= offerUpdatedAt) unavailable();
     const slotIds = new Set<string>();
 
     const slots = offer.slots.map(rawSlot => {
@@ -74,8 +80,12 @@ export function careOffers(value: unknown, expectedRequestId: string): CareOffer
       slotIds.add(id);
       const starts_at = isoDate(slot.starts_at);
       const ends_at = isoDate(slot.ends_at);
-      if (Date.parse(ends_at) <= Date.parse(starts_at) || Date.parse(expires_at) > Date.parse(starts_at)) unavailable();
-      return { id, starts_at, ends_at, status: "available" as const, created_at: isoDate(slot.created_at) };
+      const created_at = isoDate(slot.created_at);
+      const slotCreatedAt = Date.parse(created_at);
+      const slotStartsAt = Date.parse(starts_at);
+      if (Date.parse(ends_at) <= slotStartsAt || offerExpiresAt > slotStartsAt ||
+        slotCreatedAt < offerCreatedAt || slotCreatedAt > offerUpdatedAt || slotCreatedAt > slotStartsAt) unavailable();
+      return { id, starts_at, ends_at, status: "available" as const, created_at };
     });
 
     const orderedSlots = [...slots].sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
