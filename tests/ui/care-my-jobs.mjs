@@ -147,8 +147,13 @@ try {
   assert.equal(await page.getByRole("link", { name: /View request and timeline/ }).count(), 0);
   assert.equal(await page.getByRole("option", { name: /Mazda/ }).count(), 0);
   await page.screenshot({ path: new URL("mobile-session-required.png", evidence).pathname, fullPage: true });
+  const signInLink = page.getByRole("link", { name: "Sign in" });
+  assert.equal(await signInLink.getAttribute("href"), "/auth/sign-in?next=%2Fgarage%2Fjobs");
+  await signInLink.click();
+  await page.getByRole("heading", { name: "Sign in to Skycar" }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("next"), "/garage/jobs");
   mode = "empty";
-  await page.getByRole("button", { name: "I’m signed in — try again" }).click();
+  await page.goto(`${origin}/garage/jobs`);
   await page.getByRole("heading", { name: "No requests yet" }).waitFor();
   mode = "access";
   await page.getByRole("button", { name: "Refresh" }).click();
