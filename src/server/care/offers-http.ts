@@ -46,7 +46,10 @@ export function careOfferHandlers(deps: Dependencies, boundaryOptions: BoundaryO
     list: (request: Request, id: string) => withApiBoundary(
       request,
       API_ROUTE_TEMPLATES.careRequestOffers,
-      async () => run(async repo => careOffers(await repo.list(uuid(id)))),
+      async () => run(async repo => {
+        const requestId = uuid(id);
+        return careOffers(await repo.list(requestId), requestId);
+      }),
       boundaryOptions,
     ),
   };

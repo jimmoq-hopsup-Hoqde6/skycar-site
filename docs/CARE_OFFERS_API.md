@@ -18,6 +18,10 @@ The route uses the shared API boundary and the reviewed static log template
 and its single completion record excludes the literal Care request identifier,
 URL, query, session data and offer contents. A logging failure cannot change the
 customer response.
+The application decoder independently requires every returned offer to match the
+route request ID and the documented field, timestamp, expiry and slot bounds.
+Repository drift or malformed data fails the whole response closed with a
+retryable 503; private and unrecognised fields are never copied to the response.
 
 Only issued offers with `expires_at` strictly after the read statement's start
 are returned. Each returned offer must have at least one available option whose
