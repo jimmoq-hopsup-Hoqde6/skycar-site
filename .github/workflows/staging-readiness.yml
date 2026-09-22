@@ -1,0 +1,108 @@
+name: Staging phone-test readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact reviewed commit SHA to verify
+        required: true
+        default: c7603aa42c72d9ddfe5db11df9029daabc766bbb
+        type: string
+      isolation_confirmation:
+        description: Type ISOLATED-STAGING-NO-PRODUCTION
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skycar-staging-readiness
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Non-deploying staging preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: skycar-staging
+    env:
+      EXPECTED_REVISION: c7603aa42c72d9ddfe5db11df9029daabc766bbb
+      REQUESTED_REVISION: ${{ inputs.revision }}
+      ISOLATION_CONFIRMATION: ${{ inputs.isolation_confirmation }}
+      STAGING_ISOLATION_MARKER: ${{ vars.STAGING_ISOLATION_MARKER }}
+      SKYCAR_APP_ORIGIN: ${{ vars.STAGING_APP_ORIGIN }}
+      SKYCAR_ENV: staging
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.STAGING_SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+      FEATURE_GARAGE: "true"
+      FEATURE_CARE: "true"
+      FEATURE_BENEFITS: "false"
+      FEATURE_SELL: "false"
+    steps:
+      - name: Enforce the isolated, exact-revision gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$ISOLATION_CONFIRMATION" = "ISOLATED-STAGING-NO-PRODUCTION"
+          test "$STAGING_ISOLATION_MARKER" = "skycar-v2-isolated-staging"
+          case "$SKYCAR_APP_ORIGIN" in
+            https://*/*|https://*\?*|https://*#*|https://*@*|https://*,*)
+              echo "Staging app origin must not contain a path, query, credentials or list." >&2; exit 1 ;;
+            https://?*) ;;
+            *) echo "Staging app origin must be an exact HTTPS origin." >&2; exit 1 ;;
+          esac
+          test "$REQUESTED_REVISION" = "$EXPECTED_REVISION"
+          test -n "$NEXT_PUBLIC_SUPABASE_URL"
+          test -n "$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"
+          test -n "$SUPABASE_SECRET_KEY"
+          case "$NEXT_PUBLIC_SUPABASE_URL" in
+            https://*.supabase.co) ;;
+            *) echo "Staging Supabase URL must be an isolated hosted project URL." >&2; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.revision }}
+          persist-credentials: false
+
+      - name: Verify immutable checkout
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_REVISION"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify application without deployment or hosted mutation
+        run: npm run check
+
+      - name: Reject committed environment files
+        shell: bash
+        run: '! git ls-files | grep -E "(^|/)\.env($|\.)" | grep -v "\.env\.example$"'
+
+      - name: Reject server secret in browser output
+        shell: bash
+        run: |
+          if grep -R -F -- "$SUPABASE_SECRET_KEY" .next/static >/dev/null 2>&1; then
+            echo "Server secret was found in browser output." >&2
+            exit 1
+          fi
+
+      - name: Record the remaining gate
+        shell: bash
+        run: |
+          {
+            echo "## Staging readiness only"
+            echo ""
+            printf '%s\n' "- Exact revision verified: $EXPECTED_REVISION"
+            echo "- Isolated environment marker and required secret presence verified."
+            echo "- Lint, types, unit tests and production build executed."
+            echo "- No migration, deployment, hosted request, account creation or provider activation occurred."
+            echo "- Independent review, hosted two-account/private-photo acceptance and physical-phone evidence remain required."
+          } >> "$GITHUB_STEP_SUMMARY"
