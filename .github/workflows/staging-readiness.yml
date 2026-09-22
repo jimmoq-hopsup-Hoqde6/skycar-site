@@ -93,7 +93,7 @@ jobs:
           {
             echo "## Staging readiness only"
             echo ""
-            printf '- Exact revision verified: \\`%s\\`\\n' "$EXPECTED_REVISION"
+            printf '%s\n' "- Exact revision verified: $EXPECTED_REVISION"
             echo "- Isolated environment marker and required secret presence verified."
             echo "- Lint, types, unit tests and production build executed."
             echo "- No migration, deployment, hosted request, account creation or provider activation occurred."
