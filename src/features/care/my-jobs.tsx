@@ -154,7 +154,7 @@ export function MyJobs() {
 
     {filteredVehicle?.archived_at && <p className="jobs-archive-note" role="status">Showing saved history for archived vehicle: {vehicleName(filteredVehicle)}. New requests need an active vehicle.</p>}
     {stale && <div className="jobs-warning" role="alert"><strong>Last checked information</strong><p>{message}</p><button type="button" onClick={() => void load()}>Try again</button></div>}
-    {access === "session" && <section className="jobs-empty" role="alert"><div className="jobs-empty-icon" aria-hidden="true">↗</div><h2>Sign in to see My Jobs</h2><p>Your requests are private. Sign in to Skycar, then try again.</p><button type="button" onClick={() => void load({ discard: true })}>I’m signed in — try again</button></section>}
+    {access === "session" && <section className="jobs-empty" role="alert"><div className="jobs-empty-icon" aria-hidden="true">↗</div><h2>Sign in to see My Jobs</h2><p>Your requests are private. Sign in to Skycar, then try again.</p><Link className="jobs-link-button" href="/auth/sign-in?next=%2Fgarage%2Fjobs">Sign in</Link></section>}
     {access === "access" && <section className="jobs-empty" role="alert"><div className="jobs-empty-icon" aria-hidden="true">!</div><h2>These requests are unavailable</h2><p>Check the selected vehicle and signed-in account. No saved request details are being shown.</p><button type="button" onClick={() => { setVehicleId(""); void load({ discard: true }); }}>Reset and try again</button></section>}
     {access === "error" && !items.length && !loading && <section className="jobs-empty" role="alert"><div className="jobs-empty-icon" aria-hidden="true">…</div><h2>We couldn’t load My Jobs</h2><p>{message}</p><button type="button" onClick={() => void load({ discard: true })}>Try again</button></section>}
     {loading && !items.length && access === "ready" && <div className="jobs-loading" role="status"><span>Loading your requests…</span><div /><div /></div>}
@@ -174,6 +174,6 @@ export function MyJobs() {
       })}
     </section>}
     {nextCursor && access === "ready" && <button className="jobs-load-more" type="button" disabled={loadingMore} onClick={() => void load({ cursor: nextCursor })}>{loadingMore ? "Loading more…" : "Load more requests"}</button>}
-    <p className="jobs-boundary">My Jobs shows recorded request progress only. A request is not a confirmed quote, technician, appointment or payment.</p>
+    <p className="jobs-boundary">My Jobs shows recorded request progress only. A request is not a confirmed quote, technician, appointment or payment.<br /><Link href="/auth/sign-out">Sign out on this device</Link></p>
   </main>;
 }

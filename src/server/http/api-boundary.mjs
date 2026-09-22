@@ -8,8 +8,10 @@ const API_RESULT = Symbol('skycar.api-result');
 // Never add a concrete customer, vehicle, job or request identifier here.
 export const API_ROUTE_TEMPLATES = Object.freeze({
   health: '/api/v1/health',
-  garageVehiclePhoto: '/api/v1/garage/vehicles/[vehicleId]/photo',
   careRequestOffers: '/api/v1/care/requests/[requestId]/offers',
+  authSignIn: '/api/v1/auth/sign-in',
+  authSignOut: '/api/v1/auth/sign-out',
+  garageVehiclePhoto: '/api/v1/garage/vehicles/[vehicleId]/photo',
 });
 
 const REGISTERED_ROUTE_TEMPLATES = new Set(Object.values(API_ROUTE_TEMPLATES));
