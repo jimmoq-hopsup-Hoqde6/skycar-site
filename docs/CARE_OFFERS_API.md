@@ -13,6 +13,11 @@ Requires a verified customer session and `FEATURE_CARE=true`. The database
 derives the caller from `auth.uid()` and a server-granted customer role; a
 foreign or missing request returns the same 404. Responses are private/no-store.
 Customer read uses the session-scoped client, never the service-role client.
+The route uses the shared API boundary and the reviewed static log template
+`/api/v1/care/requests/[requestId]/offers`. Its response/body request IDs match,
+and its single completion record excludes the literal Care request identifier,
+URL, query, session data and offer contents. A logging failure cannot change the
+customer response.
 
 Only issued offers with `expires_at` strictly after the read statement's start
 are returned. Each returned offer must have at least one available option whose

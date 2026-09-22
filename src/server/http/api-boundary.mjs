@@ -9,6 +9,7 @@ const API_RESULT = Symbol('skycar.api-result');
 export const API_ROUTE_TEMPLATES = Object.freeze({
   health: '/api/v1/health',
   garageVehiclePhoto: '/api/v1/garage/vehicles/[vehicleId]/photo',
+  careRequestOffers: '/api/v1/care/requests/[requestId]/offers',
 });
 
 const REGISTERED_ROUTE_TEMPLATES = new Set(Object.values(API_ROUTE_TEMPLATES));

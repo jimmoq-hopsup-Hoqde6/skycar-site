@@ -7,6 +7,15 @@ import { careOfferHandlers } from "../../src/server/care/offers-http.ts";
 const requestId = "11111111-1111-4111-8111-111111111111";
 const offerId = "22222222-2222-4222-8222-222222222222";
 const slotId = "33333333-3333-4333-8333-333333333333";
+const vehicleId = "44444444-4444-4444-8444-444444444444";
+const technicianId = "55555555-5555-4555-8555-555555555555";
+const boundaryRequestId = "66666666-6666-4666-8666-666666666666";
+
+function request() {
+  return new Request(`https://skycar.test/api/v1/care/requests/${requestId}/offers?vehicle=${vehicleId}&technician=${technicianId}`, {
+    headers: { cookie: "session=private", authorization: "Bearer private" },
+  });
+}
 
 const raw = [{
   id: offerId,
@@ -48,41 +57,106 @@ for (const invalid of [
   });
 }
 
-test("owner-scoped offer handler returns private no-store response", async () => {
+test("owner-scoped offer handler uses one redacted shared-boundary completion event", async () => {
   const calls = [];
+  const records = [];
   const handlers = careOfferHandlers({
     enabled: () => true,
     connect: async () => ({
       list: async id => { calls.push(id); return raw; },
     }),
+  }, {
+    makeRequestId: () => boundaryRequestId,
+    now: () => 100,
+    logger: { info: entry => records.push(entry), error: entry => records.push(entry) },
   });
-  const response = await handlers.list(requestId);
+  const response = await handlers.list(request(), requestId);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "private, no-store");
-  assert.equal((await response.json()).data[0].id, offerId);
+  assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("x-request-id"), boundaryRequestId);
+  const body = await response.json();
+  assert.equal(body.meta.requestId, boundaryRequestId);
+  assert.equal(body.data[0].id, offerId);
   assert.deepEqual(calls, [requestId]);
+  assert.equal(records.length, 1);
+  assert.deepEqual(JSON.parse(records[0]), {
+    event: "api_request_completed",
+    requestId: boundaryRequestId,
+    method: "GET",
+    route: "/api/v1/care/requests/[requestId]/offers",
+    status: 200,
+    code: "OK",
+    retryable: false,
+    durationMs: 0,
+  });
+  assert.doesNotMatch(records[0], new RegExp(`${requestId}|${vehicleId}|${technicianId}|session=|Bearer`));
 });
 
-test("invalid IDs and auth errors never call or leak repository internals", async () => {
+test("invalid IDs and expected Care failures preserve status, code and retry semantics", async () => {
   let calls = 0;
   const invalid = careOfferHandlers({
     enabled: () => true,
     connect: async () => ({ list: async () => { calls++; return raw; } }),
   });
-  assert.equal((await invalid.list("bad-id")).status, 400);
+  let response = await invalid.list(request(), "bad-id");
+  assert.equal(response.status, 400);
+  assert.deepEqual((await response.json()).error, {
+    code: "VALIDATION_FAILED",
+    message: "Check the request details.",
+    fieldErrors: {},
+    retryable: false,
+  });
   assert.equal(calls, 0);
 
-  const guest = careOfferHandlers({
-    enabled: () => true,
-    connect: async () => { throw new CareError("UNAUTHENTICATED"); },
-  });
-  assert.equal((await guest.list(requestId)).status, 401);
+  for (const [code, status, retryable] of [
+    ["UNAUTHENTICATED", 401, false],
+    ["NOT_FOUND", 404, false],
+    ["TEMPORARILY_UNAVAILABLE", 503, true],
+  ]) {
+    const failed = careOfferHandlers({
+      enabled: () => true,
+      connect: async () => ({ list: async () => { throw new CareError(code); } }),
+    });
+    response = await failed.list(request(), requestId);
+    const body = await response.json();
+    assert.equal(response.status, status);
+    assert.equal(body.error.code, code);
+    assert.equal(body.error.retryable, retryable);
+  }
 
+  const disabled = careOfferHandlers({ enabled: () => false, connect: async () => { throw new Error("must not connect"); } });
+  response = await disabled.list(request(), requestId);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error.code, "CARE_UNAVAILABLE");
+});
+
+test("unexpected failures are redacted and a failing log sink cannot alter the response", async () => {
+  const records = [];
   const failed = careOfferHandlers({
     enabled: () => true,
-    connect: async () => ({ list: async () => { throw new Error("secret"); } }),
+    connect: async () => ({ list: async () => { throw new Error(`database secret ${requestId} ${technicianId}`); } }),
+  }, {
+    makeRequestId: () => boundaryRequestId,
+    now: () => 100,
+    logger: { info: entry => records.push(entry), error: entry => records.push(entry) },
   });
-  const response = await failed.list(requestId);
+  let response = await failed.list(request(), requestId);
   assert.equal(response.status, 500);
-  assert.doesNotMatch(await response.text(), /secret/);
+  assert.doesNotMatch(await response.text(), new RegExp(`secret|${requestId}|${technicianId}`));
+  assert.equal(records.length, 1);
+  assert.doesNotMatch(records[0], new RegExp(`secret|${requestId}|${vehicleId}|${technicianId}|session=|Bearer`));
+
+  const successful = careOfferHandlers({
+    enabled: () => true,
+    connect: async () => ({ list: async () => raw }),
+  }, {
+    makeRequestId: () => boundaryRequestId,
+    now: () => 100,
+    logger: { info() { throw new Error("sink unavailable"); }, error() { throw new Error("sink unavailable"); } },
+  });
+  response = await successful.list(request(), requestId);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).data[0].id, offerId);
 });

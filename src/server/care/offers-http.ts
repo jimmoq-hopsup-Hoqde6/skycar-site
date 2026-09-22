@@ -1,6 +1,7 @@
 import { CareError, uuid } from "../../domain/care/request.ts";
 import { careOffers } from "../../domain/care/offers.ts";
 import type { CareOffer } from "../../domain/care/offers.ts";
+import { API_ROUTE_TEMPLATES, ApiFault, withApiBoundary } from "../http/api-boundary.mjs";
 
 export interface CareOffersRepository {
   list(requestId: string): Promise<unknown>;
@@ -9,6 +10,12 @@ export interface CareOffersRepository {
 type Dependencies = {
   enabled: () => boolean;
   connect: () => Promise<CareOffersRepository>;
+};
+
+type BoundaryOptions = {
+  makeRequestId?: () => string;
+  now?: () => number;
+  logger?: { info: (entry: string) => void; error: (entry: string) => void };
 };
 
 const errors: Record<string, { status: number; message: string; retryable: boolean }> = {
@@ -21,29 +28,26 @@ const errors: Record<string, { status: number; message: string; retryable: boole
   INTERNAL_ERROR: { status: 500, message: "Unable to process your request.", retryable: false },
 };
 
-function json(body: unknown, status: number) {
-  return Response.json(body, {
-    status,
-    headers: { "Cache-Control": "private, no-store", "Vary": "Cookie", "X-Content-Type-Options": "nosniff" },
-  });
-}
-
-export function careOfferHandlers(deps: Dependencies) {
-  async function run(action: (repo: CareOffersRepository) => Promise<CareOffer[]>) {
-    const requestId = crypto.randomUUID();
+export function careOfferHandlers(deps: Dependencies, boundaryOptions: BoundaryOptions = {}) {
+  async function run(action: (repo: CareOffersRepository) => Promise<CareOffer[]>): Promise<CareOffer[]> {
     try {
       if (!deps.enabled()) throw new CareError("CARE_UNAVAILABLE");
-      const data = await action(await deps.connect());
-      return json({ data, meta: { requestId } }, 200);
+      return await action(await deps.connect());
     } catch (error) {
-      const code = error instanceof CareError && error.code in errors ? error.code : "INTERNAL_ERROR";
-      const { status, message, retryable } = errors[code];
-      if (status >= 500) console.error(JSON.stringify({ event: "care_offer_api_failure", requestId, code }));
-      return json({ error: { code, message, fieldErrors: {}, retryable }, meta: { requestId } }, status);
+      if (error instanceof CareError && error.code in errors) {
+        const { status, message, retryable } = errors[error.code];
+        throw new ApiFault(error.code, status, message, { retryable });
+      }
+      throw error;
     }
   }
 
   return {
-    list: (id: string) => run(async repo => careOffers(await repo.list(uuid(id)))),
+    list: (request: Request, id: string) => withApiBoundary(
+      request,
+      API_ROUTE_TEMPLATES.careRequestOffers,
+      async () => run(async repo => careOffers(await repo.list(uuid(id)))),
+      boundaryOptions,
+    ),
   };
 }
