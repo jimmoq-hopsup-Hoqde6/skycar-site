@@ -19,11 +19,11 @@ export async function verifyCareOffers({ sql, auth, quote, garageCreate, carePay
   const receipt = json(auth(owner, `select public.care_submit_request(gen_random_uuid(),${quote(carePayload(vehicle.id))}::jsonb)`)).request;
   const requestId = receipt.id;
   const times = json(`select jsonb_build_object(
-    'expiry',clock_timestamp()+interval '1 hour',
-    'start',clock_timestamp()+interval '1 day',
-    'end',clock_timestamp()+interval '1 day 2 hours',
-    'secondStart',clock_timestamp()+interval '2 days',
-    'secondEnd',clock_timestamp()+interval '2 days 2 hours')`);
+    'expiry',date_trunc('milliseconds',clock_timestamp()+interval '1 hour'),
+    'start',date_trunc('milliseconds',clock_timestamp()+interval '1 day'),
+    'end',date_trunc('milliseconds',clock_timestamp()+interval '1 day 2 hours'),
+    'secondStart',date_trunc('milliseconds',clock_timestamp()+interval '2 days'),
+    'secondEnd',date_trunc('milliseconds',clock_timestamp()+interval '2 days 2 hours'))`);
   const slot = { starts_at: times.start, ends_at: times.end };
   const secondSlot = { starts_at: times.secondStart, ends_at: times.secondEnd };
   const base = { requestId, technician, scope: 'Repair and refinish rear bumper scratch', price: 49500,
