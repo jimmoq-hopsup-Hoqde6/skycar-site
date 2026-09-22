@@ -55,6 +55,12 @@ against GitHub and bound to exact revision `c7603aa`. It:
 
 A green readiness run is not hosted acceptance or release approval.
 
+GitHub accepts manual dispatch only after the workflow file exists on the default
+branch. The current default-branch/Pages coupling means this draft must **not** be
+merged merely to make the button appear: first establish the reviewed
+non-publishing path required by #8, then rebind the workflow to the independently
+accepted application revision.
+
 ## Migration preparation
 
 Only after independent acceptance and explicit environment authorization, apply
