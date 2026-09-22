@@ -12,6 +12,7 @@ const otherRequestId = "88888888-8888-4888-8888-888888888888";
 const vehicleId = "44444444-4444-4444-8444-444444444444";
 const technicianId = "55555555-5555-4555-8555-555555555555";
 const boundaryRequestId = "66666666-6666-4666-8666-666666666666";
+const readAt = Date.parse("2026-09-22T07:10:30Z");
 
 function request() {
   return new Request(`https://skycar.test/api/v1/care/requests/${requestId}/offers?vehicle=${vehicleId}&technician=${technicianId}`, {
@@ -41,7 +42,7 @@ const raw = [{
 }];
 
 test("validates and returns customer-safe technician offers", () => {
-  const parsed = careOffers(raw, requestId);
+  const parsed = careOffers(raw, requestId, readAt);
   assert.equal(parsed[0].total_price_cents, 49500);
   assert.equal(parsed[0].slots[0].id, slotId);
   assert.equal("technician_id" in parsed[0], false);
@@ -65,6 +66,19 @@ for (const [name, invalid] of [
   ["timestamp without timezone", [{ ...raw[0], slots: [{ ...raw[0].slots[0], starts_at: "2026-09-23T00:30:00" }] }]],
   ["update before offer creation", [{ ...raw[0], updated_at: "2026-09-22T00:29:59Z" }]],
   ["offer expiry at its last update", [{ ...raw[0], expires_at: raw[0].updated_at }]],
+  ["offer expired before the read instant", [{ ...raw[0],
+    expires_at: "2026-09-22T07:10:29Z",
+    slots: [{ ...raw[0].slots[0], starts_at: "2026-09-22T07:10:29Z", ends_at: "2026-09-22T08:10:29Z" }],
+  }]],
+  ["offer expiry equal to the read instant", [{ ...raw[0], expires_at: "2026-09-22T07:10:30Z" }]],
+  ["appointment already started before the read instant", [{ ...raw[0],
+    expires_at: "2026-09-22T07:10:29Z",
+    slots: [{ ...raw[0].slots[0], starts_at: "2026-09-22T07:10:29Z", ends_at: "2026-09-22T08:10:29Z" }],
+  }]],
+  ["appointment start equal to the read instant", [{ ...raw[0],
+    expires_at: "2026-09-22T07:10:30Z",
+    slots: [{ ...raw[0].slots[0], starts_at: "2026-09-22T07:10:30Z", ends_at: "2026-09-22T08:10:30Z" }],
+  }]],
   ["slot created before its offer", [{ ...raw[0], slots: [{ ...raw[0].slots[0], created_at: "2026-09-22T00:29:59Z" }] }]],
   ["slot created after its appointment starts", [{ ...raw[0],
     slots: [{ ...raw[0].slots[0], created_at: "2026-09-23T00:31:00Z" }] }]],
@@ -76,9 +90,37 @@ for (const [name, invalid] of [
   }] }]],
 ]) {
   test(`fails closed on ${name}`, () => {
-    assert.throws(() => careOffers(invalid, requestId), /TEMPORARILY_UNAVAILABLE/);
+    assert.throws(() => careOffers(invalid, requestId, readAt), /TEMPORARILY_UNAVAILABLE/);
   });
 }
+
+test("captures one injected read instant for the entire decoded response", async () => {
+  let clockCalls = 0;
+  const handlers = careOfferHandlers({
+    enabled: () => true,
+    connect: async () => ({ list: async () => raw }),
+    now: () => { clockCalls++; return readAt; },
+  });
+  const response = await handlers.list(request(), requestId);
+  assert.equal(response.status, 200);
+  assert.equal(clockCalls, 1);
+});
+
+test("stale repository data becomes a retryable unavailable response", async () => {
+  const handlers = careOfferHandlers({
+    enabled: () => true,
+    connect: async () => ({ list: async () => [{ ...raw[0], expires_at: "2026-09-22T07:10:30Z" }] }),
+    now: () => readAt,
+  });
+  const response = await handlers.list(request(), requestId);
+  assert.equal(response.status, 503);
+  assert.deepEqual((await response.json()).error, {
+    code: "TEMPORARILY_UNAVAILABLE",
+    message: "Unable to load technician offers.",
+    fieldErrors: {},
+    retryable: true,
+  });
+});
 
 test("foreign-request repository data becomes a retryable unavailable response", async () => {
   const handlers = careOfferHandlers({
@@ -103,6 +145,7 @@ test("owner-scoped offer handler uses one redacted shared-boundary completion ev
     connect: async () => ({
       list: async id => { calls.push(id); return raw; },
     }),
+    now: () => readAt,
   }, {
     makeRequestId: () => boundaryRequestId,
     now: () => 100,
@@ -189,6 +232,7 @@ test("unexpected failures are redacted and a failing log sink cannot alter the r
   const successful = careOfferHandlers({
     enabled: () => true,
     connect: async () => ({ list: async () => raw }),
+    now: () => readAt,
   }, {
     makeRequestId: () => boundaryRequestId,
     now: () => 100,

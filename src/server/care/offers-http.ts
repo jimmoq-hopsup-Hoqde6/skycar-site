@@ -10,6 +10,7 @@ export interface CareOffersRepository {
 type Dependencies = {
   enabled: () => boolean;
   connect: () => Promise<CareOffersRepository>;
+  now?: () => number;
 };
 
 type BoundaryOptions = {
@@ -48,7 +49,9 @@ export function careOfferHandlers(deps: Dependencies, boundaryOptions: BoundaryO
       API_ROUTE_TEMPLATES.careRequestOffers,
       async () => run(async repo => {
         const requestId = uuid(id);
-        return careOffers(await repo.list(requestId), requestId);
+        const offers = await repo.list(requestId);
+        const readAt = (deps.now ?? Date.now)();
+        return careOffers(offers, requestId, readAt);
       }),
       boundaryOptions,
     ),

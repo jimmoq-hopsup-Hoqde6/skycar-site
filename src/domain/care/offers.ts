@@ -43,9 +43,9 @@ function isoDate(value: unknown): string {
   return value;
 }
 
-export function careOffers(value: unknown, expectedRequestId: string): CareOffer[] {
+export function careOffers(value: unknown, expectedRequestId: string, readAt: number = Date.now()): CareOffer[] {
   const requestId = uuid(expectedRequestId);
-  if (!Array.isArray(value)) unavailable();
+  if (!Number.isFinite(readAt) || !Array.isArray(value)) unavailable();
   const offerIds = new Set<string>();
   return value.map(raw => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) unavailable();
@@ -69,7 +69,7 @@ export function careOffers(value: unknown, expectedRequestId: string): CareOffer
     const offerCreatedAt = Date.parse(created_at);
     const offerUpdatedAt = Date.parse(updated_at);
     const offerExpiresAt = Date.parse(expires_at);
-    if (offerUpdatedAt < offerCreatedAt || offerExpiresAt <= offerUpdatedAt) unavailable();
+    if (offerUpdatedAt < offerCreatedAt || offerExpiresAt <= offerUpdatedAt || offerExpiresAt <= readAt) unavailable();
     const slotIds = new Set<string>();
 
     const slots = offer.slots.map(rawSlot => {
@@ -83,7 +83,7 @@ export function careOffers(value: unknown, expectedRequestId: string): CareOffer
       const created_at = isoDate(slot.created_at);
       const slotCreatedAt = Date.parse(created_at);
       const slotStartsAt = Date.parse(starts_at);
-      if (Date.parse(ends_at) <= slotStartsAt || offerExpiresAt > slotStartsAt ||
+      if (Date.parse(ends_at) <= slotStartsAt || slotStartsAt <= readAt || offerExpiresAt > slotStartsAt ||
         slotCreatedAt < offerCreatedAt || slotCreatedAt > offerUpdatedAt || slotCreatedAt > slotStartsAt) unavailable();
       return { id, starts_at, ends_at, status: "available" as const, created_at };
     });
