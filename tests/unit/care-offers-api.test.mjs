@@ -65,6 +65,15 @@ for (const [name, invalid] of [
   ["too many slots", [{ ...raw[0], slots: Array(21).fill(raw[0].slots[0]) }]],
   ["timestamp without timezone", [{ ...raw[0], slots: [{ ...raw[0].slots[0], starts_at: "2026-09-23T00:30:00" }] }]],
   ["update before offer creation", [{ ...raw[0], updated_at: "2026-09-22T00:29:59Z" }]],
+  ["offer created after the read instant", [{ ...raw[0],
+    created_at: "2026-09-22T08:00:00Z",
+    updated_at: "2026-09-22T08:00:00Z",
+    slots: [{ ...raw[0].slots[0], created_at: "2026-09-22T08:00:00Z" }],
+  }]],
+  ["offer updated after the read instant", [{ ...raw[0],
+    updated_at: "2026-09-22T08:00:00Z",
+    slots: [{ ...raw[0].slots[0], created_at: "2026-09-22T08:00:00Z" }],
+  }]],
   ["offer expiry at its last update", [{ ...raw[0], expires_at: raw[0].updated_at }]],
   ["offer expired before the read instant", [{ ...raw[0],
     expires_at: "2026-09-22T07:10:29Z",
@@ -104,6 +113,18 @@ test("captures one injected read instant for the entire decoded response", async
   const response = await handlers.list(request(), requestId);
   assert.equal(response.status, 200);
   assert.equal(clockCalls, 1);
+});
+
+test("accepts lifecycle timestamps equal to the captured read instant", () => {
+  const instant = new Date(readAt).toISOString();
+  const parsed = careOffers([{
+    ...raw[0],
+    created_at: instant,
+    updated_at: instant,
+    slots: [{ ...raw[0].slots[0], created_at: instant }],
+  }], requestId, readAt);
+  assert.equal(parsed[0].created_at, instant);
+  assert.equal(parsed[0].slots[0].created_at, instant);
 });
 
 test("stale repository data becomes a retryable unavailable response", async () => {

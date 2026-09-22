@@ -69,7 +69,8 @@ export function careOffers(value: unknown, expectedRequestId: string, readAt: nu
     const offerCreatedAt = Date.parse(created_at);
     const offerUpdatedAt = Date.parse(updated_at);
     const offerExpiresAt = Date.parse(expires_at);
-    if (offerUpdatedAt < offerCreatedAt || offerExpiresAt <= offerUpdatedAt || offerExpiresAt <= readAt) unavailable();
+    if (offerCreatedAt > readAt || offerUpdatedAt > readAt ||
+      offerUpdatedAt < offerCreatedAt || offerExpiresAt <= offerUpdatedAt || offerExpiresAt <= readAt) unavailable();
     const slotIds = new Set<string>();
 
     const slots = offer.slots.map(rawSlot => {
@@ -84,6 +85,7 @@ export function careOffers(value: unknown, expectedRequestId: string, readAt: nu
       const slotCreatedAt = Date.parse(created_at);
       const slotStartsAt = Date.parse(starts_at);
       if (Date.parse(ends_at) <= slotStartsAt || slotStartsAt <= readAt || offerExpiresAt > slotStartsAt ||
+        slotCreatedAt > readAt ||
         slotCreatedAt < offerCreatedAt || slotCreatedAt > offerUpdatedAt || slotCreatedAt > slotStartsAt) unavailable();
       return { id, starts_at, ends_at, status: "available" as const, created_at };
     });

@@ -24,8 +24,10 @@ Quote text must already be trimmed. Offer creation/update/expiry and option
 creation/start timestamps must retain a possible chronological order; impossible
 repository chronology fails closed rather than becoming customer-visible.
 The decoder captures one current instant after the repository read and requires
+offer creation/update and option creation to be no later than that instant,
 every offer to expire strictly after it and every option to start strictly after
-it. Equality at either boundary is stale and fails the whole response closed.
+it. Creation/update equality is valid; equality at the expiry or option-start
+boundary is stale and fails the whole response closed.
 Repository drift or malformed data fails the whole response closed with a
 retryable 503; private and unrecognised fields are never copied to the response.
 
