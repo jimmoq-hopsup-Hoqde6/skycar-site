@@ -30,10 +30,18 @@ create table public.care_offer_slots (
 );
 create index care_offer_slots_offer_idx on public.care_offer_slots(offer_id, starts_at);
 
+create table public.care_offer_commands (
+  idempotency_key uuid primary key,
+  payload jsonb not null,
+  offer_id uuid not null references public.care_offers(id),
+  created_at timestamptz not null default now()
+);
+
 alter table public.care_offers enable row level security;
 alter table public.care_offer_slots enable row level security;
-revoke all on public.care_offers, public.care_offer_slots from public, anon, authenticated;
-grant all on public.care_offers, public.care_offer_slots to service_role;
+alter table public.care_offer_commands enable row level security;
+revoke all on public.care_offers, public.care_offer_slots, public.care_offer_commands from public, anon, authenticated;
+grant all on public.care_offers, public.care_offer_slots, public.care_offer_commands to service_role;
 
 create function public.care_get_offers(p_request_id uuid) returns jsonb
 language plpgsql stable security definer set search_path = '' as $$
@@ -70,6 +78,7 @@ end;
 $$;
 
 create function public.care_publish_offer(
+  p_idempotency_key uuid,
   p_request_id uuid,
   p_technician_id uuid,
   p_scope_summary text,
@@ -77,7 +86,7 @@ create function public.care_publish_offer(
   p_adjustment_reason text,
   p_expires_at timestamptz,
   p_slots jsonb
-) returns uuid
+) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
   new_offer_id uuid;
@@ -85,12 +94,15 @@ declare
   start_time timestamptz;
   end_time timestamptz;
   at_time timestamptz;
+  normalized_slots jsonb := '[]'::jsonb;
+  normalized_command jsonb;
+  prior public.care_offer_commands;
   request public.care_requests;
 begin
   if auth.role() is distinct from 'service_role' then
     raise exception using errcode = 'P0001', message = 'FORBIDDEN';
   end if;
-  if p_request_id is null or p_technician_id is null or
+  if p_idempotency_key is null or p_request_id is null or p_technician_id is null or
     length(btrim(coalesce(p_scope_summary, ''))) not between 10 and 2000 or
     p_total_price_cents is null or p_total_price_cents <= 0 or
     p_expires_at is null or not isfinite(p_expires_at) or
@@ -104,6 +116,69 @@ begin
   if p_adjustment_reason is not null and length(btrim(p_adjustment_reason)) not between 3 and 1000 then
     raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
   end if;
+
+  -- Parse and canonicalise the complete command before taking business locks.
+  -- Equivalent absolute timestamps reconcile even when their input offsets differ.
+  for slot in select value from jsonb_array_elements(p_slots)
+  loop
+    if jsonb_typeof(slot) <> 'object' or not (slot ?& array['starts_at','ends_at']) or
+      slot - array['starts_at','ends_at'] <> '{}'::jsonb or
+      jsonb_typeof(slot->'starts_at') is distinct from 'string' or
+      jsonb_typeof(slot->'ends_at') is distinct from 'string' then
+      raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
+    end if;
+    if slot->>'starts_at' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt ][0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?([Zz]|[+-][0-9]{2}:[0-9]{2})$' or
+      slot->>'ends_at' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt ][0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?([Zz]|[+-][0-9]{2}:[0-9]{2})$' then
+      raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
+    end if;
+    begin
+      start_time := (slot->>'starts_at')::timestamptz;
+      end_time := (slot->>'ends_at')::timestamptz;
+    exception when invalid_datetime_format or datetime_field_overflow then
+      raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
+    end;
+    if start_time is null or end_time is null or not isfinite(start_time) or not isfinite(end_time) or
+      end_time <= start_time then
+      raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
+    end if;
+    normalized_slots := normalized_slots || jsonb_build_array(jsonb_build_object(
+      'starts_at_epoch', extract(epoch from start_time),
+      'ends_at_epoch', extract(epoch from end_time)
+    ));
+  end loop;
+  if exists (
+    select 1
+    from jsonb_array_elements(normalized_slots) with ordinality a(value, position)
+    join jsonb_array_elements(normalized_slots) with ordinality b(value, position)
+      on a.position < b.position
+    where (a.value->>'starts_at_epoch')::numeric < (b.value->>'ends_at_epoch')::numeric
+      and (a.value->>'ends_at_epoch')::numeric > (b.value->>'starts_at_epoch')::numeric
+  ) then
+    raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
+  end if;
+  select jsonb_agg(value order by (value->>'starts_at_epoch')::numeric, (value->>'ends_at_epoch')::numeric)
+    into normalized_slots from jsonb_array_elements(normalized_slots);
+  normalized_command := jsonb_build_object(
+    'request_id', p_request_id,
+    'technician_id', p_technician_id,
+    'scope_summary', btrim(p_scope_summary),
+    'total_price_cents', p_total_price_cents,
+    'adjustment_reason', case when p_adjustment_reason is null then null else btrim(p_adjustment_reason) end,
+    'expires_at_epoch', extract(epoch from p_expires_at),
+    'slots', normalized_slots
+  );
+
+  -- Same key serialises first attempts and uncertain retries. A successful
+  -- replay is reconciled before current request/time eligibility is rechecked.
+  perform pg_advisory_xact_lock(hashtextextended('care:publish-offer:' || p_idempotency_key::text, 0));
+  select * into prior from public.care_offer_commands where idempotency_key = p_idempotency_key;
+  if found then
+    if prior.payload <> normalized_command then
+      raise exception using errcode = 'P0001', message = 'IDEMPOTENCY_CONFLICT';
+    end if;
+    return jsonb_build_object('offer_id', prior.offer_id, 'replayed', true);
+  end if;
+
   -- Shared lock order: vehicle, request, then technician role. No offer may
   -- be published against an archived vehicle or an already-booked request.
   perform 1 from public.vehicles v join public.care_requests r on r.vehicle_id = v.id
@@ -135,34 +210,14 @@ begin
     case when p_adjustment_reason is null then null else btrim(p_adjustment_reason) end, p_expires_at, at_time, at_time
   ) returning id into new_offer_id;
 
-  for slot in select value from jsonb_array_elements(p_slots)
+  for slot in select value from jsonb_array_elements(normalized_slots)
   loop
-    if jsonb_typeof(slot) <> 'object' or not (slot ?& array['starts_at','ends_at']) or
-      slot - array['starts_at','ends_at'] <> '{}'::jsonb or
-      jsonb_typeof(slot->'starts_at') is distinct from 'string' or
-      jsonb_typeof(slot->'ends_at') is distinct from 'string' then
-      raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
-    end if;
-    -- Require absolute, timezone-qualified values; reject session-timezone
-    -- dependent or relative strings so the same input has one meaning.
-    if slot->>'starts_at' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt ][0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?([Zz]|[+-][0-9]{2}:[0-9]{2})$' or
-      slot->>'ends_at' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt ][0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?([Zz]|[+-][0-9]{2}:[0-9]{2})$' then
-      raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
-    end if;
-    begin
-      start_time := (slot->>'starts_at')::timestamptz;
-      end_time := (slot->>'ends_at')::timestamptz;
-    exception when invalid_datetime_format or datetime_field_overflow then
-      raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
-    end;
+    start_time := to_timestamp((slot->>'starts_at_epoch')::numeric);
+    end_time := to_timestamp((slot->>'ends_at_epoch')::numeric);
     -- A customer must decide before travel/work starts. Expiry is a decision
     -- deadline, NOT a requirement to finish the appointment before the quote expires.
     if start_time is null or end_time is null or not isfinite(start_time) or not isfinite(end_time) or
       start_time <= at_time or end_time <= start_time or p_expires_at > start_time then
-      raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
-    end if;
-    if exists (select 1 from public.care_offer_slots s where s.offer_id = new_offer_id
-      and s.starts_at < end_time and s.ends_at > start_time) then
       raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
     end if;
     insert into public.care_offer_slots(offer_id, starts_at, ends_at, created_at)
@@ -173,14 +228,17 @@ begin
   values (auth.uid(), 'care.offer_issued', 'care_request', p_request_id::text,
     jsonb_build_object('offer_id', new_offer_id, 'technician_id', p_technician_id, 'actor_type', 'service_role', 'slot_count', jsonb_array_length(p_slots), 'expires_at', p_expires_at));
 
-  return new_offer_id;
+  insert into public.care_offer_commands(idempotency_key, payload, offer_id, created_at)
+    values (p_idempotency_key, normalized_command, new_offer_id, at_time);
+
+  return jsonb_build_object('offer_id', new_offer_id, 'replayed', false);
 end;
 $$;
 
 revoke all on function public.care_get_offers(uuid),
-  public.care_publish_offer(uuid, uuid, text, integer, text, timestamptz, jsonb)
+  public.care_publish_offer(uuid, uuid, uuid, text, integer, text, timestamptz, jsonb)
   from public, anon, authenticated;
 grant execute on function public.care_get_offers(uuid) to authenticated;
-grant execute on function public.care_publish_offer(uuid, uuid, text, integer, text, timestamptz, jsonb) to service_role;
+grant execute on function public.care_publish_offer(uuid, uuid, uuid, text, integer, text, timestamptz, jsonb) to service_role;
 
 commit;

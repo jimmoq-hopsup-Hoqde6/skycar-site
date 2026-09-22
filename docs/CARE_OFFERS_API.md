@@ -51,9 +51,9 @@ profile/review contract is still needed before customers can compare technicians
 
 ## Restricted publishing RPC
 
-`care_publish_offer(p_request_id uuid, p_technician_id uuid,
+`care_publish_offer(p_idempotency_key uuid, p_request_id uuid, p_technician_id uuid,
 p_scope_summary text, p_total_price_cents integer, p_adjustment_reason text,
-p_expires_at timestamptz, p_slots jsonb) -> uuid`
+p_expires_at timestamptz, p_slots jsonb) -> jsonb`
 
 Only `service_role` has execution permission. A missing or different role claim
 also fails closed. Spoofing a role claim does not grant an authenticated or
@@ -85,11 +85,21 @@ Invalid input or audit failure rolls back the whole operation, including prior
 offer supersession. The audit identifies a service-role publisher and records
 the target technician separately; it does not impersonate that technician.
 
-**Publishing is not yet command-idempotent.** Repeating a successful call creates
-a replacement offer and another audit. After an uncertain publishing outcome,
-do not blindly retry. A versioned idempotency/reconciliation contract is required
-before any automated publisher or live offer dispatch is enabled. Serialized
-supersession is not booking concurrency protection or exactly-once delivery.
+The service publisher supplies a UUID idempotency key for each logical command.
+The database stores a private canonical command record in the same transaction as
+the offer and audit. A retry with the same key and equivalent normalized command
+returns `{"offer_id":"...","replayed":true}` without another offer, slot or
+audit. The first successful execution returns the same shape with `replayed:false`.
+Whitespace is normalized for text fields; absolute appointment instants and slot
+order are canonicalized. Reusing a key for a different command fails with
+`IDEMPOTENCY_CONFLICT`. A transaction advisory lock makes two simultaneous first
+attempts race-safe. A failed transaction leaves no reconciliation record, so the
+same command can be retried safely.
+
+Idempotent publication is not booking concurrency protection, confirmed calendar
+capacity or exactly-once delivery to external systems. The command ledger is not
+customer-readable, and callers must durably retain the key until the outcome is
+reconciled.
 
 This slice does not advance the request to `offers_ready` or stop its existing
 deadline worker. That operational integration, including deduplicated events and
@@ -109,14 +119,15 @@ assertions, applies every migration in filename order, and additionally invokes
 `care-offers.acceptance.mjs`. Offer coverage includes owner A/B isolation, denied
 client reads/writes/publishing, forged/missing role claims, valid publish/read,
 malformed/null/time-boundary input, rollback, supersession and concurrent
-publication. The bootstrap `auth.role()` shim tests SQL boundaries only; it is
+publication, including identical-key replay/conflict and simultaneous duplicate
+commands. The bootstrap `auth.role()` shim tests SQL boundaries only; it is
 not hosted JWT, Supabase, Storage, calendar or physical-device evidence.
 Exact executed results and revisions belong in the PR conversation, not inferred
 from the existence of tests or from unrelated green workflows.
 
 Still required: independent review; PR #27 integration acceptance; hosted auth,
 private-storage/device and release controls; technician qualifications/coverage
-and authoritative capacity; publish idempotency; public profile comparison;
+and authoritative capacity; public profile comparison;
 offer/request state and notification integration; atomic acceptance of an offer
 and slot with revalidated capacity; booking projection; separate money lifecycle.
 No live migration, deployment, payment provider, customer booking or dispatch is

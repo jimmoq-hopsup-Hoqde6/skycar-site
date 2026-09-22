@@ -29,16 +29,18 @@ export async function verifyCareOffers({ sql, auth, quote, garageCreate, carePay
   const base = { requestId, technician, scope: 'Repair and refinish rear bumper scratch', price: 49500,
     reason: null, expiry: times.expiry, slots: [slot] };
   function command(changes = {}) {
-    const p = { ...base, ...changes };
+    const p = { ...base, key: randomUUID(), ...changes };
     const slotsSql = Object.hasOwn(changes, 'slotsSql') ? changes.slotsSql : `${quote(JSON.stringify(p.slots))}::jsonb`;
-    return `select public.care_publish_offer(${literal(p.requestId,'uuid')},${literal(p.technician,'uuid')},
+    return `select public.care_publish_offer(${literal(p.key,'uuid')},${literal(p.requestId,'uuid')},${literal(p.technician,'uuid')},
       ${literal(p.scope)},${literal(p.price,'integer')},${literal(p.reason)},${literal(p.expiry,'timestamptz')},${slotsSql})`;
   }
-  const publish = changes => sql(service(command(changes))).split('\n')[0];
+  const publishResult = changes => json(service(command(changes)));
+  const publish = changes => publishResult(changes).offer_id;
   const get = actor => json(auth(actor, `select public.care_get_offers(${quote(requestId)}::uuid)`));
   const snapshot = () => json(`select jsonb_build_object(
     'offers',(select jsonb_agg(to_jsonb(o) order by o.id) from public.care_offers o where request_id=${quote(requestId)}::uuid),
     'slots',(select jsonb_agg(to_jsonb(s) order by s.id) from public.care_offer_slots s join public.care_offers o on o.id=s.offer_id where o.request_id=${quote(requestId)}::uuid),
+    'commands',(select jsonb_agg(to_jsonb(c) order by c.idempotency_key) from public.care_offer_commands c join public.care_offers o on o.id=c.offer_id where o.request_id=${quote(requestId)}::uuid),
     'audits',(select count(*) from public.audit_events where action='care.offer_issued' and resource_id=${quote(requestId)}))`);
 
   equal(get(owner), [], 'owner sees an honest empty offer list');
@@ -47,7 +49,7 @@ export async function verifyCareOffers({ sql, auth, quote, garageCreate, carePay
   fails(`begin; set local role anon; select public.care_get_offers(${quote(requestId)}::uuid); commit;`, 'permission denied');
   fails(auth(owner, 'select * from public.care_offers'), 'permission denied');
   fails(auth(owner, 'select * from public.care_offer_slots'), 'permission denied');
-  for (const table of ['care_offers', 'care_offer_slots']) {
+  for (const table of ['care_offers', 'care_offer_slots', 'care_offer_commands']) {
     fails(auth(owner, `insert into public.${table} default values`), 'permission denied');
     fails(auth(owner, `delete from public.${table}`), 'permission denied');
   }
@@ -61,7 +63,10 @@ export async function verifyCareOffers({ sql, auth, quote, garageCreate, carePay
   fails(auth(owner, `select public.care_get_offers(${quote(requestId)}::uuid)`), 'FORBIDDEN');
   sql(`insert into public.user_roles(user_id,role) values (${quote(owner)},'customer')`);
 
-  const first = publish();
+  const firstKey = randomUUID();
+  const firstResult = publishResult({ key: firstKey });
+  equal(firstResult.replayed, false, 'first publication is not a replay');
+  const first = firstResult.offer_id;
   let offers = get(owner);
   equal(offers.length, 1, 'one customer-safe offer');
   equal(offers[0].id, first);
@@ -81,10 +86,23 @@ export async function verifyCareOffers({ sql, auth, quote, garageCreate, carePay
   equal(unchanged.money_state, null);
   equal(unchanged.events, receipt.events, 'offer preparation does not claim a booking or delivered notification');
 
+  const beforeReplay = snapshot();
+  const replay = publishResult({
+    key: firstKey,
+    scope: `  ${base.scope}  `,
+    expiry: new Date(times.expiry).toISOString(),
+    slots: [{ starts_at: new Date(times.start).toISOString(), ends_at: new Date(times.end).toISOString() }],
+  });
+  equal(replay, { offer_id: first, replayed: true }, 'same canonical command reconciles to the original offer');
+  equal(snapshot(), beforeReplay, 'replay creates no offer, slot, command or audit duplicate');
+  fails(service(command({ key: firstKey, price: 49501 })), 'IDEMPOTENCY_CONFLICT');
+  equal(snapshot(), beforeReplay, 'conflicting key reuse cannot mutate the original result');
+
   const invalid = [
     ['SQL-null slots', { slotsSql: 'null' }], ['JSON-null slots', { slots: null }],
     ['non-array slots', { slots: {} }], ['scalar slots', { slots: 'invalid' }],
     ['empty slots', { slots: [] }], ['too many slots', { slots: Array(21).fill(slot) }],
+    ['null idempotency key', { key: null }],
     ['null request', { requestId: null }], ['null technician', { technician: null }],
     ['null price', { price: null }], ['zero price', { price: 0 }], ['negative price', { price: -1 }],
     ['null scope', { scope: null }], ['short scope', { scope: 'short' }], ['long scope', { scope: 'x'.repeat(2001) }],
@@ -150,12 +168,32 @@ export async function verifyCareOffers({ sql, auth, quote, garageCreate, carePay
     sql('drop trigger test_offer_audit_failure on public.audit_events; drop function public.test_offer_audit_failure();');
   }
 
-  // This proves serialized supersession only; it is NOT command idempotency,
-  // capacity reservation or protection against double booking.
+  const duplicateKey = randomUUID();
+  const duplicateTag = 'offers_duplicate_publication_holds_idempotency_lock';
+  const duplicateCommand = command({ key: duplicateKey, price: 52000 });
+  const firstDuplicate = result(service(`${duplicateCommand}; select pg_sleep(1); /* ${duplicateTag} */`));
+  await waitForQuery(duplicateTag);
+  const secondDuplicate = result(service(duplicateCommand));
+  const duplicateResults = await Promise.all([firstDuplicate, secondDuplicate]);
+  for (const outcome of duplicateResults) equal(outcome.error, undefined, outcome.output);
+  const duplicateEvidence = json(`select jsonb_build_object(
+    'command_count',(select count(*) from public.care_offer_commands where idempotency_key=${quote(duplicateKey)}::uuid),
+    'offer_id',(select offer_id from public.care_offer_commands where idempotency_key=${quote(duplicateKey)}::uuid),
+    'audit_count',(select count(*) from public.audit_events a join public.care_offer_commands c
+      on c.idempotency_key=${quote(duplicateKey)}::uuid and a.metadata->>'offer_id'=c.offer_id::text
+      where a.action='care.offer_issued'))`);
+  equal(duplicateEvidence.command_count, 1, 'concurrent identical commands persist one reconciliation record');
+  equal(duplicateEvidence.audit_count, 1, 'concurrent identical commands emit one audit event');
+  equal(get(owner).map(o => o.id), [duplicateEvidence.offer_id], 'concurrent identical commands create one issued offer');
+  const duplicateReplay = publishResult({ key: duplicateKey, price: 52000 });
+  equal(duplicateReplay, { offer_id: duplicateEvidence.offer_id, replayed: true }, 'completed concurrent command remains replayable');
+
+  // Different keys remain distinct commands and preserve serialized
+  // supersession. This is not capacity reservation or double-booking protection.
   const tag = 'offers_publication_holds_shared_request';
-  const firstPublication = result(service(`${command({ price: 52000 })}; select pg_sleep(1); /* ${tag} */`));
+  const firstPublication = result(service(`${command({ price: 53000 })}; select pg_sleep(1); /* ${tag} */`));
   await waitForQuery(tag);
-  const secondPublication = result(service(command({ price: 53000 })));
+  const secondPublication = result(service(command({ price: 54000 })));
   const results = await Promise.all([firstPublication, secondPublication]);
   for (const outcome of results) equal(outcome.error, undefined, outcome.output);
   equal(sql(`select count(*) from public.care_offers where request_id=${quote(requestId)}::uuid and technician_id=${quote(technician)}::uuid and status='issued'`), '1');
