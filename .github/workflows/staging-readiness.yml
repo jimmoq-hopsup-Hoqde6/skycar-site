@@ -31,6 +31,7 @@ jobs:
       REQUESTED_REVISION: ${{ inputs.revision }}
       ISOLATION_CONFIRMATION: ${{ inputs.isolation_confirmation }}
       STAGING_ISOLATION_MARKER: ${{ vars.STAGING_ISOLATION_MARKER }}
+      SKYCAR_APP_ORIGIN: ${{ vars.STAGING_APP_ORIGIN }}
       SKYCAR_ENV: staging
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.STAGING_SUPABASE_PUBLISHABLE_KEY }}
@@ -46,6 +47,12 @@ jobs:
           set -euo pipefail
           test "$ISOLATION_CONFIRMATION" = "ISOLATED-STAGING-NO-PRODUCTION"
           test "$STAGING_ISOLATION_MARKER" = "skycar-v2-isolated-staging"
+          case "$SKYCAR_APP_ORIGIN" in
+            https://*/*|https://*\?*|https://*#*|https://*@*|https://*,*)
+              echo "Staging app origin must not contain a path, query, credentials or list." >&2; exit 1 ;;
+            https://?*) ;;
+            *) echo "Staging app origin must be an exact HTTPS origin." >&2; exit 1 ;;
+          esac
           test "$REQUESTED_REVISION" = "$EXPECTED_REVISION"
           test -n "$NEXT_PUBLIC_SUPABASE_URL"
           test -n "$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"

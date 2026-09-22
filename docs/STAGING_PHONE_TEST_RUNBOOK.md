@@ -27,12 +27,15 @@ Before any hosted mutation, the repository/release administrator must verify:
    deployment branch wildcard broader than the reviewed staging route.
 4. Environment variable `STAGING_ISOLATION_MARKER` equals
    `skycar-v2-isolated-staging`.
-5. These GitHub environment secrets are configured without writing their values
+5. Environment variable `STAGING_APP_ORIGIN` is the exact protected HTTPS
+   staging origin, with no path or trailing slash. Runtime maps it to the
+   server-only `SKYCAR_APP_ORIGIN`; forwarded request headers are not trusted.
+6. These GitHub environment secrets are configured without writing their values
    to issues, logs, artifacts or repository files:
    - `STAGING_SUPABASE_URL`
    - `STAGING_SUPABASE_PUBLISHABLE_KEY`
    - `STAGING_SUPABASE_SECRET_KEY`
-6. Runtime flags are exactly:
+7. Runtime flags are exactly:
    `SKYCAR_ENV=staging`, `FEATURE_GARAGE=true`,
    `FEATURE_CARE=true`, `FEATURE_BENEFITS=false`,
    `FEATURE_SELL=false`.
@@ -111,17 +114,22 @@ For account B:
 Then sign out and confirm protected views/data fail closed. Delete both accounts
 and all synthetic rows/objects after evidence capture.
 
-## Current authentication blocker
+## Prepared authentication entry
 
-The inspected candidate verifies Supabase sessions server-side, but it has no
-customer-facing sign-in or Auth callback route. Therefore the secure phone login
-required by this milestone cannot currently be completed from the UI.
+PR #30 now prepares a customer-facing email/password sign-in and local-device
+sign-out path for pre-created synthetic staging accounts. It uses server-written
+Supabase cookies, refreshes sessions at the Next.js proxy boundary, rejects
+cross-origin writes and unsafe return paths, and returns generic provider failures.
+It does not add self-registration, password recovery, OAuth, magic links or an
+admin/service-key path, so no Auth callback is required for this bounded flow.
 
-A qualified reviewer must assign a bounded authentication-entry correction after
-disposing PR #27. Required acceptance includes sign-in, sign-out, expired session,
-A → B switch, same-origin cookie behavior and no open redirect. Do not work around
-this by sharing raw tokens, injecting cookies on Marcel's phone or exposing an
-admin/service key.
+Local executable evidence covers request validation, same-origin enforcement,
+credential-error redaction, return-path safety and local sign-out. This source is
+still draft, unmerged, undeployed and awaiting revision-specific review. Hosted
+acceptance must separately prove cookie refresh/expiry, A → B replacement and
+sign-out against the authorised isolated Supabase project. Do not work around a
+missing hosted environment by sharing raw tokens, injecting cookies on Marcel's
+phone or exposing an admin/service key.
 
 ## Logging and evidence
 
@@ -165,8 +173,8 @@ Preparation can complete in GitHub. A running phone-test instance still requires
 - one protected non-public staging runtime/URL capable of Next.js server routes;
 - repository/environment administrator access to configure protected secrets and
   reviewer gates;
-- a reviewed customer Auth entry/callback correction;
-- independent PR #27 acceptance before applying migrations or deploying.
+- revision-specific review of PR #30's customer Auth entry;
+- formal release disposition for PR #27 before applying migrations or deploying.
 
 No payment/provider account, public DNS change or production credential is needed
 for this first milestone.
