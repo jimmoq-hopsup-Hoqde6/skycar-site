@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { promisify } from "node:util";
+import { verifyCareOffers } from "./care-offers.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
@@ -90,6 +91,7 @@ before(() => {
     '202609200003_care_my_jobs.sql',
     '202609200100_garage_mutations.sql',
     '202609200300_garage_vehicle_photos.sql',
+    '202609220100_care_offers.sql',
   ], 'combined verification must include every public migration in filename order');
   for (const migration of migrations) file(`supabase/migrations/${migration}`);
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
@@ -246,4 +248,8 @@ test('combined Garage and Care migrations preserve ownership, history, retries, 
   assert.equal(sql(`select count(*) from public.care_request_commands where request_id=${quote(retryBlockedRequest)}::uuid and operation='retry'`), '0'); checks++;
 
   console.log(`PASS: ${checks} combined Garage/Care migration, ownership, atomicity and race checks (auth/storage stubs; not hosted Supabase).`);
+});
+
+test('Care offers enforce authorization, valid appointment times, expiry and atomic publication', async () => {
+  await verifyCareOffers({ sql, auth, quote, garageCreate, carePayload, expectSqlError, result, waitForQuery });
 });
