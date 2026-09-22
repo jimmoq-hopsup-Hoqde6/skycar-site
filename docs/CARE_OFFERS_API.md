@@ -20,7 +20,9 @@ URL, query, session data and offer contents. A logging failure cannot change the
 customer response.
 The application decoder independently requires every returned offer to match the
 route request ID and the documented field, timestamp, expiry and slot bounds.
-Quote text must already be trimmed. Offer creation/update/expiry and option
+Timestamp strings must describe real Gregorian calendar dates and 00–23 hours;
+values that JavaScript would otherwise normalise, such as 30 February or 24:00,
+fail closed. Quote text must already be trimmed. Offer creation/update/expiry and option
 creation/start timestamps must retain a possible chronological order; impossible
 repository chronology fails closed rather than becoming customer-visible.
 The decoder captures one current instant after the repository read and requires
