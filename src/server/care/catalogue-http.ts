@@ -1,3 +1,4 @@
+import { isTrustedWriteOrigin } from "../http/request-origin.mjs";
 import {
   CareCatalogueError,
   coverageInput,
@@ -29,7 +30,7 @@ function json(body: unknown, status: number, cacheControl: string) {
 }
 
 async function readBody(request: Request): Promise<unknown> {
-  if (request.headers.get("origin") !== new URL(request.url).origin) {
+  if (!isTrustedWriteOrigin(request)) {
     throw new CareCatalogueError("CSRF_FAILED");
   }
   if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") {

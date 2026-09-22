@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { isTrustedWriteOrigin } from '../http/request-origin.mjs';
 import { GarageError, parseVehicleQuery, publicVehicle, requireUuid, validateVehicleInput } from '../../domain/garage/vehicles.mjs';
 
 async function readWrite(request) {
-  const origin = request.headers.get('origin');
-  if (origin !== new URL(request.url).origin || request.headers.get('sec-fetch-site') === 'cross-site') {
+  if (!isTrustedWriteOrigin(request)) {
     throw new GarageError('ORIGIN_REJECTED', 403, 'Reload Skycar and try again from this site.');
   }
   if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {

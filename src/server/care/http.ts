@@ -1,4 +1,5 @@
 import { CareError, careInput, object, uuid } from "../../domain/care/request.ts";
+import { isTrustedWriteOrigin } from "../http/request-origin.mjs";
 import type { CareInput, CareReceipt } from "../../domain/care/request.ts";
 import { careListPage, careListQuery } from "../../domain/care/list.ts";
 import type { CareListQuery, CareListRows } from "../../domain/care/list.ts";
@@ -37,7 +38,7 @@ function json(body: unknown, status: number) {
 }
 
 async function readBody(request: Request): Promise<unknown> {
-  if (request.headers.get("origin") !== new URL(request.url).origin) throw new CareError("CSRF_FAILED");
+  if (!isTrustedWriteOrigin(request)) throw new CareError("CSRF_FAILED");
   if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") {
     throw new CareError("UNSUPPORTED_MEDIA_TYPE");
   }
