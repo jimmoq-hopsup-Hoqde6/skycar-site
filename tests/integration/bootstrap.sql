@@ -8,6 +8,11 @@ create table auth.users(id uuid primary key);
 create function auth.uid() returns uuid language sql stable as $$
   select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
 $$;
+-- Minimal role-claim shim for RPC tests, not hosted JWT verification.
+create function auth.role() returns text language sql stable as $$
+  select nullif(current_setting('request.jwt.claim.role', true), '');
+$$;
+grant execute on function auth.role() to authenticated, anon, service_role;
 grant usage on schema auth to authenticated, anon, service_role;
 grant execute on function auth.uid() to authenticated, anon, service_role;
 create schema storage;

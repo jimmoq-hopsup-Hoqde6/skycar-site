@@ -1,18 +1,26 @@
-# Care technician offers API — first fulfilment slice (#14)
+# Care technician offers API — isolated preparation (#14 / PR #29)
 
-Contract version: 1. Scope: reviewed technician offers and real appointment
-options after a Care request exists. This contract does **not** accept an offer,
-reserve a slot, create a booking, charge a customer or start fulfilment.
+Contract version: 1, corrected 22 September 2026. This slice stores reviewed
+quote data and operator-entered appointment options. It does **not** verify a
+technician's calendar capacity, reserve a slot, accept an offer, create a
+booking, charge a customer or start fulfilment. It remains draft preparation.
 
 ## Customer read
 
 `GET /api/v1/care/requests/:id/offers`
 
 Requires a verified customer session and `FEATURE_CARE=true`. The database
-derives the caller from `auth.uid()`; a foreign or missing request returns the
-same 404. Responses are private/no-store.
+derives the caller from `auth.uid()` and a server-granted customer role; a
+foreign or missing request returns the same 404. Responses are private/no-store.
+Customer read uses the session-scoped client, never the service-role client.
 
-Only currently issued, unexpired offers are returned. Each offer contains:
+Only issued offers with `expires_at` strictly after the read statement's start
+are returned. Each returned offer must have at least one available option whose
+`starts_at` is also strictly in the future. Already-started, withdrawn or expired
+options are omitted. An offer with no selectable options is omitted. These
+checks are read-time filtering, not a reservation or a guarantee of capacity.
+
+Example `data` item (synthetic values, not a price or appointment promise):
 
 ```json
 {
@@ -23,7 +31,7 @@ Only currently issued, unexpired offers are returned. Each offer contains:
   "currency": "AUD",
   "adjustment_reason": "Estimate increased after technician photo review",
   "status": "issued",
-  "expires_at": "2026-09-24T06:00:00Z",
+  "expires_at": "2026-09-22T23:00:00Z",
   "created_at": "2026-09-22T00:30:00Z",
   "updated_at": "2026-09-22T00:30:00Z",
   "slots": [
@@ -38,41 +46,78 @@ Only currently issued, unexpired offers are returned. Each offer contains:
 }
 ```
 
-Technician identity is deliberately not exposed by this first backend contract.
-A later reviewed presentation contract may expose approved profile/review fields;
-the customer must never receive private technician account data.
+Private technician account IDs are not returned. A separately reviewed public
+profile/review contract is still needed before customers can compare technicians.
 
-## Publishing boundary
+## Restricted publishing RPC
 
-`care_publish_offer(...)` is service-role only. It validates:
-- existing request;
-- a server-granted technician role;
-- positive AUD total price;
-- scope and optional adjustment explanation;
-- future offer expiry;
-- one to twenty future appointment windows.
+`care_publish_offer(p_request_id uuid, p_technician_id uuid,
+p_scope_summary text, p_total_price_cents integer, p_adjustment_reason text,
+p_expires_at timestamptz, p_slots jsonb) -> uuid`
 
-Publishing a newer offer for the same request/technician supersedes the previous
-issued offer. It records an audit event. Authenticated clients have no direct
-table write grants and cannot call the publishing function.
+Only `service_role` has execution permission. A missing or different role claim
+also fails closed. Spoofing a role claim does not grant an authenticated or
+anonymous database role permission to execute the function. There is no public
+HTTP publishing endpoint and no technician dispatch adapter in this slice.
 
-This slice intentionally does not modify `care_requests` customer projection.
-The future reviewed integration step will move a request to `offers_ready` only
-when the offer/slot set is authoritative. Until then existing request/status UI
-must not fabricate that stage.
+Requirements:
+- The request references its customer's unarchived Garage vehicle. Lock order
+  is vehicle, request, technician role; publication checks time after lock waits.
+- The request is `request_received` or `delayed`, with quote `in_review`,
+  assignment `none` and no fulfilment or money state. Reopen no-match requests
+  before publishing. Missing/ineligible vehicle is `NOT_FOUND`; other incompatible
+  request states are `INVALID_TRANSITION`.
+- The technician has the server-granted technician role. This is not proof of
+  qualifications, coverage, onboarding or available calendar capacity.
+- Scope is 10–2000 trimmed characters; total is a positive integer number of AUD
+  cents; optional adjustment explanation is 3–1000 trimmed characters.
+- Expiry is finite and in the future. It is the customer's decision deadline:
+  **expiry must be at or before every appointment's start**, not after it.
+- One to twenty non-overlapping options are supplied. Each object contains only
+  `starts_at` and `ends_at`: absolute, timezone-qualified timestamp strings.
+  Nulls, missing fields, invalid dates, non-finite times, non-positive durations,
+  duplicate/overlapping options and unknown fields return `VALIDATION_FAILED`.
 
-## Errors
+A successful call atomically supersedes the prior issued offer for the same
+request/technician, inserts the replacement and options, and records an audit.
+A partial unique index and request lock maintain one issued offer per pair.
+Invalid input or audit failure rolls back the whole operation, including prior
+offer supersession. The audit identifies a service-role publisher and records
+the target technician separately; it does not impersonate that technician.
+
+**Publishing is not yet command-idempotent.** Repeating a successful call creates
+a replacement offer and another audit. After an uncertain publishing outcome,
+do not blindly retry. A versioned idempotency/reconciliation contract is required
+before any automated publisher or live offer dispatch is enabled. Serialized
+supersession is not booking concurrency protection or exactly-once delivery.
+
+This slice does not advance the request to `offers_ready` or stop its existing
+deadline worker. That operational integration, including deduplicated events and
+notification delivery, remains a separate acceptance gate. Do not enable live
+offers while request/offer lifecycle integration is incomplete.
+
+## Customer HTTP errors
 
 400 VALIDATION_FAILED, 401 UNAUTHENTICATED, 403 FORBIDDEN, 404 NOT_FOUND,
 503 CARE_UNAVAILABLE / TEMPORARILY_UNAVAILABLE, 500 INTERNAL_ERROR.
+Publishing RPC validation/transition errors above are not a new public HTTP API.
 
-## Next dependency
+## Verification and next gates
 
-After this contract is reviewed and database-tested:
-1. approved technician profile fields for comparison;
-2. race-safe single operation that accepts offer + appointment slot;
-3. booking projection;
-4. separate payment lifecycle.
+`tests/integration/garage-care-db.test.mjs` retains the original shared journey
+assertions, applies every migration in filename order, and additionally invokes
+`care-offers.acceptance.mjs`. Offer coverage includes owner A/B isolation, denied
+client reads/writes/publishing, forged/missing role claims, valid publish/read,
+malformed/null/time-boundary input, rollback, supersession and concurrent
+publication. The bootstrap `auth.role()` shim tests SQL boundaries only; it is
+not hosted JWT, Supabase, Storage, calendar or physical-device evidence.
+Exact executed results and revisions belong in the PR conversation, not inferred
+from the existence of tests or from unrelated green workflows.
 
-No payment provider, production migration, live technician dispatch or booking
-activation is authorised by this change.
+Still required: independent review; PR #27 integration acceptance; hosted auth,
+private-storage/device and release controls; technician qualifications/coverage
+and authoritative capacity; publish idempotency; public profile comparison;
+offer/request state and notification integration; atomic acceptance of an offer
+and slot with revalidated capacity; booking projection; separate money lifecycle.
+No live migration, deployment, payment provider, customer booking or dispatch is
+activated by this correction. The separate private pilot is untouched.
