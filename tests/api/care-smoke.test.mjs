@@ -38,9 +38,8 @@ test("built Next.js Care routes publish the catalogue and fail closed without ac
 
       const coverage = await fetch(`${base}/api/v1/care/coverage`, {
         method: "POST",
-        // next start normalises the server-side request URL to localhost even
-        // when the test binds 127.0.0.1.
-        headers: { origin: `http://localhost:${port}`, "content-type": "application/json" },
+        // Send the real browser origin, not Next's internal normalized hostname.
+        headers: { origin: base, "content-type": "application/json" },
         body: JSON.stringify({ service: "repair", postcode: "5000" }),
         signal: AbortSignal.timeout(2000),
       });

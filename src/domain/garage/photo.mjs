@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isTrustedWriteOrigin } from '../../server/http/request-origin.mjs';
 import { GarageError, requireUuid } from './vehicles.mjs';
 
 export const VEHICLE_PHOTO_MAX_BYTES = 10_000_000;
@@ -15,8 +16,7 @@ function detectedType(bytes) {
 }
 
 export async function readVehiclePhoto(request) {
-  const origin = request.headers.get('origin');
-  if (origin !== new URL(request.url).origin || request.headers.get('sec-fetch-site') === 'cross-site') {
+  if (!isTrustedWriteOrigin(request)) {
     throw new GarageError('ORIGIN_REJECTED', 403, 'Reload Skycar and try again from this site.');
   }
   const mimeType = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase();

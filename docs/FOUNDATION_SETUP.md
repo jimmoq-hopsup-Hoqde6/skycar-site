@@ -41,5 +41,9 @@ Versioned application endpoints begin at /api/v1. The health endpoint is /api/v1
 ## Environments
 Demo, staging and production are distinct. Production must not fall back to demo fixtures. Future modules are feature-gated server-side as they are implemented.
 
+Staging and production must set `SKYCAR_APP_ORIGIN` to the exact public HTTPS
+origin (no trailing slash). Browser writes fail closed without this setting.
+See `docs/REQUEST_ORIGIN.md` for proxy/local behavior and executable regressions.
+
 ## Current limitation
 This scaffold does not activate billing, roadside, partner offers, AI providers, Care booking or public deployment. Those modules remain disabled/gated until their own acceptance criteria are met.
