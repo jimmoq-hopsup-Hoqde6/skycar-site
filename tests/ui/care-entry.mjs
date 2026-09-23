@@ -86,8 +86,23 @@ try {
   await page.getByLabel("Active Garage vehicle").selectOption(vehicle.id);
   await page.getByLabel("Describe the damage or cleaning work").fill(received.description);
   await page.screenshot({ path: new URL("desktop-request.png", evidence).pathname, fullPage: true });
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const controls = await page.locator(".care-field select, .care-field textarea").evaluateAll(elements => elements.map(element => {
+      const style = getComputedStyle(element);
+      return { fontSize: Number.parseFloat(style.fontSize), height: element.getBoundingClientRect().height };
+    }));
+    assert.ok(controls.length > 0 && controls.every(control => control.fontSize >= 16), `${width}px Care editable controls use at least 16px text`);
+    assert.ok(controls.every(control => control.height >= 48), `${width}px Care controls preserve touch targets`);
+    assert.equal(await page.locator(".care-field").evaluateAll(elements => elements.every(element => Number.parseFloat(getComputedStyle(element).fontSize) === 14)), true, `${width}px Care labels remain 14px`);
+    await page.getByLabel("Describe the damage or cleaning work").focus();
+    assert.equal(await page.getByLabel("Describe the damage or cleaning work").evaluate(element => {
+      const style = getComputedStyle(element);
+      return style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) >= 3;
+    }), true, `${width}px Care keyboard focus remains visible`);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${width}px Care page has no horizontal overflow`);
+  }
   await page.setViewportSize({ width: 390, height: 844 });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.getByRole("button", { name: "Submit for review" }).click();
   await page.getByRole("button", { name: "Check same request" }).waitFor();
   await page.getByText("Do not change the details yet.").waitFor();
@@ -329,6 +344,23 @@ try {
   await signInLink.click();
   await sessionPage.getByRole("heading", { name: "Sign in to Skycar" }).waitFor();
   assert.equal(new URL(sessionPage.url()).searchParams.get("next"), "/care/request");
+  for (const width of [390, 320]) {
+    await sessionPage.setViewportSize({ width, height: 844 });
+    const controls = await sessionPage.locator('.auth-form input[type="email"], .auth-form input[type="password"]').evaluateAll(elements => elements.map(element => {
+      const style = getComputedStyle(element);
+      return { fontSize: Number.parseFloat(style.fontSize), height: element.getBoundingClientRect().height };
+    }));
+    assert.equal(controls.length, 2, `${width}px Auth exposes email and password controls`);
+    assert.ok(controls.every(control => control.fontSize >= 16), `${width}px Auth editable controls use at least 16px text`);
+    assert.ok(controls.every(control => control.height >= 50), `${width}px Auth controls preserve 50px touch targets`);
+    assert.equal(await sessionPage.locator(".auth-form label").evaluateAll(elements => elements.every(element => Number.parseFloat(getComputedStyle(element).fontSize) === 14)), true, `${width}px Auth labels remain 14px`);
+    await sessionPage.getByLabel("Email").focus();
+    assert.equal(await sessionPage.getByLabel("Email").evaluate(element => {
+      const style = getComputedStyle(element);
+      return style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) >= 3;
+    }), true, `${width}px Auth keyboard focus remains visible`);
+    assert.equal(await sessionPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${width}px Auth page has no horizontal overflow`);
+  }
   vehicleMode = "other";
   await sessionPage.goto(`${origin}/care/request`);
   await sessionPage.getByLabel("Active Garage vehicle").waitFor();
