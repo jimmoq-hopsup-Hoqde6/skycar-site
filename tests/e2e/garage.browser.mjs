@@ -127,7 +127,22 @@ try {
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile list has no horizontal overflow');
   await page.getByRole('button', { name: '+ Add a vehicle', exact: true }).click();
   await page.screenshot({ path: `${output}/garage-mobile-form.png`, fullPage: true });
-  check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile editor has no horizontal overflow');
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const controls = await page.locator('.vehicle-fields input, .vehicle-fields select').evaluateAll(elements => elements.map(element => {
+      const style = getComputedStyle(element);
+      return { fontSize: Number.parseFloat(style.fontSize), height: element.getBoundingClientRect().height };
+    }));
+    check(controls.length > 0 && controls.every(control => control.fontSize >= 16), `${width}px Garage editable controls use at least 16px text`);
+    check(controls.every(control => control.height >= 48), `${width}px Garage controls preserve 48px touch targets`);
+    check(await page.locator('.vehicle-fields label').evaluateAll(elements => elements.every(element => Number.parseFloat(getComputedStyle(element).fontSize) === 14)), `${width}px Garage labels remain 14px`);
+    await page.getByLabel('Make', { exact: true }).focus();
+    check(await page.getByLabel('Make', { exact: true }).evaluate(element => {
+      const style = getComputedStyle(element);
+      return style.outlineStyle !== 'none' && Number.parseFloat(style.outlineWidth) >= 3;
+    }), `${width}px Garage keyboard focus remains visible`);
+    check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${width}px mobile editor has no horizontal overflow`);
+  }
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   mode = 'unauthenticated';
   await page.getByRole('button', { name: 'Archived', exact: true }).click();
