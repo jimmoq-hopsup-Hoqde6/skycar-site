@@ -1,6 +1,15 @@
 # Isolated staging and phone-test runbook
 
-Status: preparation only — no environment has been created, migrated or deployed.
+Status: existing resources provisioned; application not deployed and hosted/device acceptance NOT RUN.
+Evidence snapshot: 2026-09-23. Reuse Supabase `skycar-v2-staging` and protected Vercel
+`skycar-staging`; do not create duplicates. GitHub `skycar-staging` now exists with
+only `fix/phone-test-delivery` allowed, owner review required, self-review prevented
+and administrator bypass disabled. A distinct eligible reviewer and staging-only
+execution disposition remain unresolved; approved revision/origin/secrets are not populated.
+See [administrator checkpoint](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/issues/8#issuecomment-5787012631).
+The bounded technical review passed at `321723da4126f750235f0d1e8188c211142b89a9`;
+[technical PASS](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/31#issuecomment-5784577405)
+is not formal GitHub approval or hosted release authorisation.
 Tracks: #1, #8 and the first bounded user-test milestone.
 Candidate: `fix/phone-test-delivery`, integrating corrected PR #27 and PR #29 plus the PR #30 authentication preparation. Pin its reviewed full SHA in `STAGING_APPROVED_REVISION` before dispatch.
 
@@ -18,7 +27,7 @@ operation. An entered preferred window is not confirmed availability.
 
 Before any hosted mutation, the repository/release administrator must verify:
 
-1. A new Supabase staging project is separate from production, the existing public
+1. The existing Supabase staging project is verified separate from production, the existing public
    site and the separate private pilot. It contains no copied customer data,
    credentials, object paths or infrastructure identifiers.
 2. A non-public staging runtime/URL is separate from GitHub Pages and public DNS.
@@ -95,7 +104,7 @@ in the approved secret channel, and no real customer identity.
 For account A:
 
 1. Sign in and add a synthetic vehicle.
-2. Upload a generated JPEG/PNG/WebP containing no person, plate, VIN, address or
+2. Through the documented authenticated private-photo API (not a customer upload UI), upload a generated JPEG/PNG/WebP containing no person, plate, VIN, address or
    real vehicle metadata.
 3. Submit one repair or cleaning request with a unique idempotency key.
 4. Confirm it appears in My Jobs and opens the request-status timeline.
@@ -123,8 +132,8 @@ It does not add self-registration, password recovery, OAuth, magic links or an
 admin/service-key path, so no Auth callback is required for this bounded flow.
 
 Local executable evidence covers request validation, same-origin enforcement,
-credential-error redaction, return-path safety and local sign-out. This source is
-still draft, unmerged, undeployed and awaiting revision-specific review. Hosted
+credential-error redaction, return-path safety and local sign-out. This source remains
+draft, unmerged and undeployed. Bounded technical review passed; formal release approval remains outstanding. Hosted
 acceptance must separately prove cookie refresh/expiry, A → B replacement and
 sign-out against the authorised isolated Supabase project. Do not work around a
 missing hosted environment by sharing raw tokens, injecting cookies on Marcel's
@@ -155,10 +164,10 @@ Pages/public-DNS change or any real customer record.
 Rollback order:
 
 1. disable access to the staging runtime without changing public DNS;
-2. revoke/rotate staging keys and invalidate disposable sessions;
+2. under the recorded recovery authority, revoke/rotate staging keys and invalidate disposable sessions;
 3. preserve redacted logs and the exact revision;
-4. restore the pre-migration staging backup or delete only the authorised isolated
-   staging project;
+4. use the independently verified pre-migration restore procedure under explicit
+   authority; do not assume a backup exists or delete the existing project;
 5. record the failure in #8 using HANDOFF_RULES.md.
 
 Never repair a failed staging exercise by mutating production, the private pilot
@@ -168,11 +177,11 @@ or the existing public site.
 
 Preparation can complete in GitHub. A running phone-test instance still requires:
 
-- one authorised, isolated Supabase staging project;
-- one protected non-public staging runtime/URL capable of Next.js server routes;
+- reuse and reverify the existing isolated Supabase staging project;
+- configure the existing protected Vercel project with a verified HTTPS origin and Next.js server routes;
 - repository/environment administrator access to configure protected secrets and
   reviewer gates;
-- revision-specific review of the integrated customer Auth entry;
+- recorded independent release approval for the technically reviewed integrated Auth revision;
 - formal release disposition for PR #27 before applying migrations or deploying.
 
 No payment/provider account, public DNS change or production credential is needed
@@ -182,9 +191,41 @@ for this first milestone.
 
 1. Open the staging HTTPS URL followed by `/auth/sign-in` in Safari or Chrome.
 2. Enter the disposable account email and password delivered privately. No token or cookie injection is needed.
-3. In Garage, add a synthetic vehicle and photo, then choose a service and submit a request.
+3. In Garage, add a synthetic vehicle, then choose a service and submit a request. Customer photo-upload UI is not available in this candidate; the executor validates private photos through the API separately.
 4. Open My Jobs, open the request, and confirm its status. A preferred window is not a booking confirmation.
 5. Sign out, reload the protected page, then sign in as the second disposable account and confirm the first account’s data is absent.
 6. Record browser/OS, step, visible error and request ID if anything fails. Do not share credentials or photos in GitHub.
 
 Local built-server tests now verify configured HTTPS origins, secure HTTP-only cookies, account-cookie replacement, expired-session refresh, sign-out cookie deletion and private no-store responses using synthetic Auth. These tests do not establish hosted account isolation or a physical-phone pass.
+
+
+## Hosted acceptance matrix — execution pending
+
+Run only after the administrator records the exact revision, protected origin,
+secret destinations, migration scope, synthetic coverage/response-policy settings,
+execution path and recovery authority. Never invent commercial deadlines or enable
+real providers for these tests. All rows below are **NOT RUN** for hosted/device
+acceptance; local fixtures and CI are separate evidence.
+
+| Case | Steps | Expected result | Status |
+| --- | --- | --- | --- |
+| Sign-in and persistence | A signs in, creates a synthetic vehicle, reloads Garage | Secure session; one persisted owned vehicle | NOT RUN |
+| Request journey | A submits an in-scope service request; opens My Jobs then its status | Durable receipt and same request/status; no booking promise | NOT RUN |
+| Ownership denial | B requests A vehicle/request/status IDs through each documented API | Same non-disclosing response as missing objects; no A data | NOT RUN |
+| Account switch | Switch A to B during delayed A reads and after focus/page return | A labels, drafts and late responses cannot appear for B | NOT RUN |
+| Refresh/sign-out | Exercise session expiry/refresh, sign out, reload protected pages | Refresh stays private; signed-out reads/writes fail closed | NOT RUN |
+| Retry/no duplicate | Submit then replay identical key/body, including uncertain response recovery | One request; identical replay resolves original result | NOT RUN |
+| Conflict retry | Reuse key with different body | Safe conflict; no second mutation | NOT RUN |
+| Private photo API | A uploads synthetic supported image; B and signed-out session request its metadata/object | Owner-only access; private bucket; no public object access | NOT RUN |
+| Request/status recovery | Reopen receipt after reload; delay old response and exercise approved synthetic state transition | Server-authoritative status; stale response cannot replace current state | NOT RUN |
+| Physical phone | Marcel completes supported journey and signs out on actual Safari/Chrome phone | Usable layout and correct saved state; record actual device evidence | NOT RUN |
+
+For each row capture exact application revision, browser/OS, timestamp, route
+template, HTTP status, stable error code/request ID where available, expected versus
+actual result and redacted screenshot or test assertion. Record PASS/FAIL only after
+execution. Keep account/vehicle/request IDs, cookies, passwords, object paths and
+photo contents out of public evidence. Stop on any cross-account disclosure.
+
+Rollback remains proposed and NOT EXECUTED. Empty schema inspection is not a
+backup or a restore test. Preserve the six-migration inventory and perform no hosted
+writes until the existing administrator handoff is complete.
