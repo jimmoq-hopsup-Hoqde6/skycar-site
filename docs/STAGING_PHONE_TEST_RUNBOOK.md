@@ -4,14 +4,19 @@ Status: existing resources provisioned; application not deployed and hosted/devi
 Evidence snapshot: 2026-09-23. Reuse Supabase `skycar-v2-staging` and protected Vercel
 `skycar-staging`; do not create duplicates. GitHub `skycar-staging` now exists with
 only `fix/phone-test-delivery` allowed, owner review required, self-review prevented
-and administrator bypass disabled. A distinct eligible reviewer and staging-only
-execution disposition remain unresolved; approved revision/origin/secrets are not populated.
+and administrator bypass disabled. Current settings therefore still require an
+eligible distinct authorised reviewer and staging-only execution disposition.
+Any staging-only alternative requires explicit Product Owner confirmation and
+administrator verification before use; none is approved by this runbook. The
+approved origin and protected values are not claimed configured.
 See [administrator checkpoint](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/issues/8#issuecomment-5787012631).
-The bounded technical review passed at `321723da4126f750235f0d1e8188c211142b89a9`;
-[technical PASS](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/31#issuecomment-5784577405)
+The reviewed application lineage is PR #31 `321723d` → PR #34 `bdb0807` → PR #35
+`821125df9556225b4d34ff1aec4072c2d789b4cf`; [final bounded technical PASS](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/35#issuecomment-5790560620)
 is not formal GitHub approval or hosted release authorisation.
 Tracks: #1, #8 and the first bounded user-test milestone.
-Candidate: `fix/phone-test-delivery`, integrating corrected PR #27 and PR #29 plus the PR #30 authentication preparation. Pin its reviewed full SHA in `STAGING_APPROVED_REVISION` before dispatch.
+Candidate: exact PR #35 head `821125df9556225b4d34ff1aec4072c2d789b4cf`.
+PR #33 is documentation only and is not a deployment checkout. Pin the approved
+full application SHA in `STAGING_APPROVED_REVISION` before dispatch.
 
 ## Goal and supported scope
 
@@ -63,7 +68,10 @@ against GitHub and bound to the protected environment variable `STAGING_APPROVED
 - never applies a migration, starts a deployment, contacts the staged API,
   creates an account or activates a provider.
 
-A green readiness run is not hosted acceptance or release approval.
+A green readiness run is not hosted acceptance or release approval. The workflow
+dispatch ref only selects the workflow definition; it is not the application
+revision. The checked-out SHA must equal the independently approved exact
+`STAGING_APPROVED_REVISION` or the run must fail.
 
 GitHub accepts manual dispatch only after the workflow file exists on the default
 branch. The current default-branch/Pages coupling means this draft must **not** be
@@ -72,6 +80,12 @@ non-publishing path required by #8, then rebind the workflow to the independentl
 accepted application revision.
 
 ## Migration preparation
+
+The configuration contract, ordered migration hashes, synthetic A/B seed plan,
+protected-host probe, redacted evidence rules and backup/rollback commands were
+[verified against exact `821125d` and writer-released](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/issues/8#issuecomment-5791282351).
+Do not rerun this unchanged preparation. Migration application, hosted backup and
+restore verification remain NOT RUN.
 
 Only after independent acceptance and explicit environment authorization, apply
 the complete inventory once to a brand-new empty staging project, in filename
@@ -124,11 +138,13 @@ and all synthetic rows/objects after evidence capture.
 
 ## Prepared authentication entry
 
-The integration candidate carries forward PR #30’s preparation of a customer-facing email/password sign-in and local-device
+The reviewed PR #31 → PR #34 → PR #35 application lineage carries a customer-facing email/password sign-in and local-device
 sign-out path for pre-created synthetic staging accounts. It uses server-written
 Supabase cookies, refreshes sessions at the Next.js proxy boundary, rejects
 cross-origin writes and unsafe return paths, and returns generic provider failures.
-It does not add self-registration, password recovery, OAuth, magic links or an
+PR #34 additionally makes an unauthenticated request-status page offer sign-in with
+the exact request return path; the return performs GET revalidation only and no
+automatic write. It does not add self-registration, password recovery, OAuth, magic links or an
 admin/service-key path, so no Auth callback is required for this bounded flow.
 
 Local executable evidence covers request validation, same-origin enforcement,
@@ -177,12 +193,13 @@ or the existing public site.
 
 Preparation can complete in GitHub. A running phone-test instance still requires:
 
-- reuse and reverify the existing isolated Supabase staging project;
+- execute the approved packet against the existing isolated Supabase staging project;
 - configure the existing protected Vercel project with a verified HTTPS origin and Next.js server routes;
 - repository/environment administrator access to configure protected secrets and
   reviewer gates;
-- recorded independent release approval for the technically reviewed integrated Auth revision;
-- formal release disposition for PR #27 before applying migrations or deploying.
+- a recorded staging-only approval-control decision and exact-revision/origin disposition;
+- release authorisation for exact PR #35 head `821125df9556225b4d34ff1aec4072c2d789b4cf`
+  before applying migrations or deploying.
 
 No payment/provider account, public DNS change or production credential is needed
 for this first milestone.
