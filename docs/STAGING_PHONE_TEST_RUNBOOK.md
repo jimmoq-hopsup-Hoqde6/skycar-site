@@ -88,8 +88,8 @@ Do not rerun this unchanged preparation. Migration application, hosted backup an
 restore verification remain NOT RUN.
 
 Only after independent acceptance and explicit environment authorization, apply
-the complete inventory once to a brand-new empty staging project, in filename
-order:
+the complete inventory once to the existing authorised isolated empty staging
+project, in filename order:
 
 1. `202609200001_foundation.sql`
 2. `202609200002_care_requests.sql`
