@@ -8,25 +8,31 @@ Services acquire customers; the free Garage retains them. Initial services are
 cosmetic scratch/dent repair, detailing and cleaning. Follow DECISIONS D-006/D-007.
 The separate private pilot is outside this repository and this test exercise.
 
-The single application candidate is [PR #31](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/31),
-branch `fix/phone-test-delivery`, head `321723da4126f750235f0d1e8188c211142b89a9`,
-base `626bcf0fd07088d548aa63db4fb1773d63e98e1e`, tested integration candidate
-`23380f0fff8eb4d8efad36ab811fe03d968e2d1d`. It integrates the corrected Garage/Care,
-offer and secure sign-in work. Older feature PRs are inputs, not competing candidates.
-This documentation proposal does not move or approve that frozen application head.
+The frozen application lineage is [PR #31](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/31)
+`321723d` → [PR #34](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/34)
+`bdb0807` → [PR #35](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/35)
+`821125df9556225b4d34ff1aec4072c2d789b4cf`. PR #35 is the final reviewed
+application candidate for the bounded phone-test milestone. It adds the reviewed
+request-status sign-in return and mobile editable-control corrections to the
+integrated Garage/Care, offer and secure sign-in work. PR #33 is a separate
+documentation artifact; its branch and head must never be used as the deployment
+checkout. These documents do not move or approve the frozen application candidate.
 
 | State | Evidence |
 | --- | --- |
 | Implemented | Sign-in, Garage, service requests, My Jobs, request status; backend offers and private-photo API |
 | Tested locally/CI | 153 unit/API tests, four built API suites, six browser suites, 18 Garage checks, 43 recovery scenarios; ten head/integration jobs passed |
-| Technical review | Bounded independent technical PASS recorded; distinct from formal GitHub/release approval |
-| Hosted acceptance | NOT RUN; database remains empty at last verified baseline |
+| Technical review | PR #31, F1 and F2 received bounded independent technical PASS; distinct from formal GitHub/release approval |
+| Staging preparation | Exact-`821125d` configuration, migration, synthetic-test, logging and rollback packet verified and writer-released |
+| Hosted acceptance | NOT RUN; no hosted Auth/account/storage/rollback result claimed |
 | Physical phone acceptance | NOT RUN; no test link delivered |
 | Release | Draft/unmerged; no application deployment claimed |
 
-Evidence: [exact test checkpoint and writer release](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/31#issuecomment-5784499164),
-[technical disposition](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/31#issuecomment-5784577405).
-Counts describe the recorded application revision; this documentation change reruns no application tests.
+Evidence: [PR #31 test checkpoint](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/31#issuecomment-5784499164),
+[F1 technical PASS](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/34#issuecomment-5789255015),
+[F2 technical PASS](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/35#issuecomment-5790560620),
+and [exact-revision preparation packet](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/issues/8#issuecomment-5791282351).
+Counts describe the recorded application lineage; this documentation change reruns no application tests.
 
 ## Existing staging resources — reuse, do not recreate
 
@@ -44,22 +50,27 @@ and [administrator update](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/i
 
 ## Exact remaining gate and owners
 
-The administrator thread owns the independent-reviewer/release handoff. A distinct
-eligible GitHub reviewer is not yet verified. The owner cannot approve a run that
-it initiated while self-review prevention is enabled. Do not remove that protection.
-Approved revision/origin, protected secret destinations and staging execution
-scope still require a recorded disposition. No credentials belong in public issues.
+The administrator thread owns the staging approval-control decision and release
+handoff. Current recorded settings require owner review but prevent owner
+self-review, so an eligible distinct authorised reviewer and staging-only
+disposition are still missing. A staging-only alternative has not been approved:
+it requires explicit Product Owner confirmation and administrator verification
+before any protection setting changes. Main and production requirements remain
+unchanged. The exact approved HTTPS origin and execution disposition for
+`821125df9556225b4d34ff1aec4072c2d789b4cf` must be recorded before hosted writes.
+No credentials belong in public issues.
 
-After that gate, the existing sequential Backend/App executor configures the
-protected runtime, applies the reviewed six-migration inventory, and verifies
-hosted Auth, two-account RLS/private storage, and recovery before the phone handoff.
+After that gate, the existing sequential Backend/App executor uses the completed
+exact-revision packet to configure the protected runtime, applies the reviewed
+six-migration inventory, and verifies hosted Auth, two-account RLS/private storage,
+rollback and recovery before the phone handoff.
 Use [STAGING_PHONE_TEST_RUNBOOK.md](STAGING_PHONE_TEST_RUNBOOK.md). Capture an actual
 restore point and authorised recovery procedure; neither is verified yet.
 
-Independent preparation can continue: the [assigned two-file handoff correction](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/issues/8#issuecomment-5787021875)
-is documentation-only, on a separate branch targeting the existing integration
-branch. Preserve one writer per scope. Schedules being enabled does not prove work
-has started; require an acknowledgement and concrete result.
+The [exact-`821125d` preparation packet](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/issues/8#issuecomment-5791282351)
+is complete and its writer is released; do not rerun unchanged preparation. PR #33
+only aligns these two documents with that result and remains independent of staging
+approval. Preserve one writer per scope.
 
 ## First phone test and later scope
 
