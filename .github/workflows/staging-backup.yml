@@ -1,0 +1,85 @@
+name: Protected staging backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact reviewed application SHA (not workflow checkout)
+        required: true
+        type: string
+      isolation_confirmation:
+        description: Type ISOLATED-STAGING-BACKUP-ONLY
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skycar-staging-operations
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    if: github.repository == 'jimmoq-hopsup-Hoqde6/skycar-site' && github.ref == 'refs/heads/fix/phone-test-delivery'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: skycar-staging
+    env:
+      REQUESTED_REVISION: ${{ inputs.revision }}
+      ISOLATION_CONFIRMATION: ${{ inputs.isolation_confirmation }}
+      STAGING_ISOLATION_MARKER: ${{ vars.STAGING_ISOLATION_MARKER }}
+      STAGING_APPROVED_REVISION: ${{ vars.STAGING_APPROVED_REVISION }}
+      STAGING_BACKUP_APPROVED_WORKFLOW_SHA: ${{ vars.STAGING_BACKUP_APPROVED_WORKFLOW_SHA }}
+    steps:
+      - name: Check approved operations SHA before checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$STAGING_BACKUP_APPROVED_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_SHA" = "$STAGING_BACKUP_APPROVED_WORKFLOW_SHA"
+          test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/fix/phone-test-delivery
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+      - name: Verify isolated gate and actual checkout
+        run: |
+          test "$(git rev-parse HEAD)" = "$STAGING_BACKUP_APPROVED_WORKFLOW_SHA"
+          node ops/staging-backup/backup.mjs --gate
+      - name: Install locked backup CLI (no database secret in this step)
+        run: npm ci --prefix ops/staging-backup --no-audit --no-fund
+      - name: Install PostgreSQL 17 client from runner package repositories
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client-17
+          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
+      - name: Capture encrypted read-only export
+        run: node ops/staging-backup/backup.mjs --capture
+        env:
+          STAGING_SUPABASE_DB_PASSWORD: ${{ secrets.STAGING_SUPABASE_DB_PASSWORD }}
+          STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
+          STAGING_SUPABASE_DB_HOST: ${{ secrets.STAGING_SUPABASE_DB_HOST }}
+          STAGING_SUPABASE_DB_USER: ${{ secrets.STAGING_SUPABASE_DB_USER }}
+          STAGING_SUPABASE_DB_PORT: ${{ vars.STAGING_SUPABASE_DB_PORT }}
+          STAGING_BACKUP_PUBLIC_KEY: ${{ vars.STAGING_BACKUP_PUBLIC_KEY }}
+          STAGING_BACKUP_KEY_SHA256: ${{ vars.STAGING_BACKUP_KEY_SHA256 }}
+      - name: Upload ciphertext only (never raw SQL or diagnostic logs)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-backup-encrypted-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/skycar-backup-encrypted/backup.enc.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Record limited evidence
+        run: |
+          echo 'Encrypted roles/schema/data export captured. Administrator must privately retrieve, decrypt, verify and retain it before expiry.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Restore rehearsal, hosted acceptance, migration and deployment: NOT RUN. This workflow authorises none of them.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Clean temporary encrypted output
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/skycar-backup-encrypted"
