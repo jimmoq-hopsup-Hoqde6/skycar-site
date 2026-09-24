@@ -93,6 +93,13 @@ script otherwise does not propagate the database URL's TLS options. Invalid TLS,
 host, user/ref, revision, missing config, unexpected baseline or any command
 failure aborts without an artifact. Do not relax TLS to recover a failed run.
 
+The ephemeral Ubuntu 24.04 runner installs client major 17 from PostgreSQL's
+signed Apt repository, checking the published signing-key fingerprint first.
+Its patch level is supplied by that signed repository and reported in the install
+log; only the CLI and JavaScript dependencies are version-locked. Client major
+and server major are both checked before export. No server package is installed
+by the capture workflow. The separate CI fixture uses disposable PostgreSQL 17.6.
+
 Before and after capture, read-only checks require PostgreSQL 17, no public base
 tables, no Auth users, no storage buckets/objects, and no applied migration
 history. This is strictly the first empty-project restore point, not a general

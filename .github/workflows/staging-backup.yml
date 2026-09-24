@@ -54,11 +54,8 @@ jobs:
           node ops/staging-backup/backup.mjs --gate
       - name: Install locked backup CLI (no database secret in this step)
         run: npm ci --prefix ops/staging-backup --no-audit --no-fund
-      - name: Install PostgreSQL 17 client from runner package repositories
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y postgresql-client-17
-          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
+      - name: Install PostgreSQL 17 client from signed PostgreSQL repository
+        run: bash ops/staging-backup/install-client.sh
       - name: Capture encrypted read-only export
         run: node ops/staging-backup/backup.mjs --capture
         env:

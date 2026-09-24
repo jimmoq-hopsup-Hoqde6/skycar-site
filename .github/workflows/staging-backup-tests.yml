@@ -11,6 +11,7 @@ permissions:
 jobs:
   contract:
     strategy:
+      fail-fast: false
       matrix:
         revision: [head, integration]
     runs-on: ubuntu-24.04
@@ -23,7 +24,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -54,9 +55,7 @@ jobs:
       - name: Install locked CLI and PostgreSQL 17 client
         run: |
           npm ci --prefix ops/staging-backup --no-audit --no-fund
-          sudo apt-get update -qq
-          sudo apt-get install -y postgresql-client-17
-          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
+          bash ops/staging-backup/install-client.sh
       - name: Real disposable PostgreSQL export and recovery fixture
         run: node --test tests/ops/staging-backup-postgres.test.mjs
         env:
