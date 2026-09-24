@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { APPLICATION_SHA, CLI_VERSION, validateGate, validateConfig, dumpPlan, prepareDumpScript, encryptBundle, capture, runQuiet } from '../../ops/staging-backup/backup.mjs';
@@ -97,6 +99,62 @@ test('recovery rejects wrong hashes and unexpected file inventory', () => {
   metadata.files[0].sha256 = '0'.repeat(64);
   assert.throws(() => decryptBundle(encryptBundle(files, publicKey, metadata), privateKey), /checksum/);
   assert.throws(() => decryptBundle(encryptBundle({ '../escape': 'eA==' }, publicKey, {}), privateKey), /inventory/);
+});
+
+const invalidTagSizes = [...Array(16).keys(), 17, 32];
+function tagWithLength(envelope, length) {
+  const original = Buffer.from(envelope.tag, 'base64');
+  return (length <= original.length ? original.subarray(0, length) : Buffer.concat([original, Buffer.alloc(length - original.length)])).toString('base64');
+}
+
+for (const length of invalidTagSizes) {
+  test(`F1: recovery rejects ${length}-byte authentication tag`, () => {
+    const { files, metadata } = fixture();
+    const envelope = encryptBundle(files, publicKey, metadata);
+    assert.equal(Buffer.from(envelope.tag, 'base64').length, 16);
+    envelope.tag = tagWithLength(envelope, length);
+    assert.throws(() => decryptBundle(envelope, privateKey));
+  });
+}
+
+function malformedTags(envelope) {
+  return [undefined, null, 16, {}, [], 'not-base64!', `${envelope.tag}\n`,
+    envelope.tag.replace(/=+$/, ''), `${envelope.tag}!`, `${envelope.tag}====`];
+}
+
+test('F1: recovery rejects malformed/noncanonical authentication-tag fields', () => {
+  const { files, metadata } = fixture();
+  const envelope = encryptBundle(files, publicKey, metadata);
+  for (const tag of malformedTags(envelope)) {
+    assert.throws(() => decryptBundle({ ...envelope, tag }, privateKey));
+  }
+});
+
+test('F1: offline CLI rejects invalid tags before creating any plaintext; full tag recovers', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'backup-tag-cli-test-'));
+  try {
+    const { files, metadata } = fixture();
+    const envelope = encryptBundle(files, publicKey, metadata);
+    const archive = join(temp, 'synthetic.enc.json');
+    const keyFile = join(temp, 'synthetic-key.pem');
+    const output = join(temp, 'recovered');
+    writeFileSync(keyFile, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+    const helper = fileURLToPath(new URL('../../ops/staging-backup/decrypt.mjs', import.meta.url));
+    for (const tag of [...invalidTagSizes.map(length => tagWithLength(envelope, length)), ...malformedTags(envelope)]) {
+      writeFileSync(archive, JSON.stringify({ ...envelope, tag }), { mode: 0o600 });
+      const result = spawnSync(process.execPath, [helper, archive, keyFile, output], { encoding: 'utf8', timeout: 10000 });
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr, 'Private backup recovery failed.\n');
+      assert.equal(existsSync(output), false);
+      assert.deepEqual(readdirSync(temp).sort(), ['synthetic-key.pem', 'synthetic.enc.json']);
+    }
+    writeFileSync(archive, JSON.stringify(envelope), { mode: 0o600 });
+    const result = spawnSync(process.execPath, [helper, archive, keyFile, output], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, '');
+    for (const [name, bytes] of Object.entries(files)) assert.equal(readFileSync(join(output, name)).toString('base64'), bytes);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
 });
 
 function fakeCommand(command, args, options) {
