@@ -164,6 +164,16 @@ function capture(databaseUrl, outputDirectory) {
       flag: "wx",
     });
   }
+  const roles = readFileSync(join(outputDirectory, "roles.sql"), "utf8");
+  const resets = roles.match(/^RESET ALL;\r?$/gm) || [];
+  if (resets.length !== 1 || !/\r?\nRESET ALL;\s*$/.test(roles)) {
+    throw new Error("ROLES_RESET_CONTRACT_CHANGED");
+  }
+  writeFileSync(
+    join(outputDirectory, "roles.restore.sql"),
+    roles.replace(/\r?\nRESET ALL;\s*$/, "\n"),
+    { mode: 0o600, flag: "wx" },
+  );
   writeFileSync(
     join(outputDirectory, "hashes.json"),
     `${JSON.stringify(fileHashes, null, 2)}\n`,
