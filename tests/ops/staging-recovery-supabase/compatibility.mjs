@@ -306,6 +306,7 @@ function verify(
   databaseUrl,
   sourceBaselinePath,
   targetBaselinePath,
+  sourceExpectedPath,
   targetAfterPath,
   recoveredDirectory,
 ) {
@@ -315,45 +316,30 @@ function verify(
   const targetBefore = canonical(
     JSON.parse(readFileSync(targetBaselinePath, "utf8")),
   );
+  const sourceExpected = canonical(
+    JSON.parse(readFileSync(sourceExpectedPath, "utf8")),
+  );
   const targetAfter = manifest(databaseUrl);
 
   if (JSON.stringify(source) !== JSON.stringify(targetBefore))
     throw new Error("FRESH_BASELINES_DIFFER");
   ensureSubset(targetBefore.roles, targetAfter.roles, "ROLES");
-  if (
-    JSON.stringify(targetBefore.memberships) !==
-    JSON.stringify(targetAfter.memberships)
-  ) {
-    throw new Error("ROLE_MEMBERSHIPS_CHANGED");
-  }
   ensureSubset(targetBefore.schemas, targetAfter.schemas, "SCHEMAS");
   ensureSubset(targetBefore.extensions, targetAfter.extensions, "EXTENSIONS");
-  if (
-    JSON.stringify(targetBefore.providerObjects) !==
-    JSON.stringify(targetAfter.providerObjects)
-  ) {
-    throw new Error("PROVIDER_OBJECTS_CHANGED");
-  }
-
-  const expectedSchemas = new Set([
-    ...targetBefore.schemas,
-    "skycar_recovery_fixture",
-  ]);
-  if (
-    targetAfter.schemas.length !== expectedSchemas.size ||
-    !targetAfter.schemas.every((value) => expectedSchemas.has(value))
-  ) {
-    throw new Error("UNEXPECTED_SCHEMA_DELTA");
-  }
-  const expectedRoleNames = new Set([
-    ...targetBefore.roles.map((role) => role.name),
-    "skycar_recovery_fixture",
-  ]);
-  if (
-    targetAfter.roles.length !== expectedRoleNames.size ||
-    !targetAfter.roles.every((role) => expectedRoleNames.has(role.name))
-  ) {
-    throw new Error("UNEXPECTED_ROLE_DELTA");
+  for (const property of [
+    "roles",
+    "memberships",
+    "schemas",
+    "extensions",
+    "parameterPrivileges",
+    "providerObjects",
+  ]) {
+    if (
+      JSON.stringify(sourceExpected[property]) !==
+      JSON.stringify(targetAfter[property])
+    ) {
+      throw new Error(`RECOVERED_${property.toUpperCase()}_MISMATCH`);
+    }
   }
 
   const sentinel = query(
