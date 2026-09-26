@@ -5,6 +5,14 @@ import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
+import {
+  ARCHIVE_FORMAT,
+  RECOVERY_CONTRACT_VERSION,
+  RECOVERY_MANIFEST_SQL,
+  RECOVERY_ORACLE_NAME,
+  createRecoveryOracle,
+  parseManifest,
+} from './recovery-contract.mjs';
 
 export const APPLICATION_SHA = '821125df9556225b4d34ff1aec4072c2d789b4cf';
 export const CLI_VERSION = '2.117.0';
@@ -90,9 +98,14 @@ export function prepareDumpScript(script) {
 }
 
 export function encryptBundle(files, publicKey, metadata) {
+  const names = Object.keys(files).sort();
+  if (names.join(',') !== ['data.sql', RECOVERY_ORACLE_NAME, 'roles.sql', 'schema.sql'].sort().join(',')) {
+    throw new Error('RECOVERY_ORACLE_MISSING');
+  }
   const key = randomBytes(32);
   const iv = randomBytes(12);
-  const header = { format: 'skycar-backup-v1', cipher: 'AES-256-GCM', wrapping: 'RSA-OAEP-SHA256', ...metadata };
+  const header = { format: ARCHIVE_FORMAT, recoveryContractVersion: RECOVERY_CONTRACT_VERSION,
+    cipher: 'AES-256-GCM', wrapping: 'RSA-OAEP-SHA256', ...metadata };
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   cipher.setAAD(Buffer.from(JSON.stringify(header)));
   const plaintext = gzipSync(Buffer.from(JSON.stringify(files)));
@@ -130,8 +143,11 @@ export function capture(e, run = runQuiet) {
       PGCONNECT_TIMEOUT: '15', PGOPTIONS: '-c default_transaction_read_only=on -c statement_timeout=180000',
       CI: 'true', SUPABASE_TELEMETRY_DISABLED: 'true',
     };
-    if (run(cli, ['--version'], { env: childEnv }).trim() !== CLI_VERSION) reject();
-    if (!/^pg_dump \(PostgreSQL\) 17\./.test(run('pg_dump', ['--version'], { env: childEnv }))) reject();
+    const cliVersion = run(cli, ['--version'], { env: childEnv }).trim();
+    const pgDumpVersion = run('pg_dump', ['--version'], { env: childEnv }).trim();
+    const psqlVersion = run('psql', ['--version'], { env: childEnv }).trim();
+    if (cliVersion !== CLI_VERSION) reject();
+    if (!/^pg_dump \(PostgreSQL\) 17\./.test(pgDumpVersion) || !/^psql \(PostgreSQL\) 17\./.test(psqlVersion)) reject();
     const databaseEnv = { ...childEnv, PGHOST: e.STAGING_SUPABASE_DB_HOST, PGPORT: '5432',
       PGUSER: e.STAGING_SUPABASE_DB_USER, PGPASSWORD: e.STAGING_SUPABASE_DB_PASSWORD, PGDATABASE: 'postgres' };
     const verifyEmpty = () => {
@@ -141,6 +157,10 @@ export function capture(e, run = runQuiet) {
       if (result.trim() !== 'EMPTY_STAGING_CONFIRMED') reject();
     };
     verifyEmpty();
+    const readManifest = () => parseManifest(run('psql', ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1'], {
+      input: RECOVERY_MANIFEST_SQL, env: databaseEnv,
+    }).trim());
+    const sourceBaseline = readManifest();
     const files = {};
     for (const [name, args] of dumpPlan('postgresql://postgres:unused@localhost:5432/postgres')) {
       // The pinned CLI generates its documented pg_dump filters. Execute locally so
@@ -154,11 +174,22 @@ export function capture(e, run = runQuiet) {
       files[name] = readFileSync(path).toString('base64');
     }
     verifyEmpty();
+    const expectedState = readManifest();
+    if (JSON.stringify(sourceBaseline) !== JSON.stringify(expectedState)) throw new Error('BACKUP_SOURCE_CHANGED_DURING_CAPTURE');
+    const dumpHashes = Object.entries(files).map(([name, bytes]) => ({ name, sha256: hash(Buffer.from(bytes, 'base64')) }));
+    const oracle = createRecoveryOracle({
+      sourceBaseline,
+      expectedState,
+      toolchain: { cliVersion, pgDumpVersion, psqlVersion, serverVersion: sourceBaseline.serverVersion },
+      dumpHashes,
+    });
+    files[RECOVERY_ORACLE_NAME] = Buffer.from(`${JSON.stringify(oracle)}\n`).toString('base64');
     const manifest = {
       applicationSha: APPLICATION_SHA, workflowSha: e.GITHUB_SHA,
       createdAt: new Date().toISOString(), cliVersion: CLI_VERSION,
       keyFingerprint: e.STAGING_BACKUP_KEY_SHA256,
       files: Object.entries(files).map(([name, bytes]) => ({ name, sha256: hash(Buffer.from(bytes, 'base64')) })),
+      recoveryContractVersion: RECOVERY_CONTRACT_VERSION,
       restoreStatus: 'NOT_RUN', storageObjects: 'NOT_INCLUDED',
     };
     const envelope = encryptBundle(files, key, manifest);

@@ -4,6 +4,7 @@ import { generateKeyPairSync, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { EMPTY_TARGET_SQL, CLI_VERSION, dumpPlan, prepareDumpScript, runQuiet, encryptBundle } from '../../ops/staging-backup/backup.mjs';
 import { decryptBundle } from '../../ops/staging-backup/decrypt.mjs';
+import { RECOVERY_ORACLE_NAME, createRecoveryOracle } from '../../ops/staging-backup/recovery-contract.mjs';
 
 // Disposable loopback-only CI fixture. No hosted environment or credential access.
 test('real PostgreSQL dump, encrypted round-trip and disposable restore', { skip: process.env.SKYCAR_BACKUP_POSTGRES_TEST !== '1' }, () => {
@@ -34,6 +35,18 @@ test('real PostgreSQL dump, encrypted round-trip and disposable restore', { skip
     files[name] = Buffer.from(dump).toString('base64');
   }
   const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 3072 });
+  const baseline = {
+    serverVersion: '17.6', roles: [], memberships: [], schemas: [], extensions: [],
+    parameterPrivileges: [], providerObjects: [], customObjects: [],
+    postgres17Boundary: { ltreeIndexes: 0, btreeGistFloatIndexes: 0, customEstimatorOperators: 0 },
+  };
+  const dumpHashes = Object.entries(files).map(([name, value]) => ({ name, sha256: createHash('sha256').update(Buffer.from(value, 'base64')).digest('hex') }));
+  files[RECOVERY_ORACLE_NAME] = Buffer.from(JSON.stringify(createRecoveryOracle({
+    sourceBaseline: baseline,
+    expectedState: baseline,
+    dumpHashes,
+    toolchain: { cliVersion: CLI_VERSION, pgDumpVersion: 'pg_dump (PostgreSQL) 17.6', psqlVersion: 'psql (PostgreSQL) 17.6', serverVersion: '17.6' },
+  }))).toString('base64');
   const metadata = { files: Object.entries(files).map(([name, value]) => ({ name, sha256: createHash('sha256').update(Buffer.from(value, 'base64')).digest('hex') })) };
   const recovered = decryptBundle(encryptBundle(files, publicKey, metadata), privateKey);
   assert.deepEqual(recovered, files);

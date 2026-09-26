@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { APPLICATION_SHA, CLI_VERSION, validateGate, validateConfig, dumpPlan, prepareDumpScript, encryptBundle, capture, runQuiet } from '../../ops/staging-backup/backup.mjs';
 import { decryptBundle } from '../../ops/staging-backup/decrypt.mjs';
+import { RECOVERY_MANIFEST_SQL, RECOVERY_ORACLE_NAME, createRecoveryOracle } from '../../ops/staging-backup/recovery-contract.mjs';
 
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 3072 });
 const fingerprint = createHash('sha256').update(publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
@@ -74,9 +75,24 @@ test('only reviewed read-only dump inventory; no linked project or migration com
 
 function fixture() {
   const files = Object.fromEntries(['roles.sql', 'schema.sql', 'data.sql'].map(name => [name, Buffer.from(`private synthetic ${name}`).toString('base64')]));
+  const manifest = {
+    serverVersion: '17.6', roles: [], memberships: [], schemas: [], extensions: [],
+    parameterPrivileges: [], providerObjects: [], customObjects: [],
+    postgres17Boundary: { ltreeIndexes: 0, btreeGistFloatIndexes: 0, customEstimatorOperators: 0 },
+  };
+  const dumpHashes = Object.entries(files).map(([name, bytes]) => ({ name, sha256: createHash('sha256').update(Buffer.from(bytes, 'base64')).digest('hex') }));
+  const oracle = createRecoveryOracle({ sourceBaseline: manifest, expectedState: manifest, dumpHashes,
+    toolchain: { cliVersion: CLI_VERSION, pgDumpVersion: 'pg_dump (PostgreSQL) 17.6', psqlVersion: 'psql (PostgreSQL) 17.6', serverVersion: '17.6' } });
+  files[RECOVERY_ORACLE_NAME] = Buffer.from(JSON.stringify(oracle)).toString('base64');
   const metadata = { files: Object.entries(files).map(([name, bytes]) => ({ name, sha256: createHash('sha256').update(Buffer.from(bytes, 'base64')).digest('hex') })) };
   return { files, metadata };
 }
+
+test('v2 capture rejects the previous unauthenticated three-file recovery packet', () => {
+  const { files, metadata } = fixture();
+  delete files[RECOVERY_ORACLE_NAME];
+  assert.throws(() => encryptBundle(files, publicKey, metadata), /RECOVERY_ORACLE_MISSING/);
+});
 
 test('encrypted export round-trips with owner key and rejects tampering', () => {
   const { files, metadata } = fixture();
@@ -98,7 +114,10 @@ test('recovery rejects wrong hashes and unexpected file inventory', () => {
   const { files, metadata } = fixture();
   metadata.files[0].sha256 = '0'.repeat(64);
   assert.throws(() => decryptBundle(encryptBundle(files, publicKey, metadata), privateKey), /checksum/);
-  assert.throws(() => decryptBundle(encryptBundle({ '../escape': 'eA==' }, publicKey, {}), privateKey), /inventory/);
+  const legacy = structuredClone(encryptBundle(files, publicKey, metadata));
+  legacy.header.format = 'skycar-backup-v1';
+  legacy.header.recoveryContractVersion = undefined;
+  assert.throws(() => decryptBundle(legacy, privateKey), /format/);
 });
 
 const invalidTagSizes = [...Array(16).keys(), 17, 32];
@@ -158,7 +177,11 @@ test('F1: offline CLI rejects invalid tags before creating any plaintext; full t
 });
 
 function fakeCommand(command, args, options) {
-  if (args[0] === '--version') return command === 'pg_dump' ? 'pg_dump (PostgreSQL) 17.6' : CLI_VERSION;
+  if (args[0] === '--version') {
+    if (command === 'pg_dump') return 'pg_dump (PostgreSQL) 17.6';
+    if (command === 'psql') return 'psql (PostgreSQL) 17.6';
+    return CLI_VERSION;
+  }
   assert.equal(options.env.PGSSLMODE, 'verify-full');
   assert.equal(options.env.PGSSLROOTCERT, '/etc/ssl/certs/ca-certificates.crt');
   assert.match(options.env.PGOPTIONS, /default_transaction_read_only=on/);
@@ -166,6 +189,11 @@ function fakeCommand(command, args, options) {
   if (command === 'psql') {
     assert.equal(options.env.PGPASSWORD, environment().STAGING_SUPABASE_DB_PASSWORD);
     assert.ok(!args.includes(options.env.PGPASSWORD));
+    if (options.input === RECOVERY_MANIFEST_SQL) return `${JSON.stringify({
+      serverVersion: '17.6', roles: [], memberships: [], schemas: [], extensions: [],
+      parameterPrivileges: [], providerObjects: [], customObjects: [],
+      postgres17Boundary: { ltreeIndexes: 0, btreeGistFloatIndexes: 0, customEstimatorOperators: 0 },
+    })}\n`;
     return 'EMPTY_STAGING_CONFIRMED\n';
   }
   if (command === 'bash') {
@@ -198,7 +226,8 @@ test('capture writes only encrypted artifact, decrypts all dumps, and cleans pla
     const envelope = JSON.parse(bytes);
     assert.equal(envelope.header.restoreStatus, 'NOT_RUN');
     assert.equal(envelope.header.storageObjects, 'NOT_INCLUDED');
-    assert.equal(Object.keys(decryptBundle(envelope, privateKey)).length, 3);
+    assert.equal(Object.keys(decryptBundle(envelope, privateKey)).length, 4);
+    assert.ok(!bytes.includes('serverVersion'));
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
 
