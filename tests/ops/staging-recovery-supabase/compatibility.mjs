@@ -90,6 +90,7 @@ function addFixture(databaseUrl) {
   const digest = sha256(Buffer.from(note));
   const steps = [
     ["ROLE", "CREATE ROLE skycar_recovery_fixture NOLOGIN;"],
+    ["GRANT", "GRANT skycar_recovery_fixture TO postgres;"],
     [
       "SCHEMA",
       "CREATE SCHEMA skycar_recovery_fixture AUTHORIZATION skycar_recovery_fixture;",
@@ -110,6 +111,7 @@ function addFixture(databaseUrl) {
       "INSERT",
       `INSERT INTO skycar_recovery_fixture.sentinel (id, note, digest) VALUES (7, '${note}', '${digest}');`,
     ],
+    ["REVOKE", "REVOKE skycar_recovery_fixture FROM postgres;"],
   ];
   for (const [label, sql] of steps) {
     try {
