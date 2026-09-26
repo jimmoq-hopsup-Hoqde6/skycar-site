@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 
 const [
   nearLimitPath,
@@ -65,3 +65,4 @@ writeFileSync(
   // readable by the non-root Actions runner after the container exits.
   { mode: 0o644, flag: 'wx' },
 );
+chmodSync(outputPath, 0o644);
