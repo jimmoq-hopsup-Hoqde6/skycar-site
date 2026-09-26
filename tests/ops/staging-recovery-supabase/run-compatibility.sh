@@ -103,8 +103,27 @@ record_images() {
 start_project() {
   local project=$1 network=$2 log=$3
   create_internal_network "$network"
-  "$cli" start --workdir "$project" --network-id "$network" \
-    --exclude "$exclude_services" --yes >"$log" 2>&1
+  if ! "$cli" start --workdir "$project" --network-id "$network" \
+    --exclude "$exclude_services" --yes >"$log" 2>&1; then
+    local category='unclassified CLI start failure'
+    if grep -Eqi 'unhealthy|health check' "$log"; then
+      category='container health check failure'
+    elif grep -Eqi 'network.*(not found|invalid|failed)|failed.*network' "$log"; then
+      category='container network failure'
+    elif grep -Eqi 'port.*(allocated|available|bind|in use)' "$log"; then
+      category='local port allocation failure'
+    elif grep -Eqi '(pull|manifest|image).*(denied|failed|not found)' "$log"; then
+      category='container image acquisition failure'
+    fi
+    printf 'Local Supabase %s start failed: %s; private-log-sha256=%s\n' \
+      "$project" "$category" "$(sha256sum "$log" | cut -d' ' -f1)" >&2
+    while IFS= read -r id; do
+      test -n "$id" || continue
+      docker inspect --format 'container={{.Name}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Config.Image}}' "$id" \
+        | sed 's#container=/#container=#' >&2
+    done <<< "$(project_containers "$project")"
+    return 1
+  fi
 }
 
 source_started=true
@@ -187,4 +206,3 @@ test -z "$(docker volume ls -q --filter label=com.supabase.cli.project=target)"
 safe_remove_tree "$work_root"
 cleaned=true
 trap - EXIT INT TERM
-
