@@ -69,6 +69,9 @@ jobs:
           bash ops/staging-backup/install-client.sh
           npm ci --prefix ops/staging-backup --no-audit --no-fund
 
+      - name: Verify fail-closed managed-role adapter
+        run: node --test tests/ops/staging-recovery-supabase/compatibility.test.mjs
+
       - name: Rehearse managed-style baseline recovery
         env:
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
