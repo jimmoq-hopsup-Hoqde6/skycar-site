@@ -6,7 +6,7 @@ export PATH="/opt/node/bin:/usr/lib/postgresql/17/bin:/usr/local/sbin:/usr/local
 readonly SOURCE_ROOT=/source
 readonly WORK_ROOT=/work/source
 readonly METRICS_ROOT=/metrics
-readonly PGDATA=/var/lib/postgresql/data
+readonly PGDATA=/var/lib/postgresql/data/pgdata
 readonly START_SECONDS=$SECONDS
 
 export HOME=/work/home
@@ -64,11 +64,11 @@ disk_monitor() {
     sleep 0.2
   done
 }
-disk_monitor &
-monitor_pid=$!
 
 install -d -o postgres -g postgres -m 0700 "$PGDATA"
-password_file="$PGDATA/.init-password"
+disk_monitor &
+monitor_pid=$!
+password_file=/var/lib/postgresql/data/.init-password
 install -o postgres -g postgres -m 0600 /dev/null "$password_file"
 printf '%s\n' 'synthetic-ci-only' > "$password_file"
 chown postgres:postgres "$password_file"
