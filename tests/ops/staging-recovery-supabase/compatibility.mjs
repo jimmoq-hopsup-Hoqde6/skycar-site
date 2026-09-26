@@ -1,5 +1,3 @@
-npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
-tests/ops/staging-recovery-supabase/compatibility.mjs 69ms (unchanged)
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
