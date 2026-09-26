@@ -61,29 +61,44 @@ project_containers() {
 assert_core_health_and_loopback() {
   local project=$1
   local required=(db auth storage realtime rest kong meta)
-  local ids names=''
+  local ids names='' failed=false
   ids=$(project_containers "$project")
-  test -n "$ids"
+  if test -z "$ids"; then
+    echo "No containers found for local Supabase project $project." >&2
+    return 1
+  fi
   while IFS= read -r id; do
     test -n "$id" || continue
-    local name state ports
+    local name state ports image bindings
     name=$(docker inspect --format '{{.Name}}' "$id" | sed 's#^/##')
     state=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$id")
-    test "$state" = healthy -o "$state" = running
+    image=$(docker inspect --format '{{.Config.Image}}' "$id")
     names+=" $name"
     ports=$(docker inspect --format '{{json .NetworkSettings.Ports}}' "$id")
-    PORTS_JSON="$ports" node -e '
+    bindings=$(PORTS_JSON="$ports" node -e '
       const ports = JSON.parse(process.env.PORTS_JSON);
+      const addresses = new Set();
       for (const bindings of Object.values(ports)) {
         for (const binding of bindings || []) {
-          if (!["127.0.0.1", "::1"].includes(binding.HostIp)) process.exit(1);
+          addresses.add(binding.HostIp);
         }
       }
-    '
+      process.stdout.write([...addresses].sort().join(",") || "none");
+    ')
+    printf 'project=%s container=%s state=%s host-bindings=%s image=%s\n' \
+      "$project" "$name" "$state" "$bindings" "$image" >&2
+    if test "$state" != healthy -a "$state" != running; then failed=true; fi
+    case ",$bindings," in
+      *,0.0.0.0,*|*,::,*) failed=true ;;
+    esac
   done <<< "$ids"
   for service in "${required[@]}"; do
-    [[ "$names" == *"supabase_${service}_${project}"* ]]
+    if [[ "$names" != *"supabase_${service}_${project}"* ]]; then
+      echo "Missing required local service: $service." >&2
+      failed=true
+    fi
   done
+  if $failed; then return 1; fi
 }
 
 record_images() {
