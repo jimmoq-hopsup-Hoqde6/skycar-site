@@ -61,5 +61,7 @@ for (const [name, value] of Object.entries(values)) {
 writeFileSync(
   outputPath,
   `${Object.entries(values).map(([name, value]) => `${name}=${value}`).join('\n')}\n`,
-  { mode: 0o600, flag: 'wx' },
+  // This file contains only the validated synthetic values above. It must be
+  // readable by the non-root Actions runner after the container exits.
+  { mode: 0o644, flag: 'wx' },
 );
