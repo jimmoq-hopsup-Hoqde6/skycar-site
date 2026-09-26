@@ -23,7 +23,7 @@ jobs:
     env:
       ACCEPTED_OPERATIONS_SHA: cf90135793fcae4527dc0f566ae5d0c3f27fff59
       EXPECTED_NODE_VERSION: v24.19.0
-      POSTGRES_IMAGE_TAG: postgres:17.6-bookworm
+      POSTGRES_IMAGE: postgres@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
       MINIMUM_RUNNER_FREE_BYTES: '4294967296'
     steps:
       - name: Check out immutable pull-request head
@@ -74,12 +74,9 @@ jobs:
           test "$runner_free_bytes" -ge "$MINIMUM_RUNNER_FREE_BYTES"
           test "$(uname -m)" = x86_64
 
-          docker pull "$POSTGRES_IMAGE_TAG"
-          postgres_image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$POSTGRES_IMAGE_TAG")
-          case "$postgres_image" in
-            postgres@sha256:[a-f0-9][a-f0-9]*) ;;
-            *) echo 'PostgreSQL image did not resolve to an immutable digest.' >&2; exit 1 ;;
-          esac
+          docker pull "$POSTGRES_IMAGE"
+          postgres_image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$POSTGRES_IMAGE")
+          test "$postgres_image" = "$POSTGRES_IMAGE"
 
           metrics_dir="$RUNNER_TEMP/skycar-recovery-capacity"
           install -d -m 0777 "$metrics_dir"
