@@ -1,0 +1,75 @@
+name: Synthetic Supabase recovery compatibility
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/staging-recovery-supabase.yml"
+      - "tests/ops/staging-recovery-supabase/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-recovery-supabase-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      ACCEPTED_OPERATIONS_SHA: cf90135793fcae4527dc0f566ae5d0c3f27fff59
+      EXPECTED_NODE_VERSION: v24.19.0
+      SUPABASE_CLI_VERSION: 2.117.0
+    steps:
+      - name: Check out immutable pull-request head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install exact Node runtime
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.19.0
+
+      - name: Verify immutable source and bounded change set
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          test "$(node --version)" = "$EXPECTED_NODE_VERSION"
+          git cat-file -e "$ACCEPTED_OPERATIONS_SHA^{commit}"
+          git diff --quiet "$ACCEPTED_OPERATIONS_SHA" -- \
+            ops/staging-backup \
+            tests/ops/staging-backup-postgres.test.mjs \
+            docs/STAGING_BACKUP_EXECUTION.md
+
+          mapfile -t changed < <(git diff --name-only "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA")
+          test "${#changed[@]}" -gt 0
+          for path in "${changed[@]}"; do
+            case "$path" in
+              .github/workflows/staging-recovery-supabase.yml|tests/ops/staging-recovery-supabase/*) ;;
+              *) echo "Out-of-scope path: $path" >&2; exit 1 ;;
+            esac
+          done
+          if find tests/ops/staging-recovery-supabase -type l -print -quit | grep -q .; then
+            echo 'Symlinks are not permitted in the compatibility harness.' >&2
+            exit 1
+          fi
+
+      - name: Install accepted locked CLI
+        shell: bash
+        run: |
+          bash ops/staging-backup/install-client.sh
+          npm ci --prefix ops/staging-backup --no-audit --no-fund
+
+      - name: Rehearse managed-style baseline recovery
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash tests/ops/staging-recovery-supabase/run-compatibility.sh
