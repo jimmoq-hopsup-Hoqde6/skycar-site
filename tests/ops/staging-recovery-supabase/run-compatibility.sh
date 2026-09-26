@@ -169,7 +169,7 @@ target_manifest_hash=$(node "$helper" manifest "$target_db" "$work_root/target-b
 test "$source_manifest_hash" = "$target_manifest_hash"
 
 restore_failure="$work_root/restore-failure.log"
-for file in roles.sql schema.sql data.sql; do
+for file in roles.restore.sql schema.sql data.sql; do
   if ! PGCONNECT_TIMEOUT=10 psql "$target_db" -X -q -v ON_ERROR_STOP=1 -f "$recovered/$file" \
       >"$work_root/restore-${file%.sql}.log" 2>"$restore_failure"; then
     {
@@ -205,6 +205,7 @@ test -z "$(docker volume ls -q --filter label=com.supabase.cli.project=target)"
   echo "| Target post-restore manifest | VERIFIED ($target_after_hash) |"
   echo '| Accepted export/encrypt/full-tag decrypt | PASS |'
   echo '| Restore order | roles → schema → data; ON_ERROR_STOP=1 |'
+  echo '| Managed-target role compatibility | Raw roles hash preserved; one validated terminal RESET ALL omitted in its isolated psql session |'
   echo '| Synthetic sentinel and file hashes | PASS |'
   echo '| Required baseline roles/schemas/extensions | PRESERVED |'
   echo '| auth/storage/realtime object manifest | UNCHANGED |'
