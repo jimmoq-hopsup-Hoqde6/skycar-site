@@ -67,6 +67,15 @@ function manifest(databaseUrl) {
       'extensions', COALESCE((SELECT jsonb_agg(jsonb_build_object(
         'name', e.extname, 'version', e.extversion, 'schema', n.nspname
       ) ORDER BY e.extname) FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace), '[]'::jsonb),
+      'parameterPrivileges', COALESCE((SELECT jsonb_agg(jsonb_build_object(
+        'parameter', p.parname, 'grantee', grantee.rolname,
+        'grantor', grantor.rolname, 'privilege', acl.privilege_type,
+        'grantable', acl.is_grantable
+      ) ORDER BY p.parname, grantee.rolname, grantor.rolname, acl.privilege_type)
+        FROM pg_parameter_acl p
+        CROSS JOIN LATERAL aclexplode(p.paracl) acl
+        JOIN pg_roles grantee ON grantee.oid = acl.grantee
+        JOIN pg_roles grantor ON grantor.oid = acl.grantor), '[]'::jsonb),
       'providerObjects', COALESCE((SELECT jsonb_agg(jsonb_build_object(
         'schema', n.nspname, 'name', c.relname, 'kind', c.relkind
       ) ORDER BY n.nspname, c.relname, c.relkind)
@@ -170,14 +179,81 @@ function capture(databaseUrl, outputDirectory) {
     throw new Error("ROLES_RESET_CONTRACT_CHANGED");
   }
   writeFileSync(
-    join(outputDirectory, "roles.restore.sql"),
-    roles.replace(/\r?\nRESET ALL;\s*$/, "\n"),
-    { mode: 0o600, flag: "wx" },
-  );
-  writeFileSync(
     join(outputDirectory, "hashes.json"),
     `${JSON.stringify(fileHashes, null, 2)}\n`,
     { mode: 0o600, flag: "wx" },
+  );
+}
+
+function decodeIdentifier(value) {
+  return value.replaceAll('""', '"');
+}
+
+export function adaptRoles(raw, sourceValue, targetValue) {
+  const source = canonical(sourceValue);
+  const target = canonical(targetValue);
+  if (JSON.stringify(source) !== JSON.stringify(target))
+    throw new Error("FRESH_BASELINES_DIFFER");
+
+  const baseline = new Set(
+    target.parameterPrivileges.map((item) =>
+      JSON.stringify([
+        item.parameter,
+        item.grantee,
+        item.privilege,
+        item.grantable,
+      ]),
+    ),
+  );
+  const lines = raw.split(/\r?\n/);
+  let terminalResetCount = 0;
+  let redundantParameterGrantCount = 0;
+  const restored = [];
+  for (const [index, line] of lines.entries()) {
+    if (/^RESET ALL;$/.test(line)) {
+      if (index !== lines.length - 2 || lines.at(-1) !== "")
+        throw new Error("ROLES_RESET_NOT_TERMINAL");
+      terminalResetCount += 1;
+      continue;
+    }
+    const grant = line.match(
+      /^GRANT SET ON PARAMETER "((?:[^"]|"")+)" TO "((?:[^"]|"")+)"( WITH GRANT OPTION)?;$/,
+    );
+    if (grant) {
+      const key = JSON.stringify([
+        decodeIdentifier(grant[1]),
+        decodeIdentifier(grant[2]),
+        "SET",
+        Boolean(grant[3]),
+      ]);
+      if (baseline.has(key)) {
+        redundantParameterGrantCount += 1;
+        continue;
+      }
+    }
+    restored.push(line);
+  }
+  if (terminalResetCount !== 1 || redundantParameterGrantCount < 1)
+    throw new Error("ROLES_MANAGED_ADAPTATION_CONTRACT_CHANGED");
+  return {
+    sql: restored.join("\n"),
+    terminalResetCount,
+    redundantParameterGrantCount,
+  };
+}
+
+function prepareRoles(rawPath, sourceBaselinePath, targetBaselinePath, output) {
+  const result = adaptRoles(
+    readFileSync(rawPath, "utf8"),
+    JSON.parse(readFileSync(sourceBaselinePath, "utf8")),
+    JSON.parse(readFileSync(targetBaselinePath, "utf8")),
+  );
+  writeFileSync(output, result.sql, {
+    mode: 0o600,
+    flag: "wx",
+  });
+  process.stdout.write(
+    `${JSON.stringify({ terminalResetCount: result.terminalResetCount, redundantParameterGrantCount: result.redundantParameterGrantCount })}\n`,
   );
 }
 
@@ -242,74 +318,3 @@ function verify(
     JSON.stringify(targetAfter.providerObjects)
   ) {
     throw new Error("PROVIDER_OBJECTS_CHANGED");
-  }
-
-  const expectedSchemas = new Set([
-    ...targetBefore.schemas,
-    "skycar_recovery_fixture",
-  ]);
-  if (
-    targetAfter.schemas.length !== expectedSchemas.size ||
-    !targetAfter.schemas.every((value) => expectedSchemas.has(value))
-  ) {
-    throw new Error("UNEXPECTED_SCHEMA_DELTA");
-  }
-  const expectedRoleNames = new Set([
-    ...targetBefore.roles.map((role) => role.name),
-    "skycar_recovery_fixture",
-  ]);
-  if (
-    targetAfter.roles.length !== expectedRoleNames.size ||
-    !targetAfter.roles.every((role) => expectedRoleNames.has(role.name))
-  ) {
-    throw new Error("UNEXPECTED_ROLE_DELTA");
-  }
-
-  const sentinel = query(
-    databaseUrl,
-    `
-    SELECT note || '|' || digest
-    FROM skycar_recovery_fixture.sentinel WHERE id = 7;
-  `,
-  );
-  const expectedNote = "synthetic Supabase compatibility sentinel";
-  if (sentinel !== `${expectedNote}|${sha256(Buffer.from(expectedNote))}`)
-    throw new Error("SENTINEL_MISMATCH");
-
-  const hashes = JSON.parse(
-    readFileSync(join(recoveredDirectory, "hashes.json"), "utf8"),
-  );
-  for (const item of hashes) {
-    if (
-      sha256(readFileSync(join(recoveredDirectory, item.name))) !== item.sha256
-    )
-      throw new Error("RECOVERED_HASH_MISMATCH");
-  }
-
-  writeFileSync(targetAfterPath, `${JSON.stringify(targetAfter, null, 2)}\n`, {
-    mode: 0o600,
-    flag: "wx",
-  });
-  process.stdout.write(`${sha256(Buffer.from(JSON.stringify(targetAfter)))}\n`);
-}
-
-const [command, ...args] = process.argv.slice(2);
-if (command === "status-db") {
-  const value = JSON.parse(readFileSync(args[0], "utf8"));
-  const url = value.DB_URL || value.db_url || value.database_url;
-  if (!url || !/^postgresql?:\/\//.test(url))
-    throw new Error("LOCAL_DB_URL_MISSING");
-  process.stdout.write(url);
-} else if (command === "manifest") {
-  writeManifest(args[0], args[1]);
-} else if (command === "fixture") {
-  addFixture(args[0]);
-} else if (command === "capture") {
-  capture(args[0], args[1]);
-} else if (command === "describe-roles") {
-  describeRoles(args[0]);
-} else if (command === "verify") {
-  verify(...args);
-} else {
-  throw new Error("UNKNOWN_COMPATIBILITY_COMMAND");
-}
