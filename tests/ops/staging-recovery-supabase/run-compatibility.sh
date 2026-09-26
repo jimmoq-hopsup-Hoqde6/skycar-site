@@ -173,7 +173,8 @@ roles_adaptation=$(node "$helper" prepare-roles "$recovered/roles.sql" \
 node "$helper" describe-roles "$recovered/roles.restore.sql"
 
 restore_failure="$work_root/restore-failure.log"
-for file in roles.restore.sql schema.sql data.sql; do
+restore_file() {
+  local file=$1
   if ! PGCONNECT_TIMEOUT=10 psql "$target_db" -X -q -v ON_ERROR_STOP=1 -f "$recovered/$file" \
       >"$work_root/restore-${file%.sql}.log" 2>"$restore_failure"; then
     {
@@ -182,7 +183,15 @@ for file in roles.restore.sql schema.sql data.sql; do
     } >&2
     exit 1
   fi
-done
+}
+
+restore_file roles.restore.sql
+PGCONNECT_TIMEOUT=10 psql "$target_db" -X -q -v ON_ERROR_STOP=1 \
+  -c 'GRANT skycar_recovery_fixture TO postgres;' >/dev/null 2>"$restore_failure"
+restore_file schema.sql
+restore_file data.sql
+PGCONNECT_TIMEOUT=10 psql "$target_db" -X -q -v ON_ERROR_STOP=1 \
+  -c 'REVOKE skycar_recovery_fixture FROM postgres;' >/dev/null 2>"$restore_failure"
 
 target_after_hash=$(node "$helper" verify "$target_db" \
   "$work_root/source-baseline.json" "$work_root/target-baseline.json" \
@@ -210,6 +219,7 @@ test -z "$(docker volume ls -q --filter label=com.supabase.cli.project=target)"
   echo '| Accepted export/encrypt/full-tag decrypt | PASS |'
   echo '| Restore order | roles → schema → data; ON_ERROR_STOP=1 |'
   echo "| Managed-target role compatibility | Raw roles hash preserved; validated baseline-equivalent parameter grants and terminal session RESET omitted ($roles_adaptation) |"
+  echo '| Ownership choreography | Synthetic owner membership granted only for schema/data restore, then revoked; final membership and owner state verified |'
   echo '| Synthetic sentinel and file hashes | PASS |'
   echo '| Required baseline roles/schemas/extensions | PRESERVED |'
   echo '| auth/storage/realtime object manifest | UNCHANGED |'
