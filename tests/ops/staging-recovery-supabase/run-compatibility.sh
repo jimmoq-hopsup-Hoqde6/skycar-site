@@ -60,7 +60,7 @@ project_containers() {
 
 assert_core_health_and_loopback() {
   local project=$1
-  local required=(db auth storage realtime rest kong meta)
+  local required=(db auth storage realtime rest kong pg_meta)
   local ids names='' failed=false
   ids=$(project_containers "$project")
   if test -z "$ids"; then
