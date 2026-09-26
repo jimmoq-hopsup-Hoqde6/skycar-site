@@ -12,6 +12,7 @@ const privilege = {
 const baseline = {
   parameterPrivileges: [privilege],
   roles: [],
+  memberships: [],
   schemas: [],
   extensions: [],
   providerObjects: [],
