@@ -1,3 +1,5 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+tests/ops/staging-recovery-supabase/compatibility.mjs 69ms (unchanged)
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -88,21 +90,36 @@ function writeManifest(databaseUrl, output) {
 function addFixture(databaseUrl) {
   const note = "synthetic Supabase compatibility sentinel";
   const digest = sha256(Buffer.from(note));
-  query(
-    databaseUrl,
-    String.raw`
-    CREATE ROLE skycar_recovery_fixture NOLOGIN;
-    CREATE SCHEMA skycar_recovery_fixture AUTHORIZATION skycar_recovery_fixture;
-    CREATE TABLE skycar_recovery_fixture.sentinel (
-      id integer PRIMARY KEY,
-      note text NOT NULL,
-      digest text NOT NULL
-    );
-    ALTER TABLE skycar_recovery_fixture.sentinel OWNER TO skycar_recovery_fixture;
-    INSERT INTO skycar_recovery_fixture.sentinel (id, note, digest)
-      VALUES (7, '${note}', '${digest}');
-  `,
-  );
+  const steps = [
+    ["ROLE", "CREATE ROLE skycar_recovery_fixture NOLOGIN;"],
+    [
+      "SCHEMA",
+      "CREATE SCHEMA skycar_recovery_fixture AUTHORIZATION skycar_recovery_fixture;",
+    ],
+    [
+      "TABLE",
+      String.raw`CREATE TABLE skycar_recovery_fixture.sentinel (
+        id integer PRIMARY KEY,
+        note text NOT NULL,
+        digest text NOT NULL
+      );`,
+    ],
+    [
+      "OWNER",
+      "ALTER TABLE skycar_recovery_fixture.sentinel OWNER TO skycar_recovery_fixture;",
+    ],
+    [
+      "INSERT",
+      `INSERT INTO skycar_recovery_fixture.sentinel (id, note, digest) VALUES (7, '${note}', '${digest}');`,
+    ],
+  ];
+  for (const [label, sql] of steps) {
+    try {
+      query(databaseUrl, sql);
+    } catch {
+      throw new Error(`FIXTURE_${label}_FAILED`);
+    }
+  }
 }
 
 function capture(databaseUrl, outputDirectory) {
