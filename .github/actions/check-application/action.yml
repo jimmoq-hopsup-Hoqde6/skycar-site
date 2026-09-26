@@ -1,0 +1,40 @@
+name: Check application revision
+description: Verify provenance and run the same checks for the head and integration candidate.
+inputs:
+  mode:
+    description: head or integration
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v5
+      with:
+        node-version: 24
+    - name: Verify tested revision
+      shell: bash
+      env:
+        CI_CHECKOUT_MODE: ${{ inputs.mode }}
+      run: node scripts/verify-ci-checkout.mjs
+    - name: Install locked dependencies
+      shell: bash
+      run: npm ci --ignore-scripts
+    - name: Lint
+      shell: bash
+      run: npm run lint
+    - name: Typecheck
+      shell: bash
+      run: npm run typecheck
+    - name: Unit tests
+      shell: bash
+      run: npm test
+    - name: Build
+      shell: bash
+      run: npm run build
+      env:
+        SKYCAR_ENV: demo
+    - name: Reject committed environment files
+      shell: bash
+      run: '! git ls-files | grep -E "(^|/)\.env($|\.)" | grep -v "\.env\.example$"'
+    - name: Verify dependency files were not rewritten
+      shell: bash
+      run: git diff --exit-code -- package.json package-lock.json
