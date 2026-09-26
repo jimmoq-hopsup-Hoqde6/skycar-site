@@ -75,7 +75,8 @@ jobs:
           retention-days: 7
       - name: Record limited evidence
         run: |
-          echo 'Encrypted roles/schema/data export captured. Administrator must privately retrieve, decrypt, verify and retain it before expiry.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Encrypted recovery-contract v2 roles/schema/data export plus authenticated source oracle captured. Administrator must privately retrieve, decrypt, verify and retain it before expiry.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Recovery must stop on legacy/missing oracle, changed CLI output, or source/target version/baseline mismatch.' >> "$GITHUB_STEP_SUMMARY"
           echo 'Restore rehearsal, hosted acceptance, migration and deployment: NOT RUN. This workflow authorises none of them.' >> "$GITHUB_STEP_SUMMARY"
       - name: Clean temporary encrypted output
         if: always()
