@@ -318,3 +318,81 @@ function verify(
     JSON.stringify(targetAfter.providerObjects)
   ) {
     throw new Error("PROVIDER_OBJECTS_CHANGED");
+  }
+
+  const expectedSchemas = new Set([
+    ...targetBefore.schemas,
+    "skycar_recovery_fixture",
+  ]);
+  if (
+    targetAfter.schemas.length !== expectedSchemas.size ||
+    !targetAfter.schemas.every((value) => expectedSchemas.has(value))
+  ) {
+    throw new Error("UNEXPECTED_SCHEMA_DELTA");
+  }
+  const expectedRoleNames = new Set([
+    ...targetBefore.roles.map((role) => role.name),
+    "skycar_recovery_fixture",
+  ]);
+  if (
+    targetAfter.roles.length !== expectedRoleNames.size ||
+    !targetAfter.roles.every((role) => expectedRoleNames.has(role.name))
+  ) {
+    throw new Error("UNEXPECTED_ROLE_DELTA");
+  }
+
+  const sentinel = query(
+    databaseUrl,
+    `
+    SELECT note || '|' || digest
+    FROM skycar_recovery_fixture.sentinel WHERE id = 7;
+  `,
+  );
+  const expectedNote = "synthetic Supabase compatibility sentinel";
+  if (sentinel !== `${expectedNote}|${sha256(Buffer.from(expectedNote))}`)
+    throw new Error("SENTINEL_MISMATCH");
+
+  const hashes = JSON.parse(
+    readFileSync(join(recoveredDirectory, "hashes.json"), "utf8"),
+  );
+  for (const item of hashes) {
+    if (
+      sha256(readFileSync(join(recoveredDirectory, item.name))) !== item.sha256
+    )
+      throw new Error("RECOVERED_HASH_MISMATCH");
+  }
+
+  writeFileSync(targetAfterPath, `${JSON.stringify(targetAfter, null, 2)}\n`, {
+    mode: 0o600,
+    flag: "wx",
+  });
+  process.stdout.write(`${sha256(Buffer.from(JSON.stringify(targetAfter)))}\n`);
+}
+
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  const [command, ...args] = process.argv.slice(2);
+  if (command === "status-db") {
+    const value = JSON.parse(readFileSync(args[0], "utf8"));
+    const url = value.DB_URL || value.db_url || value.database_url;
+    if (!url || !/^postgresql?:\/\//.test(url))
+      throw new Error("LOCAL_DB_URL_MISSING");
+    process.stdout.write(url);
+  } else if (command === "manifest") {
+    writeManifest(args[0], args[1]);
+  } else if (command === "fixture") {
+    addFixture(args[0]);
+  } else if (command === "capture") {
+    capture(args[0], args[1]);
+  } else if (command === "prepare-roles") {
+    prepareRoles(...args);
+  } else if (command === "describe-roles") {
+    describeRoles(args[0]);
+  } else if (command === "verify") {
+    verify(...args);
+  } else {
+    throw new Error("UNKNOWN_COMPATIBILITY_COMMAND");
+  }
+}
