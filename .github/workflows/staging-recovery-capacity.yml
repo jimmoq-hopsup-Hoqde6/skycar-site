@@ -1,0 +1,172 @@
+name: Synthetic staging recovery capacity
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/staging-recovery-capacity.yml
+      - tests/ops/staging-recovery-capacity/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-recovery-capacity-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  capacity:
+    if: github.repository == 'jimmoq-hopsup-Hoqde6/skycar-site'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ACCEPTED_OPERATIONS_SHA: cf90135793fcae4527dc0f566ae5d0c3f27fff59
+      EXPECTED_NODE_VERSION: v24.19.0
+      POSTGRES_IMAGE_TAG: postgres:17.6-bookworm
+      MINIMUM_RUNNER_FREE_BYTES: '4294967296'
+    steps:
+      - name: Check out immutable pull-request head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install exact Node runtime
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+
+      - name: Verify immutable source and bounded change set
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          test "$(node --version)" = "$EXPECTED_NODE_VERSION"
+          git cat-file -e "$ACCEPTED_OPERATIONS_SHA^{commit}"
+          git diff --quiet "$ACCEPTED_OPERATIONS_SHA" -- \
+            ops/staging-backup \
+            tests/ops/staging-backup-postgres.test.mjs
+
+          mapfile -t changed < <(git diff --name-only "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA")
+          test "${#changed[@]}" -gt 0
+          for path in "${changed[@]}"; do
+            case "$path" in
+              .github/workflows/staging-recovery-capacity.yml|tests/ops/staging-recovery-capacity/*) ;;
+              *) echo "Out-of-scope path: $path" >&2; exit 1 ;;
+            esac
+          done
+          if find tests/ops/staging-recovery-capacity -type l -print -quit | grep -q .; then
+            echo 'Symlinks are not permitted in the capacity harness.' >&2
+            exit 1
+          fi
+
+      - name: Verify runner capacity and resolve PostgreSQL image
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner_free_bytes=$(df -PB1 "$RUNNER_TEMP" | awk 'NR == 2 { print $4 }')
+          test "$runner_free_bytes" -ge "$MINIMUM_RUNNER_FREE_BYTES"
+          test "$(uname -m)" = x86_64
+
+          docker pull "$POSTGRES_IMAGE_TAG"
+          postgres_image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$POSTGRES_IMAGE_TAG")
+          case "$postgres_image" in
+            postgres@sha256:[a-f0-9][a-f0-9]*) ;;
+            *) echo 'PostgreSQL image did not resolve to an immutable digest.' >&2; exit 1 ;;
+          esac
+
+          metrics_dir="$RUNNER_TEMP/skycar-recovery-capacity"
+          install -d -m 0777 "$metrics_dir"
+          {
+            echo "postgres_image=$postgres_image"
+            echo "metrics_dir=$metrics_dir"
+            echo "runner_free_bytes=$runner_free_bytes"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run PostgreSQL recovery and near-limit crypto in one constrained unit
+        shell: bash
+        env:
+          POSTGRES_IMAGE: ${{ steps.prepare.outputs.postgres_image }}
+          METRICS_DIR: ${{ steps.prepare.outputs.metrics_dir }}
+          RUNNER_FREE_BYTES: ${{ steps.prepare.outputs.runner_free_bytes }}
+        run: |
+          set -euo pipefail
+          node_home=$(dirname "$(dirname "$(command -v node)")")
+          docker run --rm \
+            --name skycar-recovery-capacity \
+            --memory 4g \
+            --memory-swap 4g \
+            --cpus 2 \
+            --volume "$GITHUB_WORKSPACE:/source:ro" \
+            --volume "$node_home:/opt/node:ro" \
+            --volume "$METRICS_DIR:/metrics" \
+            --env EXPECTED_NODE_VERSION="$EXPECTED_NODE_VERSION" \
+            --env EXPECTED_OPERATIONS_SHA="$ACCEPTED_OPERATIONS_SHA" \
+            --env RUNNER_FREE_BYTES="$RUNNER_FREE_BYTES" \
+            "$POSTGRES_IMAGE" \
+            bash /source/tests/ops/staging-recovery-capacity/run-capacity.sh
+
+      - name: Enforce measured acceptance and publish synthetic summary
+        shell: bash
+        env:
+          METRICS_DIR: ${{ steps.prepare.outputs.metrics_dir }}
+          POSTGRES_IMAGE: ${{ steps.prepare.outputs.postgres_image }}
+        run: |
+          set -euo pipefail
+          metrics="$METRICS_DIR/metrics.env"
+          test -s "$metrics"
+          # The metrics file contains only harness-generated numeric/version values.
+          # shellcheck disable=SC1090
+          source "$metrics"
+
+          test "$fixture_passed" = true
+          test "$fixture_skipped" = 0
+          test "$near_limit_crypto_passed" = true
+          test "$memory_max_bytes" = 4294967296
+          test "$memory_swap_max_bytes" = 0
+          test "$cpu_quota" = '200000/100000'
+          test "$oom_events" = 0
+          test "$oom_kill_events" = 0
+          test "$memory_peak_bytes" -lt 3221225472
+          test "$disk_peak_bytes" -lt 21474836480
+          test "$runner_free_bytes" -ge "$MINIMUM_RUNNER_FREE_BYTES"
+          test "$node_version" = "$EXPECTED_NODE_VERSION"
+          test "$postgres_version" = 17.6
+          test "$supabase_cli_version" = 2.117.0
+
+          {
+            echo '## Secret-free recovery capacity result'
+            echo
+            echo '| Evidence | Measured result |'
+            echo '| --- | ---: |'
+            echo "| Immutable PR checkout | $(git rev-parse HEAD) |"
+            echo "| Accepted operations source | $accepted_operations_sha |"
+            echo "| PostgreSQL image | $POSTGRES_IMAGE |"
+            echo "| Node / PostgreSQL / Supabase CLI | $node_version / $postgres_version / $supabase_cli_version |"
+            echo "| Effective memory / swap / CPU | $memory_max_bytes B / $memory_swap_max_bytes B / $cpu_quota |"
+            echo "| Whole-unit peak memory | $memory_peak_bytes B |"
+            echo "| OOM / OOM-kill events | $oom_events / $oom_kill_events |"
+            echo "| Sampled peak temporary disk | $disk_peak_bytes B |"
+            echo "| Runner free disk before test | $runner_free_bytes B |"
+            echo "| Elapsed time | $elapsed_seconds s |"
+            echo "| PostgreSQL fixture | PASS; skipped=$fixture_skipped |"
+            echo "| Near-limit crypto | PASS; logical=$near_limit_logical_bytes B; JSON=$near_limit_json_bytes B |"
+            echo
+            echo 'Synthetic fixture recovery and the near-limit crypto case are separate. Managed Supabase bootstrap compatibility, real archive recovery, private key custody, iPad transfer, migration and deployment remain NOT RUN.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove synthetic metrics
+        if: always()
+        shell: bash
+        env:
+          METRICS_DIR: ${{ steps.prepare.outputs.metrics_dir }}
+        run: |
+          if [[ -n "${METRICS_DIR:-}" && "$METRICS_DIR" == "$RUNNER_TEMP"/skycar-recovery-capacity ]]; then
+            rm -rf -- "$METRICS_DIR"
+          fi
