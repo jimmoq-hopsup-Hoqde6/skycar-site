@@ -62,6 +62,15 @@ function manifest(databaseUrl) {
         'name', rolname, 'login', rolcanlogin, 'super', rolsuper,
         'replication', rolreplication, 'bypassRls', rolbypassrls
       ) ORDER BY rolname) FROM pg_roles WHERE rolname !~ '^pg_'), '[]'::jsonb),
+      'memberships', COALESCE((SELECT jsonb_agg(jsonb_build_object(
+        'role', role_name.rolname, 'member', member_name.rolname,
+        'grantor', grantor_name.rolname, 'admin', m.admin_option,
+        'inherit', m.inherit_option, 'set', m.set_option
+      ) ORDER BY role_name.rolname, member_name.rolname, grantor_name.rolname)
+        FROM pg_auth_members m
+        JOIN pg_roles role_name ON role_name.oid = m.roleid
+        JOIN pg_roles member_name ON member_name.oid = m.member
+        JOIN pg_roles grantor_name ON grantor_name.oid = m.grantor), '[]'::jsonb),
       'schemas', COALESCE((SELECT jsonb_agg(nspname ORDER BY nspname)
         FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'), '[]'::jsonb),
       'extensions', COALESCE((SELECT jsonb_agg(jsonb_build_object(
@@ -311,6 +320,12 @@ function verify(
   if (JSON.stringify(source) !== JSON.stringify(targetBefore))
     throw new Error("FRESH_BASELINES_DIFFER");
   ensureSubset(targetBefore.roles, targetAfter.roles, "ROLES");
+  if (
+    JSON.stringify(targetBefore.memberships) !==
+    JSON.stringify(targetAfter.memberships)
+  ) {
+    throw new Error("ROLE_MEMBERSHIPS_CHANGED");
+  }
   ensureSubset(targetBefore.schemas, targetAfter.schemas, "SCHEMAS");
   ensureSubset(targetBefore.extensions, targetAfter.extensions, "EXTENSIONS");
   if (
@@ -351,6 +366,17 @@ function verify(
   const expectedNote = "synthetic Supabase compatibility sentinel";
   if (sentinel !== `${expectedNote}|${sha256(Buffer.from(expectedNote))}`)
     throw new Error("SENTINEL_MISMATCH");
+  const owners = query(
+    databaseUrl,
+    `
+    SELECT pg_get_userbyid(n.nspowner) || '|' || pg_get_userbyid(c.relowner)
+    FROM pg_namespace n
+    JOIN pg_class c ON c.relnamespace = n.oid
+    WHERE n.nspname = 'skycar_recovery_fixture' AND c.relname = 'sentinel';
+  `,
+  );
+  if (owners !== "skycar_recovery_fixture|skycar_recovery_fixture")
+    throw new Error("FIXTURE_OWNER_MISMATCH");
 
   const hashes = JSON.parse(
     readFileSync(join(recoveredDirectory, "hashes.json"), "utf8"),
