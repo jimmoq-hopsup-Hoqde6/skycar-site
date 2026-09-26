@@ -153,6 +153,7 @@ source_manifest_hash=$(node "$helper" manifest "$source_db" "$work_root/source-b
 source_server_version=$(PGCONNECT_TIMEOUT=10 psql "$source_db" -X -q -A -t -v ON_ERROR_STOP=1 -c 'SHOW server_version;')
 node "$helper" fixture "$source_db"
 node "$helper" capture "$source_db" "$recovered"
+node "$helper" describe-roles "$recovered/roles.restore.sql"
 
 "$cli" stop --project-id source --no-backup >"$work_root/source-stop.log" 2>&1
 source_started=false
