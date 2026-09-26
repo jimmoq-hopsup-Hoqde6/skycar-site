@@ -153,7 +153,6 @@ source_manifest_hash=$(node "$helper" manifest "$source_db" "$work_root/source-b
 source_server_version=$(PGCONNECT_TIMEOUT=10 psql "$source_db" -X -q -A -t -v ON_ERROR_STOP=1 -c 'SHOW server_version;')
 node "$helper" fixture "$source_db"
 node "$helper" capture "$source_db" "$recovered"
-node "$helper" describe-roles "$recovered/roles.restore.sql"
 
 "$cli" stop --project-id source --no-backup >"$work_root/source-stop.log" 2>&1
 source_started=false
@@ -168,6 +167,10 @@ record_images target "$work_root/target-images.txt"
 target_db=$(node "$helper" status-db "$work_root/target-status.json")
 target_manifest_hash=$(node "$helper" manifest "$target_db" "$work_root/target-baseline.json")
 test "$source_manifest_hash" = "$target_manifest_hash"
+roles_adaptation=$(node "$helper" prepare-roles "$recovered/roles.sql" \
+  "$work_root/source-baseline.json" "$work_root/target-baseline.json" \
+  "$recovered/roles.restore.sql")
+node "$helper" describe-roles "$recovered/roles.restore.sql"
 
 restore_failure="$work_root/restore-failure.log"
 for file in roles.restore.sql schema.sql data.sql; do
@@ -206,7 +209,7 @@ test -z "$(docker volume ls -q --filter label=com.supabase.cli.project=target)"
   echo "| Target post-restore manifest | VERIFIED ($target_after_hash) |"
   echo '| Accepted export/encrypt/full-tag decrypt | PASS |'
   echo '| Restore order | roles → schema → data; ON_ERROR_STOP=1 |'
-  echo '| Managed-target role compatibility | Raw roles hash preserved; one validated terminal RESET ALL omitted in its isolated psql session |'
+  echo "| Managed-target role compatibility | Raw roles hash preserved; validated baseline-equivalent parameter grants and terminal session RESET omitted ($roles_adaptation) |"
   echo '| Synthetic sentinel and file hashes | PASS |'
   echo '| Required baseline roles/schemas/extensions | PRESERVED |'
   echo '| auth/storage/realtime object manifest | UNCHANGED |'
