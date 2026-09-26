@@ -181,6 +181,34 @@ function capture(databaseUrl, outputDirectory) {
   );
 }
 
+function describeRoles(path) {
+  const lines = readFileSync(path, "utf8").split(/\r?\n/);
+  for (const [index, line] of lines.entries()) {
+    const value = line.trim();
+    if (!value || value.startsWith("--")) continue;
+    const setting = value.match(
+      /^ALTER ROLE "([^"]+)"(?: IN DATABASE "[^"]+")? SET "([^"]+)" TO /,
+    );
+    if (setting) {
+      const roleClass =
+        setting[1] === "skycar_recovery_fixture"
+          ? "synthetic-fixture"
+          : "platform-baseline";
+      process.stderr.write(
+        `roles-restore-line=${index + 1} action=role-setting role-class=${roleClass} setting=${setting[2]}\n`,
+      );
+      continue;
+    }
+    const reset = /^RESET ALL;$/.test(value);
+    const action = reset
+      ? "session-reset"
+      : value.split(/\s+/, 2).join("_").toLowerCase();
+    process.stderr.write(
+      `roles-restore-line=${index + 1} action=${action} statement-sha256=${sha256(Buffer.from(value))}\n`,
+    );
+  }
+}
+
 function ensureSubset(before, after, label) {
   const values = new Set(after.map((value) => JSON.stringify(value)));
   for (const value of before) {
@@ -278,6 +306,8 @@ if (command === "status-db") {
   addFixture(args[0]);
 } else if (command === "capture") {
   capture(args[0], args[1]);
+} else if (command === "describe-roles") {
+  describeRoles(args[0]);
 } else if (command === "verify") {
   verify(...args);
 } else {
