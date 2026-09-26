@@ -1,0 +1,33 @@
+name: Care database acceptance
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  care-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_test_only
+          POSTGRES_DB: skycar_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Exercise migrations, SQL permissions and concurrent Care operations
+        run: node --test tests/integration/care-db.test.mjs
+        env:
+          CARE_TEST_DATABASE_URL: postgresql://postgres:disposable_test_only@localhost:5432/skycar_test
