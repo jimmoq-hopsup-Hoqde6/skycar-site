@@ -37,6 +37,7 @@ export default function RequestStatus({ id }: { id: string }) {
   const [receipt, setReceipt] = useState<CareReceipt | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
+  const [needsSignIn, setNeedsSignIn] = useState(false);
   const [checked, setChecked] = useState<string | null>(null);
   const [now, setNow] = useState(0);
   const [uncertain, setUncertain] = useState(false);
@@ -53,13 +54,13 @@ export default function RequestStatus({ id }: { id: string }) {
     if (discard) {
       // Account/session revalidation is fail-closed: hide previously verified
       // private request details until the current session proves access again.
-      setReceipt(null); setChecked(null); setError("");
+      setReceipt(null); setChecked(null); setError(""); setNeedsSignIn(false);
     }
     setBusy(true);
     try {
       const r = await load(id, undefined, current.signal);
       if (current.signal.aborted || epoch !== privacyEpoch.current) return;
-      setReceipt(r); setChecked(new Date().toISOString()); setNow(Date.now());
+      setReceipt(r); setChecked(new Date().toISOString()); setNow(Date.now()); setNeedsSignIn(false);
       if (retryKey.current && r.customer_stage !== "no_match") {
         clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
         setUncertain(false); setRecoverable(false);
@@ -67,6 +68,7 @@ export default function RequestStatus({ id }: { id: string }) {
     } catch (e) {
       if (current.signal.aborted || epoch !== privacyEpoch.current) return;
       setError(errorMessage(e));
+      setNeedsSignIn(e instanceof RequestError && e.status === 401);
       if (e instanceof RequestError && [400, 401, 403, 404].includes(e.status)) {
         clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
         setReceipt(null); setUncertain(false); setRecoverable(false);
@@ -100,7 +102,7 @@ export default function RequestStatus({ id }: { id: string }) {
     if (locked.current) return;
     locked.current = true;
     const epoch = privacyEpoch.current;
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setNeedsSignIn(false);
     try {
       if (reopen && !retryKey.current) {
         retryKey.current = crypto.randomUUID();
@@ -108,7 +110,7 @@ export default function RequestStatus({ id }: { id: string }) {
       }
       const r = await load(id, reopen ? retryKey.current! : undefined);
       if (epoch !== privacyEpoch.current) return;
-      setReceipt(r); setChecked(new Date().toISOString()); setNow(Date.now());
+      setReceipt(r); setChecked(new Date().toISOString()); setNow(Date.now()); setNeedsSignIn(false);
       if (r.customer_stage !== "no_match") {
         clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
         setUncertain(false); setRecoverable(false);
@@ -116,6 +118,7 @@ export default function RequestStatus({ id }: { id: string }) {
     } catch (e) {
       if (epoch !== privacyEpoch.current) return;
       setError(errorMessage(e));
+      setNeedsSignIn(e instanceof RequestError && e.status === 401);
       // Never retain previously loaded private details after access is lost.
       if (e instanceof RequestError && [400, 401, 403, 404].includes(e.status)) {
         setReceipt(null); clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
@@ -140,7 +143,7 @@ export default function RequestStatus({ id }: { id: string }) {
     <nav className={styles.nav} aria-label="Page"><Link href="/">SKYCAR</Link><Link href="/garage/jobs">My Jobs</Link><span>Care / Your request</span></nav>
     <header><p className={styles.eyebrow}>YOUR CARE REQUEST</p><h1>Every update,<br />in one place.</h1><p className={styles.intro}>What is recorded, what happens next, and when to expect an update.</p></header>
     <div className={styles.toolbar}><span aria-live="polite">{busy ? "Checking your request…" : checked ? `Last verified ${date(checked)}` : "Status not verified"}</span><button disabled={busy} onClick={() => update()}>Refresh status</button></div>
-    {error && <div className={styles.warning} role="alert"><strong>{error}</strong>{receipt && <p>The details below were last verified at {checked && date(checked)} and may have changed.</p>}</div>}
+    {error && <div className={styles.warning} role="alert"><strong>{error}</strong>{needsSignIn && <p><Link href={`/auth/sign-in?next=${encodeURIComponent(`/care/requests/${id}`)}`}>Sign in</Link> to return to this request.</p>}{receipt && <p>The details below were last verified at {checked && date(checked)} and may have changed.</p>}</div>}
     {uncertain && <div className={styles.warning} role="status"><p>Reopening has not been confirmed. {recoverable ? "This tab saved the attempt and will reuse it after a reload." : "Keep this page open so the same attempt can be reused."}</p>{!receipt && <button disabled={busy} onClick={() => update(true)}>Check reopening</button>}</div>}
     {receipt && summary && <>
       <section className={styles.summary} aria-labelledby="current-status"><p className={styles.eyebrow}>CURRENT STATUS</p><h2 id="current-status">{summary.title}</h2><p>{summary.detail}</p>
