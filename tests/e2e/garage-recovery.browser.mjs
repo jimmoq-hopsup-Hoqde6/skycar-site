@@ -86,7 +86,16 @@ async function scenario(kind, phase, event, boundary, outcome = 'success') {
       if (phase === 'pending') { finishWrite.resolve(); await page.waitForTimeout(60); }
       assert.equal(await page.locator('.garage-notice').count(), 0, 'late success cannot bypass failed validation');
       readMode = 'ready';
-      await page.getByRole('button', { name: 'Try again', exact: true }).click();
+      if (boundary === 'signedout') {
+        const signInLink = page.getByRole('link', { name: 'Sign in', exact: true });
+        assert.equal(await signInLink.getAttribute('href'), '/auth/sign-in?next=%2Fgarage');
+        await signInLink.click();
+        await page.getByRole('heading', { name: 'Sign in to Skycar' }).waitFor();
+        assert.equal(new URL(page.url()).searchParams.get('next'), '/garage');
+        await page.goto(`${origin}/garage`);
+      } else {
+        await page.getByRole('button', { name: 'Try again', exact: true }).click();
+      }
     }
     if (boundary === 'replacement') {
       await page.getByRole('heading', { name: 'Replacement car', exact: true }).waitFor();
@@ -112,20 +121,32 @@ async function scenario(kind, phase, event, boundary, outcome = 'success') {
         }
         finishWrite.resolve();
       }
-      if (phase === 'uncertain' || outcome === 'error') {
-        await page.getByRole('button', { name: retryName }).click();
-        assert.equal(commands.length, 2);
-        assert.deepEqual(commands[1], commands[0], 'retry retains exact key/body/path/method/account');
+      if (boundary === 'signedout') {
+        assert.equal(await page.getByRole('button', { name: retryName }).count(), 0, 'sign-in navigation cannot retain an account-bound retry control');
+        assert.equal(await page.locator('.garage-notice').count(), 0, 'return after sign-in relies on authoritative state, not an old success notice');
+        if (kind === 'archive') {
+          await page.getByRole('button', { name: 'Archived', exact: true }).click();
+          await page.getByRole('heading', { name: 'Original car', exact: true }).waitFor();
+          assert.equal(await page.getByRole('button', { name: 'Edit details' }).count(), 0);
+        } else {
+          await page.getByRole('heading', { name: 'Unresolved change', exact: true }).waitFor();
+        }
+      } else {
+        if (phase === 'uncertain' || outcome === 'error') {
+          await page.getByRole('button', { name: retryName }).click();
+          assert.equal(commands.length, 2);
+          assert.deepEqual(commands[1], commands[0], 'retry retains exact key/body/path/method/account');
+        }
+        await page.getByText(kind === 'archive' ? 'Vehicle archived. Its history is still available in Archived.' : 'PRIVATE_A Unresolved change saved to your Garage.', { exact: true }).waitFor();
+        if (kind === 'archive') {
+          await page.getByRole('button', { name: 'Archived', exact: true }).click();
+          await page.getByRole('heading', { name: 'Original car', exact: true }).waitFor();
+          assert.equal(await page.getByRole('button', { name: 'Edit details' }).count(), 0);
+        }
       }
-      await page.getByText(kind === 'archive' ? 'Vehicle archived. Its history is still available in Archived.' : 'PRIVATE_A Unresolved change saved to your Garage.', { exact: true }).waitFor();
       assert.equal(applied, 1, 'only one committed synthetic mutation');
       assert.equal(new Set(commands.map(c => c.key)).size, 1, 'no fresh mutation key after page return');
       assert.ok(commands.every(c => c.account === A), 'all writes are bound to the initiating identity');
-      if (kind === 'archive') {
-        await page.getByRole('button', { name: 'Archived', exact: true }).click();
-        await page.getByRole('heading', { name: 'Original car', exact: true }).waitFor();
-        assert.equal(await page.getByRole('button', { name: 'Edit details' }).count(), 0);
-      }
     }
     assert.deepEqual(errors, []);
     scenarios++;

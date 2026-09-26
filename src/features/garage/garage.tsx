@@ -216,7 +216,7 @@ export function Garage() {
         <button aria-pressed={archived} disabled={locked} onClick={() => { changeFilter(true); }}>Archived</button>
       </div><span className="privacy-note">Private to your account</span></div>
       {archiveError && <div className="form-error" role="alert"><p>{archiveError.message}</p>{archiveError.retryable ? <button className="secondary-button" disabled={!!archiving} onClick={() => void archive(visibleMutation!.command.vehicle!)}>Retry same archive</button> : <button className="secondary-button" onClick={() => { setMutation(null); refresh(); }}>Reload vehicles</button>}</div>}
-      {error && <section className="garage-empty" role="alert"><h2>{error.code === 'UNAUTHENTICATED' ? 'Your Garage is private' : 'We couldn’t load your Garage'}</h2><p>{error.message}</p>{mutation && <p>Your last change is still unresolved. New changes are paused. Verify the original account to recover the same attempt.</p>}<button className="secondary-button" onClick={() => revalidate()}>Try again</button></section>}
+      {error && <section className="garage-empty" role="alert"><h2>{error.code === 'UNAUTHENTICATED' ? 'Your Garage is private' : 'We couldn’t load your Garage'}</h2><p>{error.message}</p>{mutation && <p>Your last change is still unresolved. New changes are paused. Verify the original account to recover the same attempt.</p>}{error.code === 'UNAUTHENTICATED' ? <Link className="secondary-button" href="/auth/sign-in?next=%2Fgarage">Sign in</Link> : <button className="secondary-button" onClick={() => revalidate()}>Try again</button>}</section>}
       {loading && !page.items.length && <div className="garage-loading" role="status">Loading your vehicles…<div className="vehicle-skeleton" /></div>}
       {!loading && !error && !page.items.length && <section className="garage-empty"><div className="empty-symbol" aria-hidden="true">{archived ? '↗' : '+'}</div><h2>{archived ? 'No archived vehicles' : 'Every car has a story'}</h2><p>{archived ? 'Cars you archive will appear here with their saved history.' : 'Start yours by adding a vehicle to your Garage.'}</p>{!archived && <button className="primary-button" disabled={locked} onClick={() => { setMutation(null); setEditor('new'); }}>Add your first vehicle</button>}</section>}
       {!error && <div className="vehicles-grid">{page.items.map(vehicle => <article className="vehicle-card" key={vehicle.id}>
@@ -229,6 +229,6 @@ export function Garage() {
       </article>)}</div>}
       {page.nextCursor && !error && <button className="secondary-button load-more" disabled={loading} onClick={() => refresh(page.nextCursor)}>{loading ? 'Loading…' : 'Load more vehicles'}</button>}
     </>}
-    <footer className="garage-footer">Your vehicle details stay connected to your account.</footer>
+    <footer className="garage-footer">Your vehicle details stay connected to your account. · <Link href="/auth/sign-out">Sign out on this device</Link></footer>
   </main>;
 }

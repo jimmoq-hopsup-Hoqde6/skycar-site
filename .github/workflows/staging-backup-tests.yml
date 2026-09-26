@@ -1,0 +1,62 @@
+name: Staging backup contract tests
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/staging-backup*.yml'
+      - 'ops/staging-backup/**'
+      - 'tests/ops/staging-backup*.test.mjs'
+      - 'docs/STAGING_BACKUP_EXECUTION.md'
+permissions:
+  contents: read
+jobs:
+  contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [head, integration]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_PASSWORD: synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ matrix.revision == 'head' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+      - name: Check actual immutable revision
+        env:
+          EXPECTED: ${{ matrix.revision == 'head' && github.event.pull_request.head.sha || github.sha }}
+          KIND: ${{ matrix.revision }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          if [ "$KIND" = integration ]; then
+            test "$(git rev-parse HEAD^1)" = "$BASE_SHA"
+            test "$(git rev-parse HEAD^2)" = "$HEAD_SHA"
+          fi
+          printf 'Tested %s revision: %s\n' "$KIND" "$EXPECTED" >> "$GITHUB_STEP_SUMMARY"
+      - name: Synthetic contract, failure and cryptography regressions
+        run: node --test tests/ops/staging-backup.test.mjs
+      - name: Install locked CLI and PostgreSQL 17 client
+        run: |
+          npm ci --prefix ops/staging-backup --no-audit --no-fund
+          bash ops/staging-backup/install-client.sh
+      - name: Real disposable PostgreSQL export and recovery fixture
+        run: node --test tests/ops/staging-backup-postgres.test.mjs
+        env:
+          SKYCAR_BACKUP_POSTGRES_TEST: '1'

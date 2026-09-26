@@ -324,8 +324,13 @@ try {
   assert.equal(await sessionPage.getByLabel("Active Garage vehicle").count(), 0);
   assert.equal(await sessionPage.getByText("Private draft from the first account").count(), 0);
   await sessionPage.screenshot({ path: new URL("mobile-session-required.png", evidence).pathname, fullPage: true });
+  const signInLink = sessionPage.getByRole("link", { name: "Sign in" });
+  assert.equal(await signInLink.getAttribute("href"), "/auth/sign-in?next=%2Fcare%2Frequest");
+  await signInLink.click();
+  await sessionPage.getByRole("heading", { name: "Sign in to Skycar" }).waitFor();
+  assert.equal(new URL(sessionPage.url()).searchParams.get("next"), "/care/request");
   vehicleMode = "other";
-  await sessionPage.getByRole("button", { name: "I’m signed in — try again" }).click();
+  await sessionPage.goto(`${origin}/care/request`);
   await sessionPage.getByLabel("Active Garage vehicle").waitFor();
   assert.equal(await sessionPage.getByLabel("Active Garage vehicle").inputValue(), otherVehicle.id);
   assert.equal(await sessionPage.getByLabel("Active Garage vehicle").locator(`option[value="${vehicle.id}"]`).count(), 0);

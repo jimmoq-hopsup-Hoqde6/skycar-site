@@ -152,5 +152,6 @@ export default function RequestStatus({ id }: { id: string }) {
         <section className={styles.panel} aria-labelledby="details"><h2 id="details">Your request</h2><dl><dt>Service</dt><dd>{receipt.service === "repair" ? "Repair" : "Cleaning"}</dd><dt>Preferred timing</dt><dd>{windows[receipt.preferred_window]} — preference only</dd><dt>What you told us</dt><dd className={styles.description}>{receipt.description}</dd><dt>Request reference</dt><dd className={styles.reference}>{receipt.id}</dd></dl><p className={styles.note}>This receipt does not confirm a booking, technician, quote or payment. Times are shown in your device’s local timezone.</p></section>
       </div>
     </>}
+    <p className={styles.note}><Link href="/auth/sign-out">Sign out on this device</Link></p>
   </main>;
 }
