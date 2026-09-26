@@ -52,16 +52,12 @@ A user may hold multiple roles.
 - Backend owns authoritative business state.
 - Frontend may optimistically render only when rollback is safe.
 
-## Booking state baseline
-draft -> submitted -> quoted -> awaiting_payment -> confirmed -> assigned -> in_progress -> completed
-
-Exceptional states:
-cancelled
-expired
-disputed
-refunded
-
-Transitions must be validated server-side.
+## Care state baseline (supersedes the original combined booking chain)
+Accepted D-006 and Issue #14 require separate quote, assignment, fulfilment
+and money lifecycles. See FOUNDATION_ARCHITECTURE.md section 9 and
+[CARE_API.md](CARE_API.md). Customer stages are server-owned projections,
+not another booking state machine. Refunds and disputes never imply a
+physical-work transition. No client may write authoritative states.
 
 ## Security baseline
 - No secrets in frontend code or repository
