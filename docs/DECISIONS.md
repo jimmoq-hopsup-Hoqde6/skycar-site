@@ -91,3 +91,26 @@ Impact:
 - Prioritise a short service request path and manual/operational fulfilment before advanced automation.
 - Do not broaden V1 into mechanical repairs, roadside, insurance, nationwide coverage or a full vehicle marketplace.
 - Sale-Ready becomes the next acquisition extension after the core service flow, without replacing Garage.
+
+## D-GARAGE-001 — Garage mutation boundary
+Date: 2026-09-20
+Status: IMPLEMENTATION OF ACCEPTED #2 / D-006
+
+Decision:
+Own-vehicle create/edit/archive goes through one authenticated, atomic database RPC.
+The RPC derives ownership from auth.uid(), rejects unknown fields, checks the expected
+vehicle revision, and records mutation history, audit metadata and idempotent results
+in the same transaction. Direct authenticated writes to public.vehicles and its
+system-created vehicle_history are revoked; owner-entered events require a future
+validated Garage event API rather than direct database inserts.
+Vehicle identity, existing read policies and Care references remain unchanged.
+
+Reason:
+An HTTP-only check can be bypassed by clients of the exposed database API. The same
+ownership, retry and stale-edit rules must hold at both boundaries.
+
+Impact:
+Garage UI consumes docs/GARAGE_API.md. Other workstreams must not write vehicles
+directly or introduce another ownership model. New migration remains subject to
+isolated database and release verification under #1/#8. No live migration is authorised
+or performed by committing the implementation.
