@@ -125,6 +125,7 @@ function addFixture(databaseUrl) {
 function capture(databaseUrl, outputDirectory) {
   if (runQuiet(cli, ["--version"]).trim() !== CLI_VERSION)
     throw new Error("CLI_VERSION_MISMATCH");
+  mkdirSync(outputDirectory, { recursive: true, mode: 0o700 });
   const env = {
     ...databaseEnv(databaseUrl),
     CI: "true",
@@ -157,7 +158,6 @@ function capture(databaseUrl, outputDirectory) {
     restoreStatus: "NOT_RUN",
   });
   const recovered = decryptBundle(envelope, privateKey);
-  mkdirSync(outputDirectory, { recursive: true, mode: 0o700 });
   for (const [name, value] of Object.entries(recovered)) {
     writeFileSync(join(outputDirectory, name), Buffer.from(value, "base64"), {
       mode: 0o600,
