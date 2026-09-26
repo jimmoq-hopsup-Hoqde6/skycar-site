@@ -152,6 +152,7 @@ source_db=$(node "$helper" status-db "$work_root/source-status.json")
 source_manifest_hash=$(node "$helper" manifest "$source_db" "$work_root/source-baseline.json")
 source_server_version=$(PGCONNECT_TIMEOUT=10 psql "$source_db" -X -q -A -t -v ON_ERROR_STOP=1 -c 'SHOW server_version;')
 node "$helper" fixture "$source_db"
+source_expected_hash=$(node "$helper" manifest "$source_db" "$work_root/source-expected.json")
 node "$helper" capture "$source_db" "$recovered"
 
 "$cli" stop --project-id source --no-backup >"$work_root/source-stop.log" 2>&1
@@ -195,7 +196,7 @@ PGCONNECT_TIMEOUT=10 psql "$target_db" -X -q -v ON_ERROR_STOP=1 \
 
 target_after_hash=$(node "$helper" verify "$target_db" \
   "$work_root/source-baseline.json" "$work_root/target-baseline.json" \
-  "$work_root/target-after.json" "$recovered")
+  "$work_root/source-expected.json" "$work_root/target-after.json" "$recovered")
 assert_core_health_and_loopback target
 
 "$cli" stop --project-id target --no-backup >"$work_root/target-stop.log" 2>&1
@@ -215,6 +216,7 @@ test -z "$(docker volume ls -q --filter label=com.supabase.cli.project=target)"
   echo "| Supabase CLI / Node | $SUPABASE_CLI_VERSION / $(node --version) |"
   echo "| Local PostgreSQL server | $source_server_version |"
   echo "| Source/target baseline manifest | MATCH ($source_manifest_hash) |"
+  echo "| Synthetic source expected-state manifest | CAPTURED ($source_expected_hash) |"
   echo "| Target post-restore manifest | VERIFIED ($target_after_hash) |"
   echo '| Accepted export/encrypt/full-tag decrypt | PASS |'
   echo '| Restore order | roles → schema → data; ON_ERROR_STOP=1 |'
