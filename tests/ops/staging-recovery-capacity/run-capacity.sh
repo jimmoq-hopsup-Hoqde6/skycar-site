@@ -68,7 +68,8 @@ disk_monitor &
 monitor_pid=$!
 
 install -d -o postgres -g postgres -m 0700 "$PGDATA"
-password_file=$(mktemp)
+password_file="$PGDATA/.init-password"
+install -o postgres -g postgres -m 0600 /dev/null "$password_file"
 printf '%s\n' 'synthetic-ci-only' > "$password_file"
 chown postgres:postgres "$password_file"
 gosu postgres initdb \
