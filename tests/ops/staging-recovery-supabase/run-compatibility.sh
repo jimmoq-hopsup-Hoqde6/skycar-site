@@ -46,10 +46,11 @@ for command in init start status stop; do "$cli" "$command" --help >/dev/null; d
 test "$(grep -c '^project_id = "source"$' "$source_project/supabase/config.toml")" = 1
 test "$(grep -c '^project_id = "target"$' "$target_project/supabase/config.toml")" = 1
 
-create_internal_network() {
+create_loopback_network() {
   local network=$1
-  docker network create --driver bridge --internal "$network" >/dev/null
-  test "$(docker network inspect --format '{{.Internal}}' "$network")" = true
+  docker network create --driver bridge \
+    -o com.docker.network.bridge.host_binding_ipv4=127.0.0.1 "$network" >/dev/null
+  test "$(docker network inspect --format '{{index .Options "com.docker.network.bridge.host_binding_ipv4"}}' "$network")" = 127.0.0.1
 }
 
 project_containers() {
@@ -101,9 +102,10 @@ record_images() {
 }
 
 start_project() {
-  local project=$1 network=$2 log=$3
-  create_internal_network "$network"
-  if ! "$cli" start --workdir "$project" --network-id "$network" \
+  local workdir=$1 network=$2 log=$3 project_id
+  project_id=$(basename "$workdir")
+  create_loopback_network "$network"
+  if ! "$cli" start --workdir "$workdir" --network-id "$network" \
     --exclude "$exclude_services" --yes >"$log" 2>&1; then
     local category='unclassified CLI start failure'
     if grep -Eqi 'unhealthy|health check' "$log"; then
@@ -116,12 +118,12 @@ start_project() {
       category='container image acquisition failure'
     fi
     printf 'Local Supabase %s start failed: %s; private-log-sha256=%s\n' \
-      "$project" "$category" "$(sha256sum "$log" | cut -d' ' -f1)" >&2
+      "$project_id" "$category" "$(sha256sum "$log" | cut -d' ' -f1)" >&2
     while IFS= read -r id; do
       test -n "$id" || continue
       docker inspect --format 'container={{.Name}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Config.Image}}' "$id" \
         | sed 's#container=/#container=#' >&2
-    done <<< "$(project_containers "$project")"
+    done <<< "$(project_containers "$project_id")"
     return 1
   fi
 }
