@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { APPLICATION_SHA, CLI_VERSION, validateGate, validateConfig, dumpPlan, prepareDumpScript, encryptBundle, capture, runQuiet } from '../../ops/staging-backup/backup.mjs';
+import { APPLICATION_SHA, CLI_VERSION, EMPTY_TARGET_SQL, validateGate, validateConfig, dumpPlan, prepareDumpScript, encryptBundle, capture, runQuiet, formatFailure } from '../../ops/staging-backup/backup.mjs';
 import { decryptBundle } from '../../ops/staging-backup/decrypt.mjs';
 import { RECOVERY_MANIFEST_SQL, RECOVERY_ORACLE_NAME, createRecoveryOracle } from '../../ops/staging-backup/recovery-contract.mjs';
 
@@ -51,7 +51,9 @@ for (const [name, value] of Object.entries({
 })) {
   test(`reject ${name} before invoking commands`, () => {
     let calls = 0;
-    assert.throws(() => capture({ ...environment(), [name]: value }, () => { calls++; }), /BACKUP_GATE_REJECTED/);
+    let error;
+    try { capture({ ...environment(), [name]: value }, () => { calls++; }); } catch (caught) { error = caught; }
+    assert.equal(formatFailure(error), 'SKYCAR_BACKUP_FAILURE phase=configuration category=validation');
     assert.equal(calls, 0);
   });
 }
@@ -256,8 +258,71 @@ for (const failure of ['roles', 'schema', 'data', 'empty', 'version', 'nonempty-
   });
 }
 
-test('command errors never return child diagnostics', () => {
-  assert.throws(() => runQuiet(process.execPath, ['-e', "console.error('private-sentinel'); process.exit(1)"]), /^Error: BACKUP_COMMAND_FAILED$/);
+test('subprocess failures expose only allowlisted phase/category tokens', () => {
+  let commandError; let spawnError;
+  try { runQuiet(process.execPath, ['-e', "console.error('private-sentinel'); process.exit(1)"], {}, 'roles-export'); } catch (error) { commandError = error; }
+  try { runQuiet('/nonexistent-skycar-review-binary', [], {}, 'schema-export'); } catch (error) { spawnError = error; }
+  assert.equal(formatFailure(commandError), 'SKYCAR_BACKUP_FAILURE phase=roles-export category=command');
+  assert.equal(formatFailure(spawnError), 'SKYCAR_BACKUP_FAILURE phase=schema-export category=spawn');
+  assert.doesNotMatch(`${formatFailure(commandError)}${formatFailure(spawnError)}`, /private-sentinel|nonexistent-skycar-review-binary/);
+});
+
+function classifiedCapture({ mutateEnvironment, intercept, internal } = {}) {
+  const temp = mkdtempSync(join(tmpdir(), 'backup-classification-test-'));
+  let error;
+  try {
+    const e = { ...environment(), RUNNER_TEMP: temp };
+    if (mutateEnvironment) mutateEnvironment(e);
+    capture(e, (command, args, options, phase) => {
+      if (intercept) {
+        const value = intercept({ command, args, options, phase });
+        if (value !== undefined) return value;
+      }
+      return fakeCommand(command, args, options);
+    }, internal);
+  } catch (caught) { error = caught; }
+  const token = formatFailure(error);
+  assert.deepEqual(readdirSync(temp), []);
+  rmSync(temp, { recursive: true, force: true });
+  return token;
+}
+
+test('representative capture failures are precisely classified without private values', () => {
+  const privateSentinel = 'private-host password SQL key path sentinel';
+  const results = [];
+  results.push(classifiedCapture({ mutateEnvironment: e => { e.STAGING_SUPABASE_DB_HOST = privateSentinel; } }));
+  results.push(classifiedCapture({ intercept: ({ phase }) => phase === 'toolchain' ? 'unexpected-version' : undefined }));
+  let baselines = 0;
+  results.push(classifiedCapture({ intercept: ({ args, phase }) => {
+    if (phase.startsWith('baseline-') && args.includes(EMPTY_TARGET_SQL) && ++baselines === 1) return privateSentinel;
+  } }));
+  results.push(classifiedCapture({ intercept: ({ phase }) => phase === 'roles-script' ? privateSentinel : undefined }));
+  results.push(classifiedCapture({ intercept: ({ phase }) => {
+    if (phase === 'schema-export') throw new Error(privateSentinel);
+  } }));
+  results.push(classifiedCapture({ internal: { createRecoveryOracle: () => { throw new Error(privateSentinel); } } }));
+  results.push(classifiedCapture({ internal: { encryptBundle: () => { throw new Error(privateSentinel); } } }));
+  results.push(classifiedCapture({ internal: { writeOutput: () => { throw new Error(privateSentinel); } } }));
+  assert.deepEqual(results, [
+    'SKYCAR_BACKUP_FAILURE phase=configuration category=validation',
+    'SKYCAR_BACKUP_FAILURE phase=toolchain category=validation',
+    'SKYCAR_BACKUP_FAILURE phase=baseline-before category=validation',
+    'SKYCAR_BACKUP_FAILURE phase=roles-script category=validation',
+    'SKYCAR_BACKUP_FAILURE phase=schema-export category=unknown',
+    'SKYCAR_BACKUP_FAILURE phase=oracle category=unknown',
+    'SKYCAR_BACKUP_FAILURE phase=encryption category=unknown',
+    'SKYCAR_BACKUP_FAILURE phase=output category=unknown',
+  ]);
+  assert.doesNotMatch(results.join('\n'), /private-host|password|SQL|key|path|sentinel/);
+});
+
+test('unknown exceptions collapse to the fixed unknown token and CLI emits no raw error', () => {
+  assert.equal(formatFailure(new Error('private-sentinel')), 'SKYCAR_BACKUP_FAILURE phase=unknown category=unknown');
+  const helper = fileURLToPath(new URL('../../ops/staging-backup/backup.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [helper, '--unsupported'], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'SKYCAR_BACKUP_FAILURE phase=configuration category=validation\n');
 });
 
 test('workflow contract: manual protected backup, no raw artifact, secretless PR tests', () => {

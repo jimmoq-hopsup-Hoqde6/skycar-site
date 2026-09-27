@@ -93,6 +93,20 @@ script otherwise does not propagate the database URL's TLS options. Invalid TLS,
 host, user/ref, revision, missing config, unexpected baseline or any command
 failure aborts without an artifact. Do not relax TLS to recover a failed run.
 
+Failed capture runs emit exactly one fixed diagnostic token with an allowlisted
+`phase` and `category`, for example
+`SKYCAR_BACKUP_FAILURE phase=baseline-before category=command`. Phases distinguish
+configuration, toolchain, the before/after baseline and manifest checks, each
+roles/schema/data script-generation and export step, oracle creation, encryption
+and final output. Categories are limited to `validation`, `spawn`, `command` and
+`unknown`. The token identifies where the fail-closed stop occurred; it is not a
+credential, connectivity or compatibility diagnosis. Raw exceptions, subprocess
+stdout/stderr, arguments, environment values, connection identifiers, SQL, keys
+and paths remain suppressed. Unknown failures collapse to the fixed
+`phase=unknown category=unknown` token. A failed run still removes temporary SQL
+and ciphertext output and must not be retried until the token and unchanged
+controls receive a new reviewed disposition.
+
 The ephemeral Ubuntu 24.04 runner installs client major 17 from PostgreSQL's
 signed Apt repository, checking the published signing-key fingerprint first.
 Its patch level is supplied by that signed repository and reported in the install

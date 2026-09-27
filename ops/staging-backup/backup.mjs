@@ -34,6 +34,41 @@ SELECT 'EMPTY_STAGING_CONFIRMED';`;
 const SHA = /^[a-f0-9]{40}$/;
 const reject = () => { throw new Error('BACKUP_GATE_REJECTED'); };
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const FAILURE_PHASES = new Set([
+  'configuration', 'toolchain', 'baseline-before', 'manifest-before',
+  'roles-script', 'roles-export', 'schema-script', 'schema-export',
+  'data-script', 'data-export', 'baseline-after', 'manifest-after',
+  'oracle', 'encryption', 'output', 'unknown',
+]);
+const FAILURE_CATEGORIES = new Set(['validation', 'spawn', 'command', 'unknown']);
+
+class BackupFailure extends Error {
+  constructor(phase, category) {
+    super('SAFE_BACKUP_FAILURE');
+    this.phase = FAILURE_PHASES.has(phase) ? phase : 'unknown';
+    this.category = FAILURE_CATEGORIES.has(category) ? category : 'unknown';
+  }
+}
+
+function failure(phase, category) { throw new BackupFailure(phase, category); }
+
+function withPhase(phase, action, validationCodes = []) {
+  try { return action(); } catch (error) {
+    if (error instanceof BackupFailure) throw error;
+    if (validationCodes.includes(error?.message)) failure(phase, 'validation');
+    failure(phase, 'unknown');
+  }
+}
+
+export function formatFailure(error) {
+  if (error instanceof BackupFailure) {
+    return `SKYCAR_BACKUP_FAILURE phase=${error.phase} category=${error.category}`;
+  }
+  if (error?.message === 'BACKUP_GATE_REJECTED') {
+    return 'SKYCAR_BACKUP_FAILURE phase=configuration category=validation';
+  }
+  return 'SKYCAR_BACKUP_FAILURE phase=unknown category=unknown';
+}
 
 export function validateGate(e) {
   if (e.GITHUB_REPOSITORY !== 'jimmoq-hopsup-Hoqde6/skycar-site' ||
@@ -121,68 +156,91 @@ export function encryptBundle(files, publicKey, metadata) {
 }
 
 // No subprocess output or exception is emitted: even failures can contain credentials/data.
-export function runQuiet(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 300000, ...options });
-  if (result.error || result.status !== 0) throw new Error('BACKUP_COMMAND_FAILED');
+export function runQuiet(command, args, options = {}, failurePhase = 'toolchain') {
+  let result;
+  try {
+    result = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 300000, ...options });
+  } catch { failure(failurePhase, 'spawn'); }
+  if (result.error) failure(failurePhase, 'spawn');
+  if (result.status !== 0) failure(failurePhase, 'command');
   return result.stdout;
 }
 
-export function capture(e, run = runQuiet) {
-  const { key } = validateConfig(e);
+export function capture(e, run = runQuiet, internal = {}) {
+  const { key } = withPhase('configuration', () => validateConfig(e), ['BACKUP_GATE_REJECTED']);
+  const makeOracle = internal.createRecoveryOracle || createRecoveryOracle;
+  const encrypt = internal.encryptBundle || encryptBundle;
+  const writeOutput = internal.writeOutput || ((path, value) =>
+    writeFileSync(path, value, { mode: 0o600, flag: 'wx' }));
   const cli = fileURLToPath(new URL('./node_modules/.bin/supabase', import.meta.url));
   const output = join(e.RUNNER_TEMP, 'skycar-backup-encrypted');
   // A fresh output directory prevents upload of a stale/partial prior attempt.
-  mkdirSync(output, { mode: 0o700 });
+  withPhase('output', () => mkdirSync(output, { mode: 0o700 }));
   let work;
   let succeeded = false;
   try {
     work = mkdtempSync(join(tmpdir(), 'skycar-backup-'));
+    const runPhase = (phase, command, args, options) => {
+      try { return run(command, args, options, phase); } catch (error) {
+        if (error instanceof BackupFailure) throw error;
+        failure(phase, 'unknown');
+      }
+    };
     const childEnv = {
       PATH: e.PATH, HOME: work, TMPDIR: work,
       PGSSLMODE: 'verify-full', PGSSLROOTCERT: '/etc/ssl/certs/ca-certificates.crt',
       PGCONNECT_TIMEOUT: '15', PGOPTIONS: '-c default_transaction_read_only=on -c statement_timeout=180000',
       CI: 'true', SUPABASE_TELEMETRY_DISABLED: 'true',
     };
-    const cliVersion = run(cli, ['--version'], { env: childEnv }).trim();
-    const pgDumpVersion = run('pg_dump', ['--version'], { env: childEnv }).trim();
-    const psqlVersion = run('psql', ['--version'], { env: childEnv }).trim();
-    if (cliVersion !== CLI_VERSION) reject();
-    if (!/^pg_dump \(PostgreSQL\) 17\./.test(pgDumpVersion) || !/^psql \(PostgreSQL\) 17\./.test(psqlVersion)) reject();
+    const cliVersion = runPhase('toolchain', cli, ['--version'], { env: childEnv }).trim();
+    const pgDumpVersion = runPhase('toolchain', 'pg_dump', ['--version'], { env: childEnv }).trim();
+    const psqlVersion = runPhase('toolchain', 'psql', ['--version'], { env: childEnv }).trim();
+    if (cliVersion !== CLI_VERSION) failure('toolchain', 'validation');
+    if (!/^pg_dump \(PostgreSQL\) 17\./.test(pgDumpVersion) || !/^psql \(PostgreSQL\) 17\./.test(psqlVersion)) {
+      failure('toolchain', 'validation');
+    }
     const databaseEnv = { ...childEnv, PGHOST: e.STAGING_SUPABASE_DB_HOST, PGPORT: '5432',
       PGUSER: e.STAGING_SUPABASE_DB_USER, PGPASSWORD: e.STAGING_SUPABASE_DB_PASSWORD, PGDATABASE: 'postgres' };
-    const verifyEmpty = () => {
-      const result = run('psql', ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-c', EMPTY_TARGET_SQL], {
+    const verifyEmpty = phase => {
+      const result = runPhase(phase, 'psql', ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-c', EMPTY_TARGET_SQL], {
         env: databaseEnv,
       });
-      if (result.trim() !== 'EMPTY_STAGING_CONFIRMED') reject();
+      if (result.trim() !== 'EMPTY_STAGING_CONFIRMED') failure(phase, 'validation');
     };
-    verifyEmpty();
-    const readManifest = () => parseManifest(run('psql', ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1'], {
-      input: RECOVERY_MANIFEST_SQL, env: databaseEnv,
-    }).trim());
-    const sourceBaseline = readManifest();
+    verifyEmpty('baseline-before');
+    const readManifest = phase => {
+      const value = runPhase(phase, 'psql', ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1'], {
+        input: RECOVERY_MANIFEST_SQL, env: databaseEnv,
+      }).trim();
+      try { return parseManifest(value); } catch { failure(phase, 'validation'); }
+    };
+    const sourceBaseline = readManifest('manifest-before');
     const files = {};
     for (const [name, args] of dumpPlan('postgresql://postgres:unused@localhost:5432/postgres')) {
+      const stem = name.slice(0, -4);
       // The pinned CLI generates its documented pg_dump filters. Execute locally so
       // libpq TLS/read-only settings are explicit, not lost at a Docker boundary.
-      const script = prepareDumpScript(run(cli, args, { env: childEnv }));
-      const sql = run('bash', ['--noprofile', '--norc'], { input: script, env: databaseEnv, cwd: work });
-      if (!sql?.trim()) throw new Error('BACKUP_EMPTY_DUMP');
-      const path = join(work, name);
-      writeFileSync(path, sql, { mode: 0o600, flag: 'wx' });
-      if (statSync(path).size > 32 * 1024 * 1024) throw new Error('BACKUP_SIZE_LIMIT');
-      files[name] = readFileSync(path).toString('base64');
+      const scriptValue = runPhase(`${stem}-script`, cli, args, { env: childEnv });
+      const script = withPhase(`${stem}-script`, () => prepareDumpScript(scriptValue), ['BACKUP_GATE_REJECTED']);
+      const sql = runPhase(`${stem}-export`, 'bash', ['--noprofile', '--norc'], { input: script, env: databaseEnv, cwd: work });
+      withPhase(`${stem}-export`, () => {
+        if (!sql?.trim()) failure(`${stem}-export`, 'validation');
+        const path = join(work, name);
+        writeFileSync(path, sql, { mode: 0o600, flag: 'wx' });
+        if (statSync(path).size > 32 * 1024 * 1024) failure(`${stem}-export`, 'validation');
+        files[name] = readFileSync(path).toString('base64');
+      });
     }
-    verifyEmpty();
-    const expectedState = readManifest();
-    if (JSON.stringify(sourceBaseline) !== JSON.stringify(expectedState)) throw new Error('BACKUP_SOURCE_CHANGED_DURING_CAPTURE');
+    verifyEmpty('baseline-after');
+    const expectedState = readManifest('manifest-after');
+    if (JSON.stringify(sourceBaseline) !== JSON.stringify(expectedState)) failure('manifest-after', 'validation');
     const dumpHashes = Object.entries(files).map(([name, bytes]) => ({ name, sha256: hash(Buffer.from(bytes, 'base64')) }));
-    const oracle = createRecoveryOracle({
+    const oracle = withPhase('oracle', () => makeOracle({
       sourceBaseline,
       expectedState,
       toolchain: { cliVersion, pgDumpVersion, psqlVersion, serverVersion: sourceBaseline.serverVersion },
       dumpHashes,
-    });
+    }), ['RECOVERY_MANIFEST_INVALID', 'RECOVERY_TOOLCHAIN_INVALID', 'RECOVERY_DUMP_HASHES_INVALID']);
     files[RECOVERY_ORACLE_NAME] = Buffer.from(`${JSON.stringify(oracle)}\n`).toString('base64');
     const manifest = {
       applicationSha: APPLICATION_SHA, workflowSha: e.GITHUB_SHA,
@@ -192,8 +250,8 @@ export function capture(e, run = runQuiet) {
       recoveryContractVersion: RECOVERY_CONTRACT_VERSION,
       restoreStatus: 'NOT_RUN', storageObjects: 'NOT_INCLUDED',
     };
-    const envelope = encryptBundle(files, key, manifest);
-    writeFileSync(join(output, 'backup.enc.json'), JSON.stringify(envelope), { mode: 0o600, flag: 'wx' });
+    const envelope = withPhase('encryption', () => encrypt(files, key, manifest), ['RECOVERY_ORACLE_MISSING']);
+    withPhase('output', () => writeOutput(join(output, 'backup.enc.json'), JSON.stringify(envelope)));
     succeeded = true;
     return output;
   } finally {
@@ -208,8 +266,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     else if (process.argv[2] === '--capture') capture(process.env);
     else reject();
     console.log(process.argv[2] === '--gate' ? 'Backup revision gate passed.' : 'Encrypted export captured. Restore verification NOT RUN.');
-  } catch {
-    console.error('Staging backup stopped; no raw diagnostic or backup content published. Check approved configuration and private recovery procedure.');
+  } catch (error) {
+    console.error(formatFailure(error));
     process.exitCode = 1;
   }
 }
