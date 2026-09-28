@@ -52,6 +52,8 @@ screen; do not invent region/host/ref or use a transaction pooler.
 | Kind | Name | Requirement |
 | --- | --- | --- |
 | Existing secret | `STAGING_SUPABASE_DB_PASSWORD` | Marcel's saved database password; do not reset or duplicate requests |
+| Secret | `STAGING_SUPABASE_DB_CA_CERT_B64` | Canonical base64 of one canonical PEM CA certificate downloaded from this project's authenticated Database Settings; never the system CA bundle |
+| Secret | `STAGING_SUPABASE_DB_CA_SHA256` | Lowercase 64-character SHA-256 of that certificate's DER bytes, independently verified against the downloaded certificate |
 | Secret | `STAGING_SUPABASE_PROJECT_REF` | Administrator-verified existing isolated project ref |
 | Secret | `STAGING_SUPABASE_DB_HOST` | Its session pooler `aws-…pooler.supabase.com` hostname |
 | Secret | `STAGING_SUPABASE_DB_USER` | `postgres.` followed by that exact project ref |
@@ -79,6 +81,45 @@ manager, separate from the archive, never in GitHub, Actions, chat or public log
 Do not run this key-generation example in a public Actions job. The private key is
 needed to recover a backup; losing it makes the ciphertext unusable.
 
+## Explicit database CA trust configuration
+
+The reviewed CA correction adds two protected **environment secrets**, consumed
+only by the capture step. It does not configure them or authorise a retry.
+After independent source acceptance, obtain a separate installation/configuration
+disposition. An authorised administrator then downloads the Server root/CA
+certificate from the **existing isolated project's Database Settings → SSL
+Configuration** using the authenticated Supabase dashboard. Verify that the
+download belongs to that exact project; do not use a certificate taken from an
+unverified network connection or substitute a system trust bundle.
+
+On an administrator-controlled workstation, parse the downloaded certificate
+with Node's `X509Certificate`, require `ca === true`, and use `toString()` to
+normalise it to one PEM certificate with LF line endings and a terminal newline.
+Base64-encode those UTF-8 PEM bytes with no wrapping for
+`STAGING_SUPABASE_DB_CA_CERT_B64`. Independently calculate SHA-256 over the
+certificate's DER bytes (`X509Certificate.raw`, equivalent to
+`openssl x509 -in downloaded.cer -outform DER`) for
+`STAGING_SUPABASE_DB_CA_SHA256`. Store the lowercase hexadecimal digest.
+Transfer both values directly to the protected environment; do not print or
+paste them into chat, issues, Actions logs or source. Keep the existing database
+password unchanged. Record only redacted presence/equality and unchanged-control
+evidence for independent verification, then await a separate exact-run release.
+
+Capture rejects missing, oversized, malformed or noncanonical base64/PEM,
+multiple certificates, trailing data, non-CA certificates and fingerprint
+mismatch before invoking any subprocess. It writes the verified certificate
+with mode `0600` inside the private temporary mode-`0700` work directory and
+passes only that path as `PGSSLROOTCERT`. The certificate and its input fields
+are excluded from child environments, output metadata and the encrypted archive.
+Handled success and failure remove the whole work directory; abrupt termination
+relies on disposal of the runner. There is no system-store or insecure fallback.
+
+This fixes an explicit trust-configuration gap identified after run 36422281209;
+it does not establish that CA trust was the only reason that run failed.
+Hosted TLS/authentication and real capture remain unverified until a separately
+approved run succeeds. Official guidance: [Supabase psql](https://supabase.com/docs/guides/database/psql)
+and [SSL enforcement](https://supabase.com/docs/guides/platform/ssl-enforcement).
+
 ## Capture behavior and limitations
 
 Locked Supabase CLI `2.117.0` generates its official roles/schema/data dump
@@ -87,8 +128,8 @@ known connection exports are strictly checked and removed. Real connection
 values are supplied only through the database subprocess environment, never
 interpolated into shell or passed to the CLI. The generated script is captured
 privately, never printed. It runs with PostgreSQL 17 client tools on the runner. This
-local execution deliberately retains `PGSSLMODE=verify-full`, the system CA trust
-store, connection timeout and read-only session options; the CLI's generated
+local execution deliberately retains `PGSSLMODE=verify-full`, hostname verification,
+the explicitly pinned database CA, connection timeout and read-only session options; the CLI's generated
 script otherwise does not propagate the database URL's TLS options. Invalid TLS,
 host, user/ref, revision, missing config, unexpected baseline or any command
 failure aborts without an artifact. Do not relax TLS to recover a failed run.

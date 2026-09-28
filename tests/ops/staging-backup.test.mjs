@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { generateKeyPairSync, createHash, X509Certificate } from 'node:crypto';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,22 @@ import { join } from 'node:path';
 import { APPLICATION_SHA, CLI_VERSION, EMPTY_TARGET_SQL, validateGate, validateConfig, dumpPlan, prepareDumpScript, encryptBundle, capture, runQuiet, formatFailure } from '../../ops/staging-backup/backup.mjs';
 import { decryptBundle } from '../../ops/staging-backup/decrypt.mjs';
 import { RECOVERY_MANIFEST_SQL, RECOVERY_ORACLE_NAME, createRecoveryOracle } from '../../ops/staging-backup/recovery-contract.mjs';
+
+// Public synthetic CA only; its generated private key was discarded. Never a hosted CA.
+const syntheticCA = `-----BEGIN CERTIFICATE-----
+MIIBpjCCAUugAwIBAgIUeTKIAMg/Jrtjosxx3gMlOs8DldMwCgYIKoZIzj0EAwIw
+KDEmMCQGA1UEAwwdU2t5Y2FyIHN5bnRoZXRpYyB0ZXN0IENBIG9ubHkwHhcNMjYw
+OTI4MTM1MzUyWhcNMzYwOTI1MTM1MzUyWjAoMSYwJAYDVQQDDB1Ta3ljYXIgc3lu
+dGhldGljIHRlc3QgQ0Egb25seTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABMf9
+kFoXbqiKHiW7Z+C1LX++OS+/Vb6VD+9VglZz53cFMDcW+iXtuMnhDuCCRSA69CyL
+HWjddNmfglYqqGm4k+qjUzBRMB0GA1UdDgQWBBRcuBdp+9af8s8agEpqn54emzJo
+hDAfBgNVHSMEGDAWgBRcuBdp+9af8s8agEpqn54emzJohDAPBgNVHRMBAf8EBTAD
+AQH/MAoGCCqGSM49BAMCA0kAMEYCIQDHNo+Hlui5R/KXoDyLfvhqC58hor8gKcbf
+xGBYObCOXQIhAOmvaybNpBERw9cnprUcALtqfLrqvFKwLv+FbSoZxwse
+-----END CERTIFICATE-----
+`;
+const caBase64 = Buffer.from(syntheticCA).toString('base64');
+const caFingerprint = createHash('sha256').update(new X509Certificate(syntheticCA).raw).digest('hex');
 
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 3072 });
 const fingerprint = createHash('sha256').update(publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
@@ -26,6 +42,8 @@ function environment() {
     STAGING_SUPABASE_DB_PASSWORD: 'synthetic /:#?%@ quote\'"& password',
     STAGING_BACKUP_PUBLIC_KEY: publicKey.export({ type: 'spki', format: 'pem' }),
     STAGING_BACKUP_KEY_SHA256: fingerprint,
+    STAGING_SUPABASE_DB_CA_CERT_B64: caBase64,
+    STAGING_SUPABASE_DB_CA_SHA256: caFingerprint,
   };
 }
 
@@ -37,6 +55,51 @@ test('valid approved dispatch and target; URL safely encodes password without sh
   assert.equal(u.hostname, e.STAGING_SUPABASE_DB_HOST);
   assert.equal(u.pathname, '/postgres');
   assert.equal(u.port, '5432');
+});
+
+const invalidCAs = [
+  ['missing', undefined], ['null', null], ['non-string', {}], ['empty', ''],
+  ['malformed base64', '!private-certificate-sentinel!'],
+  ['whitespace', `${caBase64}\n`], ['extra padding', `${caBase64}=`],
+  ['oversized', 'A'.repeat(32772)],
+  ['not PEM', Buffer.from('private-certificate-sentinel').toString('base64')],
+  ['DER instead of PEM', new X509Certificate(syntheticCA).raw.toString('base64')],
+  ['two certificates', Buffer.from(syntheticCA + syntheticCA).toString('base64')],
+  ['leading text', Buffer.from('private-certificate-sentinel\n' + syntheticCA).toString('base64')],
+  ['trailing text', Buffer.from(syntheticCA + 'private-certificate-sentinel').toString('base64')],
+  ['noncanonical PEM', Buffer.from(syntheticCA.replaceAll('\n', '\r\n')).toString('base64')],
+  ['invalid certificate', Buffer.from('-----BEGIN CERTIFICATE-----\nYWJj\n-----END CERTIFICATE-----\n').toString('base64')],
+];
+for (const [label, value] of invalidCAs) {
+  test(`CA ${label} rejects before any subprocess or output directory`, () => {
+    let calls = 0; let error;
+    try { capture({ ...environment(), STAGING_SUPABASE_DB_CA_CERT_B64: value }, () => { calls++; }); }
+    catch (caught) { error = caught; }
+    assert.equal(calls, 0);
+    assert.equal(formatFailure(error), 'SKYCAR_BACKUP_FAILURE phase=configuration category=validation');
+  });
+}
+
+test('CA pin is required, canonical lowercase DER SHA-256, and must match', () => {
+  for (const value of [undefined, null, {}, '', '0'.repeat(64), caFingerprint.toUpperCase(), `${caFingerprint}\n`,
+    createHash('sha256').update(syntheticCA).digest('hex')]) {
+    let calls = 0; let error;
+    try { capture({ ...environment(), STAGING_SUPABASE_DB_CA_SHA256: value }, () => { calls++; }); }
+    catch (caught) { error = caught; }
+    assert.equal(calls, 0);
+    assert.equal(formatFailure(error), 'SKYCAR_BACKUP_FAILURE phase=configuration category=validation');
+  }
+});
+
+test('invalid private CA content is never printed by the capture CLI', () => {
+  const helper = fileURLToPath(new URL('../../ops/staging-backup/backup.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [helper, '--capture'], {
+    env: { ...environment(), STAGING_SUPABASE_DB_CA_CERT_B64: Buffer.from('private-certificate-sentinel').toString('base64') },
+    encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'SKYCAR_BACKUP_FAILURE phase=configuration category=validation\n');
 });
 
 for (const [name, value] of Object.entries({
@@ -179,13 +242,21 @@ test('F1: offline CLI rejects invalid tags before creating any plaintext; full t
 });
 
 function fakeCommand(command, args, options) {
+  assert.equal(options.env.PGSSLROOTCERT, join(options.env.HOME, 'database-ca.pem'));
+  assert.equal(readFileSync(options.env.PGSSLROOTCERT, 'utf8'), syntheticCA);
   if (args[0] === '--version') {
     if (command === 'pg_dump') return 'pg_dump (PostgreSQL) 17.6';
     if (command === 'psql') return 'psql (PostgreSQL) 17.6';
     return CLI_VERSION;
   }
   assert.equal(options.env.PGSSLMODE, 'verify-full');
-  assert.equal(options.env.PGSSLROOTCERT, '/etc/ssl/certs/ca-certificates.crt');
+  assert.equal(options.env.PGSSLROOTCERT, join(options.env.HOME, 'database-ca.pem'));
+  assert.equal(readFileSync(options.env.PGSSLROOTCERT, 'utf8'), syntheticCA);
+  assert.equal(statSync(options.env.PGSSLROOTCERT).mode & 0o777, 0o600);
+  assert.equal(statSync(options.env.HOME).mode & 0o777, 0o700);
+  assert.ok(!('STAGING_SUPABASE_DB_CA_CERT_B64' in options.env));
+  assert.ok(!('STAGING_SUPABASE_DB_CA_SHA256' in options.env));
+  assert.ok(!args.join(' ').includes(syntheticCA));
   assert.match(options.env.PGOPTIONS, /default_transaction_read_only=on/);
   assert.ok(!('STAGING_SUPABASE_DB_PASSWORD' in options.env));
   if (command === 'psql') {
@@ -218,7 +289,7 @@ test('capture writes only encrypted artifact, decrypts all dumps, and cleans pla
   let workingDirectory;
   try {
     const output = capture({ ...environment(), RUNNER_TEMP: temp }, (command, args, options) => {
-      workingDirectory = options.cwd || workingDirectory;
+      workingDirectory = options.env.HOME;
       return fakeCommand(command, args, options);
     });
     assert.deepEqual(readdirSync(output), ['backup.enc.json']);
@@ -230,6 +301,9 @@ test('capture writes only encrypted artifact, decrypts all dumps, and cleans pla
     assert.equal(envelope.header.storageObjects, 'NOT_INCLUDED');
     assert.equal(Object.keys(decryptBundle(envelope, privateKey)).length, 4);
     assert.ok(!bytes.includes('serverVersion'));
+    assert.ok(!bytes.includes(syntheticCA));
+    assert.ok(!bytes.includes(caBase64));
+    assert.ok(!bytes.includes(caFingerprint));
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -239,7 +313,7 @@ for (const failure of ['roles', 'schema', 'data', 'empty', 'version', 'nonempty-
     let dump = 0; let work; let probes = 0;
     try {
       assert.throws(() => capture({ ...environment(), RUNNER_TEMP: temp }, (command, args, options) => {
-        work = options.cwd || work;
+        work = options.env.HOME;
         if (failure === 'version' && args[0] === '--version') return 'unexpected-version';
         if (command === 'psql') {
           probes++;
@@ -333,6 +407,11 @@ test('workflow contract: manual protected backup, no raw artifact, secretless PR
   assert.match(workflow, /environment: skycar-staging/);
   assert.match(workflow, /refs\/heads\/fix\/phone-test-delivery/);
   assert.match(workflow, /backup\.enc\.json/);
+  const [beforeCapture, captureStep] = workflow.split('      - name: Capture encrypted read-only export');
+  assert.doesNotMatch(beforeCapture, /STAGING_SUPABASE_DB_CA/);
+  for (const name of ['STAGING_SUPABASE_DB_CA_CERT_B64', 'STAGING_SUPABASE_DB_CA_SHA256']) {
+    assert.ok(captureStep.includes(name + ': ${{ secrets.' + name + ' }}'));
+  }
   assert.doesNotMatch(workflow, /path:.*(\.sql|\*|\.log)/);
   assert.doesNotMatch(checks, /secrets\.|environment:/);
   assert.match(checks, /revision: \[head, integration\]/);

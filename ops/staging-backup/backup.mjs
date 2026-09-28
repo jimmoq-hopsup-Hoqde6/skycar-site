@@ -1,4 +1,4 @@
-import { createCipheriv, createHash, createPublicKey, publicEncrypt, randomBytes, constants } from 'node:crypto';
+import { createCipheriv, createHash, createPublicKey, publicEncrypt, randomBytes, constants, X509Certificate } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
@@ -104,12 +104,32 @@ export function validateConfig(e) {
     const fingerprint = hash(key.export({ type: 'spki', format: 'der' }));
     if (fingerprint !== e.STAGING_BACKUP_KEY_SHA256) reject();
   } catch { reject(); }
+  const ca = validateDatabaseCA(e);
   const url = new URL('postgresql://localhost/postgres');
   url.hostname = host;
   url.port = '5432';
   url.username = `postgres.${ref}`;
   url.password = encodeURIComponent(e.STAGING_SUPABASE_DB_PASSWORD);
-  return { url: url.href, key };
+  return { url: url.href, key, ca };
+}
+
+function validateDatabaseCA(e) {
+  // Pin one canonical PEM certificate, not the runner's ambient trust store.
+  // Node's base64 and X509 parsers are permissive: round-trip both encodings
+  // to reject ignored bytes, multiple PEM blocks and trailing data.
+  try {
+    const encoded = e.STAGING_SUPABASE_DB_CA_CERT_B64;
+    const fingerprint = e.STAGING_SUPABASE_DB_CA_SHA256;
+    if (typeof encoded !== 'string' || encoded.length === 0 || encoded.length > 32768 ||
+        typeof fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(fingerprint)) reject();
+    const bytes = Buffer.from(encoded, 'base64');
+    if (bytes.toString('base64') !== encoded) reject();
+    const certificate = new X509Certificate(bytes);
+    const pem = certificate.toString();
+    if (!bytes.equals(Buffer.from(pem, 'utf8')) || !certificate.ca ||
+        hash(certificate.raw) !== fingerprint) reject();
+    return pem;
+  } catch { reject(); }
 }
 
 export function dumpPlan(url) {
@@ -167,7 +187,7 @@ export function runQuiet(command, args, options = {}, failurePhase = 'toolchain'
 }
 
 export function capture(e, run = runQuiet, internal = {}) {
-  const { key } = withPhase('configuration', () => validateConfig(e), ['BACKUP_GATE_REJECTED']);
+  const { key, ca } = withPhase('configuration', () => validateConfig(e), ['BACKUP_GATE_REJECTED']);
   const makeOracle = internal.createRecoveryOracle || createRecoveryOracle;
   const encrypt = internal.encryptBundle || encryptBundle;
   const writeOutput = internal.writeOutput || ((path, value) =>
@@ -180,6 +200,8 @@ export function capture(e, run = runQuiet, internal = {}) {
   let succeeded = false;
   try {
     work = mkdtempSync(join(tmpdir(), 'skycar-backup-'));
+    const caPath = join(work, 'database-ca.pem');
+    withPhase('configuration', () => writeFileSync(caPath, ca, { mode: 0o600, flag: 'wx' }));
     const runPhase = (phase, command, args, options) => {
       try { return run(command, args, options, phase); } catch (error) {
         if (error instanceof BackupFailure) throw error;
@@ -188,7 +210,7 @@ export function capture(e, run = runQuiet, internal = {}) {
     };
     const childEnv = {
       PATH: e.PATH, HOME: work, TMPDIR: work,
-      PGSSLMODE: 'verify-full', PGSSLROOTCERT: '/etc/ssl/certs/ca-certificates.crt',
+      PGSSLMODE: 'verify-full', PGSSLROOTCERT: caPath,
       PGCONNECT_TIMEOUT: '15', PGOPTIONS: '-c default_transaction_read_only=on -c statement_timeout=180000',
       CI: 'true', SUPABASE_TELEMETRY_DISABLED: 'true',
     };
