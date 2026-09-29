@@ -40,7 +40,37 @@ const FAILURE_PHASES = new Set([
   'data-script', 'data-export', 'baseline-after', 'manifest-after',
   'oracle', 'encryption', 'output', 'unknown',
 ]);
-const FAILURE_CATEGORIES = new Set(['validation', 'spawn', 'command', 'unknown']);
+const FAILURE_CATEGORIES = new Set([
+  'validation', 'spawn', 'command', 'tls', 'authentication', 'connection', 'baseline', 'unknown',
+]);
+// Match whole English PostgreSQL/libpq diagnostics, not substrings that could
+// occur in a private identifier. Unrecognised detail or multiple attempts fall
+// back to command; captured text is never returned or included in an exception.
+const CONNECTION_PREFIX = String.raw`psql: error: connection to server at "[^"\r\n]+"(?: \([^()\r\n]+\))?, port [0-9]+ failed: `;
+const CONNECTION_HINT = String.raw`(?:\n\tIs the server running on that host and accepting TCP/IP connections\?|\n\tIs the server running on that host and accepting\n\tTCP/IP connections\?)?`;
+const PSQL_FAILURE_SIGNATURES = [
+  ['tls', new RegExp('^' + CONNECTION_PREFIX + String.raw`SSL error: certificate verify failed$`)],
+  ['tls', new RegExp('^' + CONNECTION_PREFIX + String.raw`server certificate for "[^"\r\n]+" does not match host name "[^"\r\n]+"$`)],
+  ['authentication', new RegExp('^' + CONNECTION_PREFIX + String.raw`FATAL: +password authentication failed for user "[^"\r\n]+"$`)],
+  ['authentication', new RegExp('^' + CONNECTION_PREFIX + String.raw`fe_sendauth: no password supplied$`)],
+  ['connection', new RegExp('^' + CONNECTION_PREFIX + '(?:Connection refused|Network is unreachable|No route to host|Connection timed out)' + CONNECTION_HINT + '$')],
+  ['connection', new RegExp('^' + CONNECTION_PREFIX + 'timeout expired$')],
+  ['connection', /^psql: error: could not translate host name "[^"\r\n]+" to address: (?:Name or service not known|Temporary failure in name resolution)$/],
+];
+
+// Used only for the existing fixed baseline psql commands. Exit status alone
+// cannot distinguish a rejected baseline from permissions or other SQL errors.
+export function classifyPsqlFailure(result) {
+  if (typeof result?.stderr !== 'string' || result.stderr.length > 16384) return 'command';
+  const diagnostic = result.stderr.replace(/\r\n/g, '\n').trimEnd();
+  if ([1, 3].includes(result.status)) {
+    return /^ERROR: +Unexpected (?:staging baseline|migration history)(?:\nCONTEXT: +PL\/pgSQL function inline_code_block line [0-9]+ at RAISE)?$/.test(diagnostic)
+      ? 'baseline' : 'command';
+  }
+  if (result.status !== 2) return 'command';
+  const matches = PSQL_FAILURE_SIGNATURES.filter(([, signature]) => signature.test(diagnostic));
+  return matches.length === 1 ? matches[0][0] : 'command';
+}
 
 class BackupFailure extends Error {
   constructor(phase, category) {
@@ -176,13 +206,20 @@ export function encryptBundle(files, publicKey, metadata) {
 }
 
 // No subprocess output or exception is emitted: even failures can contain credentials/data.
-export function runQuiet(command, args, options = {}, failurePhase = 'toolchain') {
+export function runQuiet(command, args, options = {}, failurePhase = 'toolchain', classifyFailure) {
   let result;
   try {
     result = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 300000, ...options });
   } catch { failure(failurePhase, 'spawn'); }
   if (result.error) failure(failurePhase, 'spawn');
-  if (result.status !== 0) failure(failurePhase, 'command');
+  if (result.status !== 0) {
+    let category = 'command';
+    try {
+      const candidate = classifyFailure?.({ status: result.status, stderr: result.stderr });
+      if (FAILURE_CATEGORIES.has(candidate)) category = candidate;
+    } catch { /* Classifier errors must not expose subprocess data. */ }
+    failure(failurePhase, category);
+  }
   return result.stdout;
 }
 
@@ -202,8 +239,8 @@ export function capture(e, run = runQuiet, internal = {}) {
     work = mkdtempSync(join(tmpdir(), 'skycar-backup-'));
     const caPath = join(work, 'database-ca.pem');
     withPhase('configuration', () => writeFileSync(caPath, ca, { mode: 0o600, flag: 'wx' }));
-    const runPhase = (phase, command, args, options) => {
-      try { return run(command, args, options, phase); } catch (error) {
+    const runPhase = (phase, command, args, options, classifier) => {
+      try { return run(command, args, options, phase, classifier); } catch (error) {
         if (error instanceof BackupFailure) throw error;
         failure(phase, 'unknown');
       }
@@ -226,7 +263,7 @@ export function capture(e, run = runQuiet, internal = {}) {
     const verifyEmpty = phase => {
       const result = runPhase(phase, 'psql', ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-c', EMPTY_TARGET_SQL], {
         env: databaseEnv,
-      });
+      }, classifyPsqlFailure);
       if (result.trim() !== 'EMPTY_STAGING_CONFIRMED') failure(phase, 'validation');
     };
     verifyEmpty('baseline-before');

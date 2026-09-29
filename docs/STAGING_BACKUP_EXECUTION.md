@@ -139,14 +139,41 @@ Failed capture runs emit exactly one fixed diagnostic token with an allowlisted
 `SKYCAR_BACKUP_FAILURE phase=baseline-before category=command`. Phases distinguish
 configuration, toolchain, the before/after baseline and manifest checks, each
 roles/schema/data script-generation and export step, oracle creation, encryption
-and final output. Categories are limited to `validation`, `spawn`, `command` and
-`unknown`. The token identifies where the fail-closed stop occurred; it is not a
-credential, connectivity or compatibility diagnosis. Raw exceptions, subprocess
+and final output. Categories are limited to `validation`, `spawn`, `command`,
+`unknown`, and the baseline-psql-only observations below:
+
+| Category | Recognised observation |
+| --- | --- |
+| `tls` | Complete English libpq certificate-verification or hostname-mismatch diagnostic |
+| `authentication` | Complete English password-authentication rejection or missing-password diagnostic |
+| `connection` | Complete English DNS, refused/unreachable/no-route or timeout diagnostic |
+| `baseline` | The fixed baseline query's exact `Unexpected staging baseline` or `Unexpected migration history` exception |
+
+Only the existing before/after baseline commands receive this classifier; there
+is no additional connection attempt or secret consumer. Matching requires the
+whole diagnostic and a compatible exit status, not a substring in an identifier.
+Unknown/localised diagnostics, additional unrecognised text, multiple attempts
+(including mixed classes), unsupported exit statuses and oversized diagnostics
+remain `command`. A generic SQL error is not labelled a rejected baseline merely
+because psql returned a script-error status. See PostgreSQL's
+[psql exit-status documentation](https://www.postgresql.org/docs/17/app-psql.html#APP-PSQL-EXIT-STATUS).
+
+These categories describe observed signatures, not verified root causes or
+permission to reset credentials, change configuration, relax TLS or retry.
+`baseline` does not distinguish server-version mismatch from nonempty data;
+unknown permission, schema and other query errors stay generic. In particular,
+the failed run `36601748743` remains `baseline-before/command`: this change cannot
+retroactively establish its cause. Raw exceptions, subprocess
 stdout/stderr, arguments, environment values, connection identifiers, SQL, keys
 and paths remain suppressed. Unknown failures collapse to the fixed
 `phase=unknown category=unknown` token. A failed run still removes temporary SQL
 and ciphertext output and must not be retried until the token and unchanged
 controls receive a new reviewed disposition.
+
+The diagnostics-only correction requires independent review, a separate
+installation/pin disposition and a separate exact new-run release before hosted
+use. Failed runs must not be rerun. Synthetic classification, sentinel-redaction
+and cleanup tests do not demonstrate successful hosted capture or recovery.
 
 The ephemeral Ubuntu 24.04 runner installs client major 17 from PostgreSQL's
 signed Apt repository, checking the published signing-key fingerprint first.
