@@ -224,6 +224,7 @@ export function Garage() {
         <div className="vehicle-identity"><div className="vehicle-monogram" aria-hidden="true">{vehicle.make.slice(0, 2).toUpperCase()}</div><p>{vehicle.make}</p><h2>{vehicle.model}</h2><p className="muted">{vehicle.variant || 'Variant not added'}</p></div>
         <dl className="vehicle-registration"><div><dt>Registration</dt><dd>{vehicle.registration || 'Not added'}</dd></div><div><dt>State</dt><dd>{vehicle.registration_state || 'Not added'}</dd></div></dl>
         <div className="vehicle-actions">{!vehicle.archived_at && <button className="secondary-button" disabled={locked} onClick={() => { setNotice(''); setMutation(null); setEditor(vehicle); }}>Edit details</button>}<button className="text-button" aria-expanded={history === vehicle.id} onClick={() => setHistory(history === vehicle.id ? null : vehicle.id)}>History {history === vehicle.id ? '−' : '+'}</button></div>
+        {!vehicle.archived_at && <Link className="secondary-button" href={`/garage/vehicles/${vehicle.id}/photo`}>Add vehicle photo</Link>}
         {history === vehicle.id && <VehicleHistory vehicle={vehicle} />}
         {!vehicle.archived_at && <button className="archive-button" disabled={locked} onClick={() => void archive(vehicle)}>{archiving === vehicle.id ? 'Archiving…' : 'Archive vehicle'}</button>}
       </article>)}</div>}
