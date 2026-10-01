@@ -64,7 +64,8 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
     </label>
     {message && <p className="auth-error" role="alert">{message}</p>}
     <button type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in securely"}</button>
-    <p className="auth-help">Use only the disposable staging account supplied through the approved private channel. Skycar does not offer self-registration here.</p>
+    <p className="auth-help">Garage sign-in is available to invited testers. Use your test account details.</p>
+    <p className="auth-help"><Link href="/care/request">Request a repair or cleaning service without an account</Link>.</p>
   </form>;
 }
 

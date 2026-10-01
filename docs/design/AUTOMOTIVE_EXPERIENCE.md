@@ -54,3 +54,32 @@ Method: built-in image generation tool; no manufacturer image is reused. The ima
 
 Prompt:
 > Use case: product-mockup. Asset type: original hero photograph for Skycar, a premium multi-brand car ownership and care mobile web app. Create an exceptionally polished photorealistic automotive studio photograph, landscape 1536x1024 composition: one unbranded elegant graphite-silver modern five-door fastback car, front three-quarter view, facing toward the viewer and slightly left, realistic production-car proportions and realistic fine surface details. Car entirely visible with wheels and ground reflection, occupying central 70 percent of image width and lower half of frame. Deep midnight navy seamless studio background #0a1420. Beautiful precise soft white rim lighting across bonnet and roof; subtle icy cyan reflected light along lower side, restrained not neon. Premium European automotive campaign photographic quality, low camera angle, sophisticated cinematic contrast, clean quiet image. Leave generous dark negative space above the car and at the edges for responsive app cropping. No text, no logos, no badge, no people, no UI, no license plate letters, no watermark. This is a decorative brand image, not a specific customer's vehicle.
+
+## Garage reference refinement — 2 October 2026
+
+Marcel supplied a desktop Garage reference with a navy sidebar, light canvas,
+large vehicle centrepiece, ownership cards, activity and a right action column.
+The review now follows that visual direction at desktop and phone sizes. The
+vehicle selector keeps multiple cars accessible; Overview and History use saved
+records, with existing repair/cleaning, My Jobs, photo upload, editing and archive
+flows. The reference's sample BMW statistics, health status, insurance, reminders,
+valuation, membership and document controls are not backed by current contracts.
+They are not presented as available features.
+
+Photo upload can save a private original but currently has no authorised image
+read/display endpoint. The centrepiece therefore uses an explicit generic photo
+placeholder, rather than a fabricated customer-car image. Enabling that display
+contract is the main remaining step toward the reference's visual impact.
+
+Validation: lint, TypeScript, production build and 164 unit tests passed. Browser
+fixtures cover 1440, 390 and 320 pixel layouts, selection, missing fields, Overview /
+History, editor/cancel, archive filter, empty add and unauthenticated redaction.
+Screenshots and fixture results are in docs/ui-review/garage-reference. Fixtures
+are synthetic; no hosted authentication/database or real iPhone proof is claimed.
+Newer fixes from the test branch are incorporated, including uncertain retry
+preservation and photo-upload recovery. Existing browser regressions are adapted
+for the selected-vehicle view and step-based guest intake.
+
+Additional regression evidence: 18 existing Garage browser checks and all 43
+Garage recovery scenarios passed, including pending/uncertain writes, focus and
+page return, account replacement, failed validation and exact immutable retries.

@@ -18,7 +18,7 @@ export function createGaragePhotoHandler(getContext) {
         code: known ? error.code : 'INTERNAL_ERROR',
         message: known ? error.message : 'Something went wrong. Please try again.',
         fieldErrors: known ? error.fieldErrors : {},
-        retryable: !known || error.status >= 500,
+        retryable: !known || (error.status >= 500 && error.code !== 'CONFIGURATION_UNAVAILABLE'),
       }, meta: { requestId } }, { status: known ? error.status : 500, headers });
     }
   };

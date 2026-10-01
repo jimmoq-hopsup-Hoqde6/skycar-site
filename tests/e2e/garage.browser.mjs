@@ -65,8 +65,8 @@ try {
     return success(vehicle);
   });
   await page.reload();
-  await page.getByRole('heading', { name: 'Corolla', exact: true }).waitFor();
-  check(await page.getByRole('heading', { name: 'CX-5', exact: true }).count() === 1, 'desktop lists both fixtures');
+  await page.getByRole('heading', { name: /Corolla$/ }).waitFor();
+  check(await page.locator('#garage-vehicle option').filter({ hasText: 'CX-5' }).count() === 1, 'desktop lists both fixtures');
   await page.screenshot({ path: `${output}/garage-desktop.png`, fullPage: true });
 
   // Focus/page-return is an account boundary. A late account-A response must not
@@ -79,31 +79,31 @@ try {
   const accountBResponse = page.waitForResponse(response => response.url().includes('/api/v1/garage/vehicles?') && response.request().method() === 'GET');
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await accountBResponse;
-  await page.getByRole('heading', { name: 'Account B Car', exact: true }).waitFor();
+  await page.getByRole('heading', { name: /Account B Car$/ }).waitFor();
   check(await page.getByText('DEMO001').count() === 0 && await page.getByText('DEMO002').count() === 0, 'account replacement hides prior-account vehicle details');
   releaseDelayedGarage();
   await page.waitForTimeout(100);
-  check(await page.getByRole('heading', { name: 'Account B Car', exact: true }).count() === 1 && await page.getByRole('heading', { name: 'Corolla', exact: true }).count() === 0, 'late prior-account response cannot repopulate Garage');
+  check(await page.getByRole('heading', { name: /Account B Car$/ }).count() === 1 && await page.getByRole('heading', { name: /Corolla$/ }).count() === 0, 'late prior-account response cannot repopulate Garage');
 
   mode = 'failure';
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow')));
   await page.getByRole('heading', { name: 'We couldn’t load your Garage' }).waitFor();
-  check(await page.locator('.vehicle-card').count() === 0 && await page.getByText('B456').count() === 0, 'failed revalidation keeps prior-account Garage details hidden');
+  check(await page.locator('.selected-vehicle').count() === 0 && await page.getByText('B456').count() === 0, 'failed revalidation keeps prior-account Garage details hidden');
 
   mode = 'normal';
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await page.getByRole('heading', { name: 'Corolla', exact: true }).waitFor();
-  check(await page.getByRole('heading', { name: 'CX-5', exact: true }).count() === 1, 'same screen can recover after successful ownership revalidation');
-  await page.getByRole('button', { name: 'History +' }).first().click();
+  await page.getByRole('heading', { name: /Corolla$/ }).waitFor();
+  check(await page.locator('#garage-vehicle option').filter({ hasText: 'CX-5' }).count() === 1, 'same screen can recover after successful ownership revalidation');
+  await page.getByRole('button', { name: 'History', exact: true }).first().click();
   await page.getByText('Added to Garage').waitFor();
   check(await page.getByText('Added to Garage').count() === 1, 'history renders');
-  await page.getByRole('button', { name: 'Edit details' }).first().click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).first().click();
   await page.getByLabel('Model', { exact: true }).fill('Unsaved change');
   await page.getByRole('button', { name: 'Save vehicle', exact: true }).click();
   await page.getByText('This vehicle changed.').waitFor();
   check(await page.getByLabel('Model', { exact: true }).inputValue() === 'Unsaved change', 'conflict preserves unsaved input');
   await page.getByRole('button', { name: 'Discard edits and reload' }).click();
-  await page.getByRole('button', { name: '+ Add a vehicle', exact: true }).click();
+  await page.getByRole('button', { name: 'Add a vehicle', exact: true }).click();
   await page.getByLabel('Make', { exact: true }).fill('Honda');
   await page.getByLabel('Model', { exact: true }).fill('Civic');
   mode = 'uncertain';
@@ -111,28 +111,29 @@ try {
   await page.getByRole('button', { name: 'Retry same save' }).waitFor();
   check(await page.getByLabel('Make', { exact: true }).isDisabled(), 'uncertain save prevents changing the retry payload');
   await page.getByRole('button', { name: 'Retry same save' }).click();
-  await page.getByRole('heading', { name: 'Civic', exact: true }).waitFor();
+  await page.getByRole('heading', { name: /Civic$/ }).waitFor();
   check(retries.length === 2 && retries[0].key === retries[1].key && JSON.stringify(retries[0].body) === JSON.stringify(retries[1].body), 'uncertain retry preserves key and payload');
   check(vehicles.filter(v => v.model === 'Civic').length === 1, 'retry does not create duplicate fixture vehicle');
+  await page.getByLabel('Your vehicles', { exact: true }).selectOption(vehicles[0].id);
   page.on('dialog', dialog => dialog.accept());
-  await page.getByRole('button', { name: 'Archive vehicle', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Archive this vehicle', exact: true }).first().click();
   await page.getByText('Vehicle archived. Its history is still available in Archived.').waitFor();
   await page.getByRole('button', { name: 'Archived', exact: true }).click();
-  await page.getByRole('heading', { name: 'Corolla', exact: true }).waitFor();
-  check(await page.getByRole('button', { name: 'Edit details' }).count() === 0, 'archived vehicles are read-only');
+  await page.getByRole('heading', { name: /Corolla$/ }).waitFor();
+  check(await page.getByRole('button', { name: 'Edit', exact: true }).count() === 0, 'archived vehicles are read-only');
   await page.getByRole('button', { name: 'My vehicles', exact: true }).click();
-  await page.getByRole('heading', { name: 'CX-5', exact: true }).waitFor();
+  await page.getByRole('heading', { name: /CX-5$/ }).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: `${output}/garage-mobile.png`, fullPage: true });
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile list has no horizontal overflow');
-  await page.getByRole('button', { name: '+ Add a vehicle', exact: true }).click();
+  await page.getByRole('button', { name: 'Add a vehicle', exact: true }).click();
   await page.screenshot({ path: `${output}/garage-mobile-form.png`, fullPage: true });
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile editor has no horizontal overflow');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   mode = 'unauthenticated';
   await page.getByRole('button', { name: 'Archived', exact: true }).click();
   await page.getByRole('heading', { name: 'Your Garage is private' }).waitFor();
-  check(await page.locator('.vehicle-card').count() === 0 && await page.getByRole('button', { name: 'Edit details' }).count() === 0, 'expired session hides vehicle cards and edit controls');
+  check(await page.locator('.selected-vehicle').count() === 0 && await page.getByRole('button', { name: 'Edit', exact: true }).count() === 0, 'expired session hides vehicle cards and edit controls');
   check(errors.length === 0, `no browser runtime errors: ${errors.join('; ')}`);
   console.log(`PASS: ${checks} browser checks. Synthetic API fixtures; live auth/DB/device checks remain separate.`);
 } finally { await browser.close(); }

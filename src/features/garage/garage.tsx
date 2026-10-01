@@ -89,6 +89,7 @@ function VehicleEditor({ vehicle, attempt, saving, error, onClose, onSave }: {
 
 export function Garage() {
   const [archived, setArchived] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [page, setPage] = useState<Page<Vehicle>>({ items: [], nextCursor: null });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
@@ -113,7 +114,7 @@ export function Garage() {
       verifiedAccount.current = result.accountId;
       if (!sameAccount) {
         // A replacement account must never see or replay the previous command.
-        pending.current = null; setMutation(null); setEditor(null); setHistory(null); setNotice('');
+        pending.current = null; setMutation(null); setEditor(null); setHistory(null); setSelectedId(null); setNotice('');
       }
       setAccountId(result.accountId);
       setPage(previous => ({ items: cursor && sameAccount ? [...previous.items, ...result.page.items] : result.page.items, nextCursor: result.page.nextCursor }));
@@ -159,6 +160,7 @@ export function Garage() {
       if (!active || verifying.current || !mutation || !accountId || loading || mutation.command.accountId !== accountId || pending.current !== mutation.command) return;
       if (mutation.status === 'success') {
         pending.current = null; setMutation(null); setEditor(null);
+        if (mutation.command.kind === 'save') setSelectedId(mutation.result!.id);
         setNotice(mutation.command.kind === 'archive' ? 'Vehicle archived. Its history is still available in Archived.' : `${mutation.result!.make} ${mutation.result!.model} saved to your Garage.`);
         setLoading(true); void load();
       } else if (mutation.status === 'error') {
@@ -204,10 +206,12 @@ export function Garage() {
   const visibleMutation = accountId && mutation?.command.accountId === accountId && !loading && !error ? mutation : null;
   const archiveError = visibleMutation?.command.kind === 'archive' ? visibleMutation.error : null;
   const archiving = visibleMutation?.command.kind === 'archive' && visibleMutation.status === 'pending' ? visibleMutation.command.vehicle!.id : null;
+  const selected = page.items.find(vehicle => vehicle.id === selectedId) ?? page.items[0];
   const locked = loading || !accountId || !!mutation && ['pending', 'uncertain', 'success'].includes(mutation.status);
   return <main className="garage-shell">
-    <nav className="garage-nav" aria-label="Main navigation"><Link className="wordmark" href="/">skycar<span>●</span></Link><div className="garage-nav-links"><span className="nav-location" aria-current="page">Your Garage</span><Link href="/care/request">Request a service</Link><Link href="/garage/jobs">My Jobs</Link></div></nav>
-    <header className="garage-header"><div><p className="eyebrow">CAR OWNERSHIP, MADE PERSONAL</p><h1>Your <span>Garage.</span></h1><p>A home for your cars, their details and their story.</p></div>
+    <aside className="garage-sidebar"><Link className="garage-brand" href="/" aria-label="Skycar home"><svg viewBox="0 0 160 35" fill="none" aria-hidden="true"><path d="M8 27 34 22C55 0 93 0 119 22l32 5M35 22h84" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>SKYCAR</Link><nav aria-label="Main navigation"><Link href="/garage" aria-current="page"><AppIcon name="garage"/>Garage</Link><Link href="/care/request/garage"><AppIcon name="care"/>Care</Link><Link href="/garage/jobs"><AppIcon name="jobs"/>My Jobs</Link></nav><div className="sidebar-bottom"><AppIcon name="shield"/><p>Your cars.<br/>Your private space.</p><Link href="/auth/sign-out">Sign out</Link></div></aside>
+    <div className="garage-workspace"><div className="garage-topbar"><Link className="mobile-garage-brand" href="/">SKYCAR</Link><span>YOUR OWNERSHIP SPACE</span><Link href="/garage/jobs"><AppIcon name="jobs"/>My Jobs</Link></div><div className="garage-content">
+    <header className="garage-header"><div><p className="eyebrow">A LITTLE MORE PEACE OF MIND</p><h1>Your Garage</h1><p>Everything about your car, in one place.</p></div>
       {!error && !loading && !archived && !editor && <button className="primary-button" disabled={locked} onClick={() => { setNotice(''); setMutation(null); setEditor('new'); }}><AppIcon name="plus"/><span>Add a vehicle</span></button>}
     </header>
     {notice && <p className="garage-notice" role="status">{notice}</p>}
@@ -220,18 +224,19 @@ export function Garage() {
       {error && <section className="garage-empty" role="alert"><h2>{error.code === 'UNAUTHENTICATED' ? 'Your Garage is private' : 'We couldn’t load your Garage'}</h2><p>{error.message}</p>{mutation && <p>Your last change is still unresolved. New changes are paused. Verify the original account to recover the same attempt.</p>}{error.code === 'UNAUTHENTICATED' ? <Link className="secondary-button" href="/auth/sign-in?next=%2Fgarage">Sign in</Link> : <button className="secondary-button" onClick={() => revalidate()}>Try again</button>}</section>}
       {loading && !page.items.length && <div className="garage-loading" role="status">Loading your vehicles…<div className="vehicle-skeleton" /></div>}
       {!loading && !error && !page.items.length && <section className="garage-empty"><div className="empty-symbol" aria-hidden="true">{archived ? '↗' : '+'}</div><h2>{archived ? 'No archived vehicles' : 'Every car has a story'}</h2><p>{archived ? 'Cars you archive will appear here with their saved history.' : 'Start yours by adding a vehicle to your Garage.'}</p>{!archived && <button className="primary-button" disabled={locked} onClick={() => { setMutation(null); setEditor('new'); }}>Add your first vehicle</button>}</section>}
-      {!error && <div className="vehicles-grid">{page.items.map(vehicle => <article className="vehicle-card" key={vehicle.id}>
-        <div className="vehicle-card-top"><span className="vehicle-year">YOUR VEHICLE · {vehicle.year ?? 'YEAR NOT ADDED'}</span><span className="vehicle-badge">{vehicle.archived_at ? 'Archived' : 'In your Garage'}</span></div>
-        <div className="vehicle-identity"><div className="vehicle-monogram" aria-hidden="true"><span>{vehicle.make.slice(0, 2).toUpperCase()}</span><span className="vehicle-monogram-rule"/></div><p>{vehicle.make}</p><h2>{vehicle.model}</h2><p className="muted">{vehicle.variant || 'Variant not added'}</p></div>
-        <dl className="vehicle-registration"><div><dt>Registration</dt><dd className="vehicle-plate">{vehicle.registration || 'Not added'}</dd></div><div><dt>State</dt><dd>{vehicle.registration_state || 'Not added'}</dd></div></dl>
-        <div className="vehicle-actions">{!vehicle.archived_at && <button className="secondary-button" disabled={locked} onClick={() => { setNotice(''); setMutation(null); setEditor(vehicle); }}>Edit details</button>}<button className="text-button" aria-expanded={history === vehicle.id} onClick={() => setHistory(history === vehicle.id ? null : vehicle.id)}>History {history === vehicle.id ? '−' : '+'}</button></div>
-        {!vehicle.archived_at && <Link className="vehicle-photo-link" href={`/garage/vehicles/${vehicle.id}/photo`}>Add a photo <AppIcon name="arrow"/></Link>}
-        {history === vehicle.id && <VehicleHistory vehicle={vehicle} />}
-        {!vehicle.archived_at && <button className="archive-button" disabled={locked} onClick={() => void archive(vehicle)}>{archiving === vehicle.id ? 'Archiving…' : 'Archive vehicle'}</button>}
-      </article>)}</div>}
+      {!error && selected && <>
+        <div className="vehicle-switcher"><label htmlFor="garage-vehicle">Your vehicles</label><select id="garage-vehicle" disabled={locked} value={selected.id} onChange={event => { setSelectedId(event.target.value); setHistory(null); }}>{page.items.map(vehicle => <option key={vehicle.id} value={vehicle.id}>{vehicle.make} {vehicle.model}{vehicle.registration ? ` · ${vehicle.registration}` : ''}</option>)}</select></div>
+        <article className="selected-vehicle" key={selected.id}>
+          <div className="vehicle-hero"><div className="vehicle-summary"><p className="vehicle-kicker">{selected.archived_at ? 'ARCHIVED VEHICLE' : 'IN YOUR GARAGE'}</p><div className="vehicle-title"><h2>{selected.make} {selected.model}</h2>{!selected.archived_at && <button className="text-button" disabled={locked} onClick={() => { setNotice(''); setMutation(null); setEditor(selected); }}>Edit</button>}</div><p className="vehicle-subtitle">{[selected.year, selected.variant].filter(Boolean).join(' · ') || 'Add a few details to make it yours.'}</p><dl className="vehicle-facts"><div><dt>Year</dt><dd>{selected.year ?? 'Not added'}</dd></div><div><dt>Registration</dt><dd>{selected.registration || 'Not added'}</dd></div><div><dt>State / territory</dt><dd>{selected.registration_state || 'Not added'}</dd></div></dl></div>
+          <div className="vehicle-photo-stage"><svg viewBox="0 0 480 210" fill="none" aria-hidden="true"><ellipse cx="246" cy="175" rx="191" ry="14" fill="currentColor" opacity=".05"/><path d="m45 142 9-38 52-18 53-45h125l77 48 59 15 19 38-8 18h-38M126 160h189M47 160h20M124 89l43-35h108l53 35H124Z" stroke="currentColor" strokeWidth="3" strokeLinejoin="round"/><circle cx="97" cy="150" r="29" stroke="currentColor" strokeWidth="3"/><circle cx="354" cy="150" r="29" stroke="currentColor" strokeWidth="3"/><circle cx="97" cy="150" r="13" stroke="currentColor"/><circle cx="354" cy="150" r="13" stroke="currentColor"/><path d="M238 55v33M152 98h160M176 105h18M265 105h18M57 115h39M397 117h25" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/></svg><span>YOUR VEHICLE PHOTO</span><p>Photo preview is not available yet.</p>{!selected.archived_at && <Link href={`/garage/vehicles/${selected.id}/photo`}>Upload a private photo <AppIcon name="arrow"/></Link>}</div>
+          <aside className="vehicle-care-actions"><div className="garage-record-status"><AppIcon name="shield"/><div><strong>Your private record</strong><p>Details saved to your account</p></div></div>{!selected.archived_at && <Link href="/care/request/garage"><AppIcon name="care"/><div><strong>Request car care</strong><p>Repair or refresh your car</p></div><AppIcon name="arrow"/></Link>}<Link href="/garage/jobs"><AppIcon name="jobs"/><div><strong>My service requests</strong><p>Follow progress and next steps</p></div><AppIcon name="arrow"/></Link></aside></div>
+          <div className="vehicle-detail-tabs" aria-label="Vehicle view"><button aria-pressed={history !== selected.id} onClick={() => setHistory(null)}>Overview</button><button aria-pressed={history === selected.id} onClick={() => setHistory(selected.id)}>History</button></div>
+          {history === selected.id ? <VehicleHistory vehicle={selected}/> : <div className="vehicle-overview"><div className="ownership-main"><div className="ownership-cards"><section><AppIcon name="garage"/><h3>Registration</h3><strong>{selected.registration || 'Not added'}</strong><p>{selected.registration_state || 'State not added'}</p>{!selected.archived_at && <button className="text-button" disabled={locked} onClick={() => setEditor(selected)}>Update details <AppIcon name="arrow"/></button>}</section><section><AppIcon name="jobs"/><h3>Vehicle details</h3><strong>{selected.year ?? 'Year not added'}</strong><p>{selected.variant || 'Variant not added'}</p>{!selected.archived_at && <button className="text-button" disabled={locked} onClick={() => setEditor(selected)}>Edit vehicle <AppIcon name="arrow"/></button>}</section></div><VehicleHistory vehicle={selected}/></div><aside className="ownership-quick"><h3>Quick actions</h3>{!selected.archived_at && <Link href={`/garage/vehicles/${selected.id}/photo`}><AppIcon name="plus"/><div><strong>Add a photo</strong><p>Save it privately to your vehicle</p></div><AppIcon name="arrow"/></Link>}<Link href="/garage/jobs"><AppIcon name="jobs"/><div><strong>View all requests</strong><p>Your repair and cleaning history</p></div><AppIcon name="arrow"/></Link>{!selected.archived_at && <button className="archive-button" disabled={locked} onClick={() => void archive(selected)}>{archiving === selected.id ? 'Archiving…' : 'Archive this vehicle'}</button>}</aside></div>}
+        </article>
+      </>}
       {page.nextCursor && !error && <button className="secondary-button load-more" disabled={loading} onClick={() => refresh(page.nextCursor)}>{loading ? 'Loading…' : 'Load more vehicles'}</button>}
     </>}
-    {!loading && !error && !editor && <div className="garage-quick-actions"><Link href="/care/request/garage"><AppIcon name="care"/><span>Request car care</span><AppIcon name="arrow"/></Link><Link href="/garage/jobs"><AppIcon name="jobs"/><span>Follow your requests</span><AppIcon name="arrow"/></Link></div>}
     <footer className="garage-footer">Your vehicle details stay connected to your account. · <Link href="/auth/sign-out">Sign out on this device</Link></footer>
+    </div></div>
   </main>;
 }

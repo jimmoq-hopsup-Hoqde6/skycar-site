@@ -25,6 +25,7 @@ async function scenario(kind, phase, event, boundary, outcome = 'success') {
     const success = (data, owner) => route.fulfill({ json: { data, meta: { accountId: owner } } });
     const failure = (status, code, retryable = false) => route.fulfill({ status, json: { error: { code, message: 'Synthetic verification or write failure', fieldErrors: {}, retryable } } });
     if (req.method() === 'GET') {
+      if (url.pathname.endsWith('/history')) return success({ items: [], nextCursor: null });
       reads++;
       const owner = account, mode = readMode;
       if (holdReads) { validationStarted.resolve(); await finishValidation.promise; }
@@ -55,14 +56,14 @@ async function scenario(kind, phase, event, boundary, outcome = 'success') {
   try {
     await page.goto(`${origin}/garage`);
     if (kind === 'create') {
-      await page.getByRole('button', { name: '+ Add a vehicle', exact: true }).click();
+      await page.getByRole('button', { name: 'Add a vehicle', exact: true }).click();
       await page.getByLabel('Make', { exact: true }).fill('PRIVATE_A');
       await page.getByLabel('Model', { exact: true }).fill('Unresolved change');
     } else if (kind === 'edit') {
-      await page.getByRole('button', { name: 'Edit details', exact: true }).click();
+      await page.getByRole('button', { name: 'Edit', exact: true }).click();
       await page.getByLabel('Model', { exact: true }).fill('Unresolved change');
     }
-    await page.getByRole('button', { name: kind === 'archive' ? 'Archive vehicle' : 'Save vehicle', exact: true }).click();
+    await page.getByRole('button', { name: kind === 'archive' ? 'Archive this vehicle' : 'Save vehicle', exact: true }).click();
     await firstWrite.promise;
     const retryName = kind === 'archive' ? 'Retry same archive' : 'Retry same save';
     if (phase === 'uncertain') await page.getByRole('button', { name: retryName }).waitFor();
@@ -98,10 +99,10 @@ async function scenario(kind, phase, event, boundary, outcome = 'success') {
       }
     }
     if (boundary === 'replacement') {
-      await page.getByRole('heading', { name: 'Replacement car', exact: true }).waitFor();
+      await page.getByRole('heading', { name: /Replacement car$/ }).waitFor();
       // Install a B editor before completing A: old success/error/finally must
       // not close, overwrite, reload or unlock this replacement state.
-      await page.getByRole('button', { name: 'Edit details', exact: true }).click();
+      await page.getByRole('button', { name: 'Edit', exact: true }).click();
       await page.getByLabel('Model', { exact: true }).fill('B unsaved draft');
       const readsBefore = reads;
       if (phase === 'pending') finishWrite.resolve();
@@ -126,10 +127,10 @@ async function scenario(kind, phase, event, boundary, outcome = 'success') {
         assert.equal(await page.locator('.garage-notice').count(), 0, 'return after sign-in relies on authoritative state, not an old success notice');
         if (kind === 'archive') {
           await page.getByRole('button', { name: 'Archived', exact: true }).click();
-          await page.getByRole('heading', { name: 'Original car', exact: true }).waitFor();
-          assert.equal(await page.getByRole('button', { name: 'Edit details' }).count(), 0);
+          await page.getByRole('heading', { name: /Original car$/ }).waitFor();
+          assert.equal(await page.getByRole('button', { name: 'Edit', exact: true }).count(), 0);
         } else {
-          await page.getByRole('heading', { name: 'Unresolved change', exact: true }).waitFor();
+          await page.getByRole('heading', { name: /Unresolved change$/ }).waitFor();
         }
       } else {
         if (phase === 'uncertain' || outcome === 'error') {
@@ -140,8 +141,8 @@ async function scenario(kind, phase, event, boundary, outcome = 'success') {
         await page.getByText(kind === 'archive' ? 'Vehicle archived. Its history is still available in Archived.' : 'PRIVATE_A Unresolved change saved to your Garage.', { exact: true }).waitFor();
         if (kind === 'archive') {
           await page.getByRole('button', { name: 'Archived', exact: true }).click();
-          await page.getByRole('heading', { name: 'Original car', exact: true }).waitFor();
-          assert.equal(await page.getByRole('button', { name: 'Edit details' }).count(), 0);
+          await page.getByRole('heading', { name: /Original car$/ }).waitFor();
+          assert.equal(await page.getByRole('button', { name: 'Edit', exact: true }).count(), 0);
         }
       }
       assert.equal(applied, 1, 'only one committed synthetic mutation');

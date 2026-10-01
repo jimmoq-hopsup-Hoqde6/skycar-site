@@ -45,7 +45,7 @@ try {
     return route.fulfill({ json: { data: receipt } });
   });
   await page.goto(`${origin}/garage`);
-  await page.getByRole('link', { name: 'Book a service', exact: true }).click();
+  await page.getByRole('link', { name: 'Care', exact: true }).click();
   await page.getByLabel('Active Garage vehicle').selectOption(vehicle.id);
   await page.getByLabel('Describe the damage or cleaning work').fill('Scratch on the left rear door');
   await page.getByRole('button', { name: 'Submit for review' }).click();

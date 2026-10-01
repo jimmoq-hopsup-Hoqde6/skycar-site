@@ -1,0 +1,35 @@
+[
+  {
+    "width": 1440,
+    "overflow": false,
+    "selection": "passed",
+    "history": "passed",
+    "editCancel": "passed",
+    "missingDetails": "passed",
+    "archived": "passed"
+  },
+  {
+    "width": 390,
+    "overflow": false,
+    "selection": "passed",
+    "history": "passed",
+    "editCancel": "passed",
+    "missingDetails": "passed",
+    "archived": "passed"
+  },
+  {
+    "width": 320,
+    "overflow": false,
+    "selection": "passed",
+    "history": "passed",
+    "editCancel": "passed",
+    "missingDetails": "passed",
+    "archived": "passed"
+  },
+  {
+    "emptyAdd": "passed",
+    "unauthenticatedRedaction": "passed",
+    "pageErrors": [],
+    "scope": "Synthetic browser fixtures; no live account, database or real-device verification."
+  }
+]

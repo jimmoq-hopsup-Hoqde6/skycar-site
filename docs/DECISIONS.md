@@ -162,3 +162,16 @@ new product capability or live telemetry contract changes are made.
 
 Review candidate only. This decision does not substitute local fixture verification for
 hosted authentication, live intake/delivery or real-device release testing.
+
+## D-UI-003 — Reference-led Garage workspace
+Date: 2026-10-02 (Australia/Adelaide)
+Status: IMPLEMENTED ON REVIEW BRANCH AT USER REQUEST
+
+Use Marcel's supplied Garage image as the visual direction: dark desktop navigation,
+light ownership workspace, one selected vehicle, prominent service actions and a
+responsive mobile composition. Offer only existing destinations and saved fields.
+Overview and History use the existing private vehicle contracts. Do not reproduce
+example mileage, insurance, health status or unsupported tabs. The photo upload
+contract has no display endpoint; use an explicit placeholder instead of attributing
+an unrelated stock vehicle to the customer. Preserve account redaction and immutable
+mutation retries. Incorporate the newer test-branch recovery fixes.
