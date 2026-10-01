@@ -9,7 +9,8 @@ export const config = {
   matcher: [
     "/auth/:path*",
     "/garage/:path*",
-    "/care/:path*",
+    "/care/request/garage",
+    "/care/requests/:path*",
     "/api/v1/auth/:path*",
     "/api/v1/garage/:path*",
     "/api/v1/care/requests/:path*",
