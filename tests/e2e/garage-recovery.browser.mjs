@@ -55,7 +55,7 @@ async function scenario(kind, phase, event, boundary, outcome = 'success') {
   try {
     await page.goto(`${origin}/garage`);
     if (kind === 'create') {
-      await page.getByRole('button', { name: '+ Add a vehicle', exact: true }).click();
+      await page.getByRole('button', { name: 'Add a vehicle', exact: true }).click();
       await page.getByLabel('Make', { exact: true }).fill('PRIVATE_A');
       await page.getByLabel('Model', { exact: true }).fill('Unresolved change');
     } else if (kind === 'edit') {

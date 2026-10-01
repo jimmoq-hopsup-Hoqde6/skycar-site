@@ -103,7 +103,7 @@ try {
   await page.getByText('This vehicle changed.').waitFor();
   check(await page.getByLabel('Model', { exact: true }).inputValue() === 'Unsaved change', 'conflict preserves unsaved input');
   await page.getByRole('button', { name: 'Discard edits and reload' }).click();
-  await page.getByRole('button', { name: '+ Add a vehicle', exact: true }).click();
+  await page.getByRole('button', { name: 'Add a vehicle', exact: true }).click();
   await page.getByLabel('Make', { exact: true }).fill('Honda');
   await page.getByLabel('Model', { exact: true }).fill('Civic');
   mode = 'uncertain';
@@ -125,7 +125,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: `${output}/garage-mobile.png`, fullPage: true });
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile list has no horizontal overflow');
-  await page.getByRole('button', { name: '+ Add a vehicle', exact: true }).click();
+  await page.getByRole('button', { name: 'Add a vehicle', exact: true }).click();
   await page.screenshot({ path: `${output}/garage-mobile-form.png`, fullPage: true });
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile editor has no horizontal overflow');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();

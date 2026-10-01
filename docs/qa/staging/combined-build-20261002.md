@@ -10,4 +10,4 @@ The protected `skycar-v2-staging` preview combines the approved premium design f
 
 Validation: lint, TypeScript, production build, 168 unit tests; built API activation, origin and cookie checks; Care entry, My Jobs, status, guest/photo recovery and full customer journey browser acceptance. Synthetic browser checks include 320/390/1440px home overflow, decodable selected/saved previews, and preview removal after failed identity verification.
 
-Earlier hosted acceptance confirmed guest request b3c4beb6-7e0c-4da7-99cf-be0d4ecd3b21 and private stored photo 0688b25c-f8bf-4523-aea5-958fe4a9fb22. Hosted preview retrieval of that photo is checked after deployment. Physical iPhone review remains a user check; browser viewport checks do not replace it.
+Earlier hosted acceptance confirmed guest request b3c4beb6-7e0c-4da7-99cf-be0d4ecd3b21 and private stored photo 0688b25c-f8bf-4523-aea5-958fe4a9fb22. Hosted preview retrieval of that photo passed after deployment: the authenticated browser decoded the 640px saved image. Physical iPhone review remains a user check; browser viewport checks do not replace it.
