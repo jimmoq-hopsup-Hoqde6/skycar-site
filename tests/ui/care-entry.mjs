@@ -81,7 +81,8 @@ try {
 
   const page = await context.newPage(); page.setDefaultTimeout(10000);
   await page.goto(origin);
-  await page.getByRole("link", { name: "Start a repair or cleaning request" }).click();
+  await page.getByRole("link", { name: "Request a service — no account needed" }).click();
+  await page.getByRole("link", { name: "Use my Garage", exact: true }).click();
   await page.getByRole("heading", { name: /What does your car need today/ }).waitFor();
   await page.getByLabel("Active Garage vehicle").selectOption(vehicle.id);
   await page.getByLabel("Describe the damage or cleaning work").fill(received.description);
@@ -111,7 +112,7 @@ try {
 
   submissionMode = "malformed400";
   const validationPage = await context.newPage();
-  await validationPage.goto(`${origin}/care/request`);
+  await validationPage.goto(`${origin}/care/request/garage`);
   await validationPage.getByLabel("Describe the damage or cleaning work").fill("Initial invalid response attempt");
   const validationStart = keys.length;
   await validationPage.getByRole("button", { name: "Submit for review" }).click();
@@ -126,7 +127,7 @@ try {
   assert.notEqual(bodies[validationStart], bodies[validationStart + 1]);
 
   const focusPage = await context.newPage();
-  await focusPage.goto(`${origin}/care/request`);
+  await focusPage.goto(`${origin}/care/request/garage`);
   await focusPage.getByLabel("Detail or clean my car").check();
   await focusPage.getByLabel("Active Garage vehicle").selectOption(vehicle.id);
   await focusPage.getByLabel("Describe the damage or cleaning work").fill("Keep this same-account draft after focus");
@@ -153,7 +154,7 @@ try {
   vehicleMode = "ready";
   submissionMode = "deferred-success";
   const inFlightPage = await context.newPage();
-  await inFlightPage.goto(`${origin}/care/request`);
+  await inFlightPage.goto(`${origin}/care/request/garage`);
   await inFlightPage.getByLabel("Describe the damage or cleaning work").fill("Keep one request while focus changes");
   const inFlightStart = keys.length;
   const started = new Promise(resolve => { deferredSubmissionStarted = resolve; });
@@ -178,7 +179,7 @@ try {
   vehicleMode = "ready";
   submissionMode = "deferred-success";
   const samePostFirstPage = await context.newPage();
-  await samePostFirstPage.goto(`${origin}/care/request`);
+  await samePostFirstPage.goto(`${origin}/care/request/garage`);
   await samePostFirstPage.getByLabel("Describe the damage or cleaning work").fill("Keep the original command through validation replacement");
   const samePostFirstStart = keys.length;
   const samePostStarted = new Promise(resolve => { deferredSubmissionStarted = resolve; });
@@ -195,11 +196,11 @@ try {
   releaseDeferredSubmission();
   await samePostResponse;
   await samePostFirstPage.waitForTimeout(100);
-  assert.equal(samePostFirstPage.url(), `${origin}/care/request`);
+  assert.equal(samePostFirstPage.url(), `${origin}/care/request/garage`);
   assert.equal(keys.length, samePostFirstStart + 1);
   firstValidation.release();
   await samePostFirstPage.waitForTimeout(50);
-  assert.equal(samePostFirstPage.url(), `${origin}/care/request`);
+  assert.equal(samePostFirstPage.url(), `${origin}/care/request/garage`);
   const latestValidationResponse = samePostFirstPage.waitForResponse(response => response.url().includes("/api/v1/garage/vehicles?") && response.request().method() === "GET");
   latestValidation.release();
   await latestValidationResponse;
@@ -212,7 +213,7 @@ try {
   vehicleMode = "ready";
   submissionMode = "deferred-success";
   const switchedInFlightPage = await context.newPage();
-  await switchedInFlightPage.goto(`${origin}/care/request`);
+  await switchedInFlightPage.goto(`${origin}/care/request/garage`);
   await switchedInFlightPage.getByLabel("Describe the damage or cleaning work").fill("Private in-flight request from the first account");
   const switchedStarted = new Promise(resolve => { deferredSubmissionStarted = resolve; });
   const switchedPostResponse = switchedInFlightPage.waitForResponse(response => response.url().endsWith("/api/v1/care/requests") && response.request().method() === "POST");
@@ -226,7 +227,7 @@ try {
   releaseDeferredSubmission();
   await switchedPostResponse;
   await switchedInFlightPage.waitForTimeout(100);
-  assert.equal(switchedInFlightPage.url(), `${origin}/care/request`);
+  assert.equal(switchedInFlightPage.url(), `${origin}/care/request/garage`);
   switchedValidation.release();
   await switchedRefresh;
   await switchedInFlightPage.getByLabel("Active Garage vehicle").waitFor();
@@ -235,7 +236,7 @@ try {
   assert.equal(await switchedInFlightPage.getByLabel("Describe the damage or cleaning work").isEnabled(), true);
   assert.equal(await switchedInFlightPage.getByRole("button", { name: "Submit for review" }).isEnabled(), true);
   await switchedInFlightPage.waitForTimeout(100);
-  assert.equal(switchedInFlightPage.url(), `${origin}/care/request`);
+  assert.equal(switchedInFlightPage.url(), `${origin}/care/request/garage`);
   assert.equal(await switchedInFlightPage.getByText(received.description).count(), 0);
 
   // A failed validation also fences a completed POST. Reloading the same owner
@@ -243,7 +244,7 @@ try {
   vehicleMode = "ready";
   submissionMode = "deferred-success";
   const failedValidationPage = await context.newPage();
-  await failedValidationPage.goto(`${origin}/care/request`);
+  await failedValidationPage.goto(`${origin}/care/request/garage`);
   await failedValidationPage.getByLabel("Describe the damage or cleaning work").fill("Retain this exact request after validation failure");
   const failedValidationStart = keys.length;
   const failedPostStarted = new Promise(resolve => { deferredSubmissionStarted = resolve; });
@@ -258,11 +259,11 @@ try {
   releaseDeferredSubmission();
   await failedPostResponse;
   await failedValidationPage.waitForTimeout(100);
-  assert.equal(failedValidationPage.url(), `${origin}/care/request`);
+  assert.equal(failedValidationPage.url(), `${origin}/care/request/garage`);
   failedValidation.release();
   await failedGetResponse;
   await failedValidationPage.getByRole("heading", { name: "We couldn’t load your vehicles" }).waitFor();
-  assert.equal(failedValidationPage.url(), `${origin}/care/request`);
+  assert.equal(failedValidationPage.url(), `${origin}/care/request/garage`);
   vehicleMode = "ready";
   await failedValidationPage.getByRole("button", { name: "Try again" }).click();
   await failedValidationPage.getByRole("button", { name: "Check same request" }).waitFor();
@@ -279,7 +280,7 @@ try {
   vehicleMode = "ready";
   submissionMode = "malformed503";
   const uncertainSessionPage = await context.newPage();
-  await uncertainSessionPage.goto(`${origin}/care/request`);
+  await uncertainSessionPage.goto(`${origin}/care/request/garage`);
   await uncertainSessionPage.getByLabel("Describe the damage or cleaning work").fill("Private uncertain request from the first account");
   await uncertainSessionPage.getByRole("button", { name: "Submit for review" }).click();
   await uncertainSessionPage.getByRole("button", { name: "Check same request" }).waitFor();
@@ -295,7 +296,7 @@ try {
   vehicleMode = "ready";
   submissionMode = "malformed503";
   const uncertainAccountPage = await context.newPage();
-  await uncertainAccountPage.goto(`${origin}/care/request`);
+  await uncertainAccountPage.goto(`${origin}/care/request/garage`);
   await uncertainAccountPage.getByLabel("Describe the damage or cleaning work").fill("Private uncertain request before account switch");
   await uncertainAccountPage.getByRole("button", { name: "Submit for review" }).click();
   await uncertainAccountPage.getByRole("button", { name: "Check same request" }).waitFor();
@@ -314,7 +315,7 @@ try {
   vehicleMode = "ready";
   const sessionPage = await context.newPage();
   await sessionPage.setViewportSize({ width: 390, height: 844 });
-  await sessionPage.goto(`${origin}/care/request`);
+  await sessionPage.goto(`${origin}/care/request/garage`);
   await sessionPage.getByLabel("Detail or clean my car").check();
   await sessionPage.getByLabel("Describe the damage or cleaning work").fill("Private draft from the first account");
   await sessionPage.getByLabel("When would you prefer the work?").selectOption("seven_to_fourteen_days");
@@ -325,12 +326,12 @@ try {
   assert.equal(await sessionPage.getByText("Private draft from the first account").count(), 0);
   await sessionPage.screenshot({ path: new URL("mobile-session-required.png", evidence).pathname, fullPage: true });
   const signInLink = sessionPage.getByRole("link", { name: "Sign in" });
-  assert.equal(await signInLink.getAttribute("href"), "/auth/sign-in?next=%2Fcare%2Frequest");
+  assert.equal(await signInLink.getAttribute("href"), "/auth/sign-in?next=%2Fcare%2Frequest%2Fgarage");
   await signInLink.click();
   await sessionPage.getByRole("heading", { name: "Sign in to Skycar" }).waitFor();
-  assert.equal(new URL(sessionPage.url()).searchParams.get("next"), "/care/request");
+  assert.equal(new URL(sessionPage.url()).searchParams.get("next"), "/care/request/garage");
   vehicleMode = "other";
-  await sessionPage.goto(`${origin}/care/request`);
+  await sessionPage.goto(`${origin}/care/request/garage`);
   await sessionPage.getByLabel("Active Garage vehicle").waitFor();
   assert.equal(await sessionPage.getByLabel("Active Garage vehicle").inputValue(), otherVehicle.id);
   assert.equal(await sessionPage.getByLabel("Active Garage vehicle").locator(`option[value="${vehicle.id}"]`).count(), 0);
@@ -340,7 +341,7 @@ try {
 
   vehicleMode = "empty";
   const emptyPage = await context.newPage();
-  await emptyPage.goto(`${origin}/care/request`);
+  await emptyPage.goto(`${origin}/care/request/garage`);
   await emptyPage.getByRole("heading", { name: "Add a vehicle first" }).waitFor();
   assert.equal(await emptyPage.getByRole("link", { name: "Add a vehicle in Garage" }).getAttribute("href"), "/garage");
   console.log("PASS: service entry contract, GET/POST ordering fences, same-account pending preservation, pending-session revalidation, in-flight account-change isolation, validation-failure replay, malformed response recovery, account-switch draft redaction, receipt navigation and empty Garage");

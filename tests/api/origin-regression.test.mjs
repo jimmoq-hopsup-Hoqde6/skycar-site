@@ -66,7 +66,7 @@ test('built writes accept the real page origin and reject origin/proxy spoofing 
       const pageOrigin = mode === 'local' ? base : 'https://phone.skycar.test';
       const env = { ...process.env, SKYCAR_ENV: mode === 'local' ? 'demo' : 'staging', FEATURE_CARE: 'true',
         FEATURE_GARAGE: 'true', NEXT_PUBLIC_SUPABASE_URL: stubUrl,
-        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'synthetic-only', SUPABASE_SECRET_KEY: 'synthetic-server-only' };
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'synthetic-only', SUPABASE_SECRET_KEY: 'sb_secret_synthetic_server_only_fixture' };
       delete env.SKYCAR_APP_ORIGIN;
       if (mode === 'proxy') env.SKYCAR_APP_ORIGIN = pageOrigin;
       const server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', String(port)], { env, stdio: 'ignore' });
