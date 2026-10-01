@@ -7,7 +7,7 @@ import './request-form.css';
 import './guest-request-form.css';
 
 type Receipt = { id:string; stage:string; created_at:string };
-export function GuestRequestForm() {
+export function GuestRequestForm({ initialService = 'repair' }: { initialService?: 'repair' | 'cleaning' }) {
   const [busy,setBusy] = useState(false);
   const [uncertain,setUncertain] = useState(false);
   const [message,setMessage] = useState('');
@@ -44,7 +44,7 @@ export function GuestRequestForm() {
     <header className="care-entry-header"><p className="eyebrow">REPAIR &amp; CLEANING · NO ACCOUNT NEEDED</p><h1>What does your car<br/><span>need today?</span></h1><p>Request a service as a guest. Tell us about your car and how to contact you. An account is optional.</p></header>
     {receipt ? <section className="care-entry-state" role="status"><h2>Request received</h2><p>Your reference: <strong>{receipt.id}</strong></p><p>Your request is saved for review. This is not a confirmed quote or booking. Keep this reference for follow-up.</p><Link className="care-entry-button" href="/">Back to Skycar</Link></section> : <form className="care-entry-form" onSubmit={submit}>
       <fieldset disabled={busy||uncertain}><legend>1. Service and vehicle</legend>
-        <label className="care-field">Service<select name="service" defaultValue="repair"><option value="repair">Fix scratches or dents</option><option value="cleaning">Detail or clean my car</option></select></label>
+        <label className="care-field">Service<select name="service" defaultValue={initialService}><option value="repair">Fix scratches or dents</option><option value="cleaning">Detail or clean my car</option></select></label>
         <label className="care-field">Vehicle make, model and year<input name="vehicle" required minLength={3} maxLength={160} placeholder="e.g. Toyota Corolla 2020" autoComplete="off"/></label>
         <label className="care-field">Describe the work<textarea name="description" required minLength={10} maxLength={2000} rows={5}/></label>
         <label className="care-field">Preferred timing<select name="preferred_window" defaultValue="flexible"><option value="flexible">I’m flexible</option><option value="one_to_two_business_days">Within 1–2 business days</option><option value="seven_to_fourteen_days">Within 7–14 days</option></select></label>

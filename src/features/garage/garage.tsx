@@ -205,7 +205,7 @@ export function Garage() {
   const archiving = visibleMutation?.command.kind === 'archive' && visibleMutation.status === 'pending' ? visibleMutation.command.vehicle!.id : null;
   const locked = loading || !accountId || !!mutation && ['pending', 'uncertain', 'success'].includes(mutation.status);
   return <main className="garage-shell">
-    <nav className="garage-nav" aria-label="Main navigation"><Link className="wordmark" href="/">skycar<span>●</span></Link><div className="garage-nav-links"><span className="nav-location" aria-current="page">Your Garage</span><Link href="/care/request">Book a service</Link><Link href="/garage/jobs">My Jobs</Link></div></nav>
+    <nav className="garage-nav" aria-label="Main navigation"><Link className="wordmark" href="/">skycar<span>●</span></Link><div className="garage-nav-links"><span className="nav-location" aria-current="page">Your Garage</span><Link href="/care/request">Request a service</Link><Link href="/garage/jobs">My Jobs</Link></div></nav>
     <header className="garage-header"><div><p className="eyebrow">CAR OWNERSHIP, MADE PERSONAL</p><h1>Your cars.<br /><span>Your space.</span></h1><p>Keep your vehicle details and history together.</p></div>
       {!error && !loading && !archived && !editor && <button className="primary-button" disabled={locked} onClick={() => { setNotice(''); setMutation(null); setEditor('new'); }}>+ Add a vehicle</button>}
     </header>
