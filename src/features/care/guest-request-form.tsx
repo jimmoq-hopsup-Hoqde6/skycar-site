@@ -29,9 +29,14 @@ export function GuestRequestForm() {
       const result=await response.json();
       if (!response.ok) {
         const retryable=typeof result.error?.retryable==='boolean' ? result.error.retryable : response.status>=500;
-        setUncertain(retryable);
-        if (!retryable) attempt.current=null;
-        setMessage(typeof result.error?.message==='string'?result.error.message:'Your request has not been confirmed.');
+        // A rejected retry cannot tell us whether an earlier response was lost
+        // after saving. Keep that original key until a receipt confirms it.
+        const unresolved=uncertain||retryable;
+        setUncertain(unresolved);
+        if (!unresolved) attempt.current=null;
+        setMessage(unresolved && !retryable
+          ? 'This retry could not confirm your earlier request. Keep checking the same request to avoid submitting it twice.'
+          : typeof result.error?.message==='string'?result.error.message:'Your request has not been confirmed.');
         return;
       }
       setReceipt(guestReceipt(result.data)); attempt.current=null; setUncertain(false);

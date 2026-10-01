@@ -43,7 +43,7 @@ export function garagePhotoRepository(client: SupabaseClient, userId: string) {
     async save(vehicleId: string, upload: Upload, requestId: string) {
       const id = assetId(userId, upload.key);
       const objectPath = `${userId}/vehicles/${vehicleId}/${id}/original.${upload.extension}`;
-      const { data: reservation, error: reserveError } = await client.rpc('garage_reserve_vehicle_photo', {
+      const { data: reservation, error: reserveError, status: reserveStatus } = await client.rpc('garage_reserve_vehicle_photo', {
         p_actor: userId,
         p_vehicle_id: vehicleId,
         p_asset_id: id,
@@ -53,6 +53,9 @@ export function garagePhotoRepository(client: SupabaseClient, userId: string) {
         p_content_sha256: upload.sha256,
         p_key: upload.key,
       });
+      if (reserveError && (reserveStatus === 401 || reserveStatus === 403)) {
+        throw new GarageError('CONFIGURATION_UNAVAILABLE', 503, 'Photo uploads are unavailable right now. This upload was not saved. Please try again later.');
+      }
       if (reserveError) databaseError(reserveError);
       if (reservation?.processing_state === 'stored') {
         return publicVehiclePhoto({

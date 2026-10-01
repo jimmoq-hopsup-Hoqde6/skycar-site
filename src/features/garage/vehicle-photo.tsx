@@ -28,8 +28,9 @@ export function VehiclePhoto({ vehicleId }: { vehicleId: string }) {
     verification.current?.abort();
     const controller = new AbortController(); verification.current = controller;
     setVehicle(null); setNotice('');
-    const identity = await garageAccountPage('?limit=1', { signal: controller.signal });
-    const result = await garageApi<Vehicle>(`/${vehicleId}`, { signal: controller.signal });
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
+    const identity = await garageAccountPage('?limit=1', { signal });
+    const result = await garageApi<Vehicle>(`/${vehicleId}`, { signal });
     if (controller.signal.aborted || !mounted.current) return null;
     if (account.current && account.current !== identity.accountId) {
       attempt.current = null; setFile(null); setRetry(false);
@@ -58,6 +59,17 @@ export function VehiclePhoto({ vehicleId }: { vehicleId: string }) {
     };
   }, [verify]);
 
+  async function reloadVehicle() {
+    if (busy) return;
+    setBusy(true); setError('');
+    try { await verify(); }
+    catch (err) {
+      if (mounted.current && !(err instanceof DOMException && err.name === 'AbortError')) {
+        setError(err instanceof Error ? err.message : 'Unable to verify your account.');
+      }
+    } finally { if (mounted.current) setBusy(false); }
+  }
+
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (busy || !file || !vehicle || vehicle.archived_at) return;
@@ -75,7 +87,7 @@ export function VehiclePhoto({ vehicleId }: { vehicleId: string }) {
       if (!command) { command = { file, key: crypto.randomUUID(), accountId: currentAccount }; attempt.current = command; }
       const controller = new AbortController(); upload.current = controller;
       const receipt = await garageApi<Receipt>(`/${vehicleId}/photo`, {
-        method: 'POST', body: command.file, signal: controller.signal,
+        method: 'POST', body: command.file, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]),
         headers: { 'Content-Type': command.file.type, 'Idempotency-Key': command.key },
       });
       if (!mounted.current || attempt.current !== command) return;
@@ -89,10 +101,12 @@ export function VehiclePhoto({ vehicleId }: { vehicleId: string }) {
       setNotice('Photo saved privately to this vehicle. Photo preview is not available yet.');
     } catch (err) {
       if (!mounted.current) return;
-      const uncertain = !(err instanceof ApiError) || err.retryable;
+      const uncertain = retry || !(err instanceof ApiError) || err.retryable;
       if (!uncertain) attempt.current = null;
       setRetry(uncertain && !!attempt.current);
-      setError(err instanceof Error ? err.message : 'Unable to upload. Retry the same photo.');
+      setError(retry && err instanceof ApiError && !err.retryable
+        ? 'This retry could not confirm your earlier upload. Retry the same photo to avoid saving it twice.'
+        : err instanceof Error ? err.message : 'Unable to upload. Retry the same photo.');
     } finally { if (mounted.current) setBusy(false); }
   }
 
@@ -101,10 +115,12 @@ export function VehiclePhoto({ vehicleId }: { vehicleId: string }) {
     <header className="garage-header"><div><p className="eyebrow">PRIVATE VEHICLE PHOTO</p><h1>Add a vehicle photo</h1><p>JPEG, PNG or WebP, up to 4 MB. Your photo is stored privately.</p></div></header>
     {error && <p className="form-error" role="alert">{error}</p>}
     {notice && <p className="garage-notice" role="status">{notice}</p>}
+    {!vehicle && error && <div className="editor-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void reloadVehicle()}>Reload vehicle</button><Link href={`/auth/sign-in?next=${encodeURIComponent(`/garage/vehicles/${vehicleId}/photo`)}`}>Sign in to your Garage</Link></div>}
     {vehicle ? <section className="garage-editor">
       <h2>{vehicle.make} {vehicle.model}</h2>
       {vehicle.archived_at ? <p>Archived vehicles cannot receive new photos.</p> : <form onSubmit={save}>
         <label>Vehicle photo<input ref={input} type="file" accept={allowedTypes.join(',')} disabled={busy || retry} onChange={event => { setFile(event.target.files?.[0] ?? null); setError(''); setNotice(''); }} /></label>
+        {file && <p style={{ overflowWrap: 'anywhere' }}>Selected photo: {file.name}</p>}
         <div className="editor-actions"><button className="primary-button" type="submit" disabled={busy || !file}>{busy ? 'Uploading…' : retry ? 'Retry same upload' : 'Upload photo'}</button></div>
         {retry && <p>The upload may have reached us. Retry this same photo to confirm it.</p>}
         <p>Photo preview is not available yet. Choose a smaller image if your phone photo exceeds 4 MB.</p>
