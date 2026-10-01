@@ -1,0 +1,83 @@
+[
+  {
+    "route": "/",
+    "width": 1440,
+    "overflow": false
+  },
+  {
+    "route": "/care/request",
+    "width": 1440,
+    "overflow": false
+  },
+  {
+    "width": 1440,
+    "form": "required validation, preselection, back/forward preservation, frozen retry, same key/body and receipt passed"
+  },
+  {
+    "route": "/",
+    "width": 390,
+    "overflow": false
+  },
+  {
+    "route": "/care/request",
+    "width": 390,
+    "overflow": false
+  },
+  {
+    "width": 390,
+    "form": "required validation, preselection, back/forward preservation, frozen retry, same key/body and receipt passed"
+  },
+  {
+    "route": "/",
+    "width": 320,
+    "overflow": false
+  },
+  {
+    "route": "/care/request",
+    "width": 320,
+    "overflow": false
+  },
+  {
+    "width": 320,
+    "form": "required validation, preselection, back/forward preservation, frozen retry, same key/body and receipt passed"
+  },
+  {
+    "route": "/garage (fixture)",
+    "width": 390,
+    "overflow": false
+  },
+  {
+    "route": "/garage/jobs (fixture)",
+    "width": 390,
+    "overflow": false
+  },
+  {
+    "route": "/garage (fixture)",
+    "width": 320,
+    "overflow": false
+  },
+  {
+    "route": "/garage/jobs (fixture)",
+    "width": 320,
+    "overflow": false
+  },
+  {
+    "route": "/garage (fixture)",
+    "width": 1440,
+    "overflow": false
+  },
+  {
+    "route": "/garage/jobs (fixture)",
+    "width": 1440,
+    "overflow": false
+  },
+  {
+    "route": "/auth/sign-in",
+    "width": 390,
+    "overflow": false
+  },
+  {
+    "pageErrors": [],
+    "fixtureNote": "Garage and Jobs used browser-intercepted synthetic data; no live auth/database verification."
+  }
+]

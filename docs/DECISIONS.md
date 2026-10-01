@@ -142,3 +142,23 @@ Repair and cleaning entry cards preselect the corresponding existing guest form 
 This increment adds no product capabilities, pricing claims, database changes or
 booking/payment lifecycle changes. Local visual verification does not replace signed-in
 staging and real iPhone verification. The review branch is not a production release.
+
+## D-UI-002 — Benchmark-led mobile ownership experience
+Date: 2026-10-02 (Australia/Adelaide)
+Status: IMPLEMENTED ON REVIEW BRANCH AT USER REQUEST
+
+Marcel requested research into three leading automotive apps and a stronger Skycar
+experience. Use Tesla's car/service focus, My Porsche's vehicle identity and brand
+presentation, and My BMW's proximity of ownership information to service actions as
+design references. Original Skycar imagery and existing real product contracts are
+required. Details and primary sources: docs/design/AUTOMOTIVE_EXPERIENCE.md.
+
+Add mobile navigation to the four existing destinations Home, Garage, Care and My Jobs;
+retain desktop navigation and hide the dock during authentication. Change guest intake
+presentation to three validated steps while preserving its fields, payload, endpoint,
+private-data handling and immutable uncertain-submission retry. Promote existing
+server-derived job actions. No pricing, membership, payment, database, service coverage,
+new product capability or live telemetry contract changes are made.
+
+Review candidate only. This decision does not substitute local fixture verification for
+hosted authentication, live intake/delivery or real-device release testing.

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { AppIcon } from "@/components/app-icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CareRequestSummary } from "@/domain/care/list";
 import { careJobAction, careJobSummary, readCareJobsPage, type CareJobsPage } from "@/domain/care/my-jobs";
@@ -138,9 +139,9 @@ export function MyJobs() {
   return <main className="jobs-shell" aria-busy={loading || loadingMore}>
     <nav className="jobs-nav" aria-label="Main navigation">
       <Link className="jobs-wordmark" href="/">skycar<span>●</span></Link>
-      <div><Link href="/garage">Garage</Link><Link href="/care/request">Book a service</Link><span aria-current="page">My Jobs</span></div>
+      <div><Link href="/garage">Garage</Link><Link href="/care/request">Request care</Link><span aria-current="page">My Jobs</span></div>
     </nav>
-    <header className="jobs-header"><div><p className="eyebrow">GARAGE · MY JOBS</p><h1>Your requests.<br /><span>Clearly tracked.</span></h1><p>See what Skycar has recorded and what needs to happen next.</p></div></header>
+    <header className="jobs-header"><div><p className="eyebrow">GARAGE · MY JOBS</p><h1>Your care.<br /><span>All together.</span></h1><p>See what Skycar has recorded and what needs to happen next.</p></div></header>
 
     <section className="jobs-controls" aria-label="Request controls">
       <label htmlFor="vehicle-filter">Vehicle</label>
@@ -167,8 +168,9 @@ export function MyJobs() {
           <div className="job-card-top"><span className="job-service">{item.service === "repair" ? "Repair" : "Cleaning"}</span><span className="job-status">{summary.status}</span></div>
           <h2>{vehicle ? vehicleName(vehicle) : "Your vehicle"}</h2>
           <p>{summary.detail}</p>
+          <div className="job-next-action"><AppIcon name={item.responsible_role === "customer" ? "arrow" : "jobs"}/><div><span>WHAT HAPPENS NEXT</span><strong>{careJobAction(item)}</strong></div></div>
           {item.vehicle_archived && <span className="job-archived">Archived vehicle history</span>}
-          <dl><div><dt>Next action</dt><dd>{careJobAction(item)}</dd></div><div><dt>Responsible</dt><dd>{item.responsible_role === "customer" ? "You" : "Skycar operations"}</dd></div><div><dt>{item.is_overdue ? "Overdue since" : "Next update"}</dt><dd>{item.next_update_at ? displayDate(item.next_update_at) : "No update time committed"}</dd></div><div><dt>Submitted</dt><dd>{displayDate(item.created_at)}</dd></div></dl>
+          <dl><div><dt>Responsible</dt><dd>{item.responsible_role === "customer" ? "You" : "Skycar operations"}</dd></div><div><dt>{item.is_overdue ? "Overdue since" : "Next update"}</dt><dd>{item.next_update_at ? displayDate(item.next_update_at) : "No update time committed"}</dd></div><div><dt>Submitted</dt><dd>{displayDate(item.created_at)}</dd></div></dl>
           <Link className="job-detail-link" href={`/care/requests/${encodeURIComponent(item.id)}`}>View request and timeline <span aria-hidden="true">→</span></Link>
         </article>;
       })}
