@@ -6,6 +6,7 @@ import { garageRepository } from './repository';
 import { createGaragePhotoHandler } from './photo-http.mjs';
 import { garagePhotoRepository } from './photo-repository';
 import { SecretConfigurationError } from '../supabase/secret-config.mjs';
+import { createGaragePhotoReadHandler, garagePhotoReader } from './photo-read.mjs';
 
 async function garageContext() {
   if (!featureEnabled('GARAGE') || !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) {
@@ -20,6 +21,11 @@ async function garageContext() {
 export const handleGarage = createGarageHandler(async () => {
   const { client, userId } = await garageContext();
   return { repository: garageRepository(client, userId), userId };
+});
+
+export const handleGaragePhotoRead = createGaragePhotoReadHandler(async () => {
+  const { client, userId } = await garageContext();
+  return { repository: garagePhotoReader(client, userId), userId };
 });
 
 export const handleGaragePhoto = createGaragePhotoHandler(async () => {

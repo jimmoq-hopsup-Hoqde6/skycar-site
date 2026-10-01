@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ApiError, garageAccountPage, garageApi, type Vehicle } from './types';
 import './garage.css';
+import { PhotoPreview } from './photo-preview';
 
 type Attempt = { file: File; key: string; accountId: string };
 type Receipt = { vehicle_id: string; original_status: string; processing_state: string };
@@ -11,12 +12,14 @@ const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
 const maxBytes = 4_000_000;
 
 export function VehiclePhoto({ vehicleId }: { vehicleId: string }) {
+  const [accountId, setAccountId] = useState<string | null>(null);
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [retry, setRetry] = useState(false);
+  const [photoVersion, setPhotoVersion] = useState(0);
   const account = useRef<string | null>(null);
   const attempt = useRef<Attempt | null>(null);
   const mounted = useRef(true);
@@ -27,7 +30,7 @@ export function VehiclePhoto({ vehicleId }: { vehicleId: string }) {
   const verify = useCallback(async () => {
     verification.current?.abort();
     const controller = new AbortController(); verification.current = controller;
-    setVehicle(null); setNotice('');
+    setVehicle(null); setAccountId(null); setNotice('');
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
     const identity = await garageAccountPage('?limit=1', { signal });
     const result = await garageApi<Vehicle>(`/${vehicleId}`, { signal });
@@ -36,7 +39,7 @@ export function VehiclePhoto({ vehicleId }: { vehicleId: string }) {
       attempt.current = null; setFile(null); setRetry(false);
       if (input.current) input.current.value = '';
     }
-    account.current = identity.accountId;
+    account.current = identity.accountId; setAccountId(identity.accountId);
     setVehicle(result); setError('');
     return identity.accountId;
   }, [vehicleId]);
@@ -98,7 +101,8 @@ export function VehiclePhoto({ vehicleId }: { vehicleId: string }) {
       }
       attempt.current = null; setRetry(false); setFile(null);
       if (input.current) input.current.value = '';
-      setNotice('Photo saved privately to this vehicle. Photo preview is not available yet.');
+      setPhotoVersion(value => value + 1);
+      setNotice('Photo saved privately to this vehicle.');
     } catch (err) {
       if (!mounted.current) return;
       const uncertain = retry || !(err instanceof ApiError) || err.retryable;
@@ -118,12 +122,13 @@ export function VehiclePhoto({ vehicleId }: { vehicleId: string }) {
     {!vehicle && error && <div className="editor-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void reloadVehicle()}>Reload vehicle</button><Link href={`/auth/sign-in?next=${encodeURIComponent(`/garage/vehicles/${vehicleId}/photo`)}`}>Sign in to your Garage</Link></div>}
     {vehicle ? <section className="garage-editor">
       <h2>{vehicle.make} {vehicle.model}</h2>
+      {accountId && <PhotoPreview key={`${accountId}:${photoVersion}`} vehicleId={vehicleId} accountId={accountId} file={file} version={photoVersion}/>}
       {vehicle.archived_at ? <p>Archived vehicles cannot receive new photos.</p> : <form onSubmit={save}>
         <label>Vehicle photo<input ref={input} type="file" accept={allowedTypes.join(',')} disabled={busy || retry} onChange={event => { setFile(event.target.files?.[0] ?? null); setError(''); setNotice(''); }} /></label>
         {file && <p style={{ overflowWrap: 'anywhere' }}>Selected photo: {file.name}</p>}
         <div className="editor-actions"><button className="primary-button" type="submit" disabled={busy || !file}>{busy ? 'Uploading…' : retry ? 'Retry same upload' : 'Upload photo'}</button></div>
         {retry && <p>The upload may have reached us. Retry this same photo to confirm it.</p>}
-        <p>Photo preview is not available yet. Choose a smaller image if your phone photo exceeds 4 MB.</p>
+        <p>Choose a smaller image if your phone photo exceeds 4 MB.</p>
       </form>}
     </section> : !error && <p role="status">Verifying your vehicle…</p>}
     <footer className="garage-footer"><Link href="/garage">Back to Garage</Link> · <Link href="/auth/sign-out">Sign out on this device</Link></footer>

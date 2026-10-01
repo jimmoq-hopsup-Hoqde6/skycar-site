@@ -44,14 +44,15 @@ try {
     assert.ok(receipt, 'detail cannot exist before submission');
     return route.fulfill({ json: { data: receipt } });
   });
+  await page.route('**/api/v1/garage/vehicles/*/photo',route=>route.fulfill({status:204,headers:{'X-Skycar-Account':vehicle.id}}));
   await page.goto(`${origin}/garage`);
-  await page.getByRole('link', { name: 'Book a service', exact: true }).click();
+  await page.getByRole('link', { name: 'Request car care', exact: true }).click();
   await page.getByLabel('Active Garage vehicle').selectOption(vehicle.id);
   await page.getByLabel('Describe the damage or cleaning work').fill('Scratch on the left rear door');
   await page.getByRole('button', { name: 'Submit for review' }).click();
   await page.waitForURL(`**/care/requests/11111111-1111-4111-8111-111111111111`);
   try { await page.getByText('Scratch on the left rear door', { exact: true }).waitFor(); } catch (error) { console.error('Fixture receipt:', JSON.stringify(receipt)); console.error('Rendered receipt page:', await page.locator('body').innerText()); throw error; }
-  await page.getByRole('link', { name: 'My Jobs', exact: true }).click();
+  await page.getByRole('navigation', {name:'App navigation'}).getByRole('link', { name: 'My Jobs', exact: true }).click();
   await page.getByRole('heading', { name: 'Toyota Corolla · SKY123' }).waitFor();
   await page.getByRole('link', { name: /View request and timeline/ }).click();
   await page.getByRole('heading', { name: 'Recorded updates' }).waitFor();
