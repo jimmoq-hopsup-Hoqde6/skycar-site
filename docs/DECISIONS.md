@@ -128,3 +128,17 @@ Garage UI consumes docs/GARAGE_API.md. Other workstreams must not write vehicles
 directly or introduce another ownership model. New migration remains subject to
 isolated database and release verification under #1/#8. No live migration is authorised
 or performed by committing the implementation.
+
+## D-UI-001 — Service-led public entry and coherent mobile presentation
+Date: 2026-10-01
+Status: IMPLEMENTED ON REVIEW BRANCH
+
+Marcel requested UI/UX ownership and a substantially more polished Skycar app.
+Use the existing phone-test candidate as the implementation base. Preserve D-007's
+service-led public entry and the authenticated Garage, with guest intake as the primary
+public action. Use one midnight/cyan visual system across existing screens, with
+readable type, consistent spacing, visible focus and mobile-sized controls.
+Repair and cleaning entry cards preselect the corresponding existing guest form option.
+This increment adds no product capabilities, pricing claims, database changes or
+booking/payment lifecycle changes. Local visual verification does not replace signed-in
+staging and real iPhone verification. The review branch is not a production release.
