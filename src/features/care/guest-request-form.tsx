@@ -28,7 +28,7 @@ export function GuestRequestForm() {
       });
       const result=await response.json();
       if (!response.ok) {
-        const retryable=response.status>=500 || result.error?.retryable===true;
+        const retryable=typeof result.error?.retryable==='boolean' ? result.error.retryable : response.status>=500;
         setUncertain(retryable);
         if (!retryable) attempt.current=null;
         setMessage(typeof result.error?.message==='string'?result.error.message:'Your request has not been confirmed.');

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {guestInput,guestReceipt} from '../../src/domain/care/guest.mjs';
+import {GuestError,guestInput,guestReceipt} from '../../src/domain/care/guest.mjs';
 import {guestHandler} from '../../src/server/care/guest-http.mjs';
 const input={name:'Test Owner',email:'OWNER@example.com',phone:'0400 000 000',suburb:'Adelaide',postcode:'5000',vehicle:'Toyota Corolla 2020',service:'repair',description:'Synthetic scratch test only.',preferred_window:'flexible',consent:true};
 const key='d35e8b9f-75a0-4d0d-8393-26527c451616';
@@ -26,4 +26,9 @@ test('cross-origin and invalid consent never reach storage',async()=>{
 test('storage failure never emits a saved receipt or exposes provider error',async()=>{
   const handler=guestHandler({enabled:()=>true,save:()=>{throw new Error('secret provider details');}});
   const response=await handler(request());const body=await response.json();assert.equal(response.status,503);assert.equal(body.data,undefined);assert.equal(JSON.stringify(body).includes('secret provider'),false);
+});
+test('a definite credential rejection unlocks editing and does not encourage unsafe uncertain retries',async()=>{
+  const handler=guestHandler({enabled:()=>true,save:()=>{throw new GuestError('CONFIGURATION_UNAVAILABLE');}});
+  const response=await handler(request());const body=await response.json();
+  assert.equal(response.status,503);assert.equal(body.error.retryable,false);assert.equal(body.data,undefined);
 });

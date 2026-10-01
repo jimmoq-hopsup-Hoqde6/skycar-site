@@ -8,6 +8,7 @@ const replies = {
   RATE_LIMITED: [429,'Too many requests. Please try again later.'],
   IDEMPOTENCY_CONFLICT: [409,'This request key was already used for different details.'],
   UNAVAILABLE: [503,'Guest requests are temporarily unavailable. Your request has not been confirmed.'],
+  CONFIGURATION_UNAVAILABLE: [503,'Service requests are unavailable right now. Nothing was saved. Please try again later.'],
 };
 export function guestHandler({enabled, save}) {
   return async request => {
@@ -35,7 +36,8 @@ export function guestHandler({enabled, save}) {
     } catch(error) {
       const code = error instanceof GuestError && error.code in replies ? error.code : 'UNAVAILABLE';
       const [status,message] = replies[code];
-      return json({error:{code,message,retryable:status===503}},status);
+      if (status>=500) console.error(JSON.stringify({event:'guest_request_failed',code}));
+      return json({error:{code,message,retryable:status===503 && code!=='CONFIGURATION_UNAVAILABLE'}},status);
     }
   };
 }
