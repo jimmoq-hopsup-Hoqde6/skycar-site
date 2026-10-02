@@ -74,6 +74,9 @@ try {
   await deniedRevalidation;
   await page.getByText('Sign in to Skycar, then refresh this page to see your request.').waitFor();
   assert.equal(await page.getByText(received.description).count(), 0);
+  const signInLink = page.getByRole('link', { name: 'Sign in' });
+  assert.equal(await signInLink.getAttribute('href'), `/auth/sign-in?next=%2Fcare%2Frequests%2F${id}`);
+  assert.equal(keys.length, 0, 'session recovery must not create a write');
   releaseDelayedStatus();
   await page.waitForTimeout(100);
   assert.equal(await page.getByText(received.description).count(), 0);
@@ -111,6 +114,11 @@ try {
   await page.getByText('Sign in to Skycar, then refresh this page to see your request.').waitFor();
   assert.equal(await page.getByText(received.description).count(), 0);
   await page.screenshot({ path: new URL('mobile-access-expired.png', evidence).pathname, fullPage: true });
+  const writesBeforeSignIn = keys.length;
+  await page.getByRole('link', { name: 'Sign in' }).click();
+  await page.getByRole('heading', { name: 'Sign in to Skycar' }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('next'), `/care/requests/${id}`);
+  assert.equal(keys.length, writesBeforeSignIn, 'following the sign-in recovery action must not create a write');
   console.log('PASS: overdue before worker, mobile overflow, focus/pageshow session revalidation, delayed prior-session response isolation, stale failure notice, no-match, cross-reload retry key reuse, reopened receipt, expired-session redaction');
 } finally {
   if (browser) await browser.close();
