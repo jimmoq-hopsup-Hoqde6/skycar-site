@@ -25,4 +25,4 @@ AI damage assessment, cost estimation, automated expert dispatch, guest quote de
 - New booking-photo browser regression passes: actual image decoding/re-encoding, preview, summary, lost-response retry with identical prepared image and key, receipt, no page errors and 320/390/1440 px layouts.
 - Staging bucket is private; authenticated read policy requires the first path component to equal auth.uid(), which guest-request paths cannot satisfy.
 
-Hosted deployment and a synthetic saved photo request are checked separately after publishing the staging branch.
+Hosted staging deployment abfebd8 is Ready. Synthetic guest request 1bf34b20-ad7b-46de-a640-cbae777dfcc9 returned the confirmed receipt with photos; database verification found request_received and exactly two private storage objects (manifest plus photo). The booking page was reset for user review. The final visual check also refined the close-up guide framing to keep the damage mark in view.
