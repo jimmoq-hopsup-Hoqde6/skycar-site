@@ -1,4 +1,6 @@
 import { createHmac } from 'node:crypto';
+import { storeGuestPhotos } from '@/server/care/guest-photos.mjs';
+import { guestReceipt } from '@/domain/care/guest.mjs';
 import { guestHandler } from '@/server/care/guest-http.mjs';
 import { GuestError } from '@/domain/care/guest.mjs';
 import { createSupabaseTrustedServerClient } from '@/server/supabase/server';
@@ -8,7 +10,7 @@ import { SecretConfigurationError } from '@/server/supabase/secret-config.mjs';
 export const runtime = 'nodejs';
 export const POST = guestHandler({
   enabled: () => featureEnabled('CARE'),
-  save: async (key: string, payload: Record<string,unknown>, request: Request) => {
+  save: async (key: string, payload: Record<string,unknown>, request: Request, photos: {bytes: Buffer; mimeType: string; hash: string}[]) => {
     let secretKey:string;
     try { ({secretKey}=requireSupabaseSecretConfig()); }
     catch(error) {
@@ -19,7 +21,8 @@ export const POST = guestHandler({
     const address = request.headers.get('x-vercel-forwarded-for')?.split(',')[0].trim();
     if (!address) throw new GuestError('UNAVAILABLE');
     const fingerprint = createHmac('sha256',secretKey).update(address).digest('hex');
-    const {data,error,status} = await createSupabaseTrustedServerClient().rpc('care_submit_guest_request',{
+    const client = createSupabaseTrustedServerClient();
+    const {data,error,status} = await client.rpc('care_submit_guest_request',{
       p_key:key,p_payload:payload,p_fingerprint:fingerprint,
     });
     if (error) {
@@ -27,6 +30,8 @@ export const POST = guestHandler({
       if (error.code === 'P0001' && ['RATE_LIMITED','IDEMPOTENCY_CONFLICT','VALIDATION_FAILED'].includes(error.message)) throw new GuestError(error.message);
       throw new GuestError('UNAVAILABLE');
     }
-    return data;
+    const receipt = guestReceipt(data);
+    await storeGuestPhotos(client.storage.from('private-media'), receipt.id, photos);
+    return receipt;
   },
 });

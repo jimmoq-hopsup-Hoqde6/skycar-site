@@ -32,3 +32,40 @@ test('a definite credential rejection unlocks editing and does not encourage uns
   const response=await handler(request());const body=await response.json();
   assert.equal(response.status,503);assert.equal(body.error.retryable,false);assert.equal(body.data,undefined);
 });
+
+test('photo intake validates count, contents and limits before saving any guest details',async()=>{
+  let calls=0;
+  const handler=guestHandler({enabled:()=>true,save:()=>{calls++;}});
+  const form=new FormData();form.set('details',JSON.stringify(input));
+  form.append('photos',new File([new Uint8Array(200)],'fake.jpg',{type:'image/jpeg'}));
+  const response=await handler(new Request('http://localhost:3000/api/v1/care/guest-requests',{method:'POST',headers:{origin:'http://localhost:3000','idempotency-key':key},body:form}));
+  assert.equal(response.status,400);assert.equal(calls,0);
+});
+test('valid photo multipart keeps contacts private and passes validated binary separately',async()=>{
+  const bytes=new Uint8Array(200);bytes.set([255,216,255]);
+  const form=new FormData();form.set('details',JSON.stringify(input));form.append('photos',new File([bytes],'test.jpg',{type:'image/jpeg'}));
+  const handler=guestHandler({enabled:()=>true,save:async(gotKey,body,request,photos)=>{
+    assert.equal(gotKey,key);assert.equal(body.email,'owner@example.com');assert.equal(photos.length,1);assert.equal(photos[0].bytes.length,200);
+    return {id:key,stage:'request_received',created_at:'2026-10-02T03:00:00Z'};
+  }});
+  const response=await handler(new Request('http://localhost:3000/api/v1/care/guest-requests',{method:'POST',headers:{origin:'http://localhost:3000','idempotency-key':key},body:form}));
+  assert.equal(response.status,201);assert.equal(JSON.stringify(await response.json()).includes('owner@'),false);
+});
+test('photo slots reconcile exact retries without overwriting stored damage',async()=>{
+  const {storeGuestPhotos,readGuestPhotos}=await import('../../src/server/care/guest-photos.mjs');
+  const bytes=new Uint8Array(200);bytes.set([255,216,255]);
+  const photos=await readGuestPhotos([new File([bytes],'x.jpg',{type:'image/jpeg'})]);
+  const entries=new Map();
+  const bucket={upload:async(path,contents,options)=>{
+    assert.equal(options.upsert,false);
+    if(entries.has(path)) return {error:{message:'exists'}};
+    entries.set(path,contents);return {error:null};
+  },download:async path=>({data:new Blob([entries.get(path)])})};
+  await storeGuestPhotos(bucket,key,photos);await storeGuestPhotos(bucket,key,photos);assert.equal(entries.size,2);
+  bytes[100]=42;
+  const changed=await readGuestPhotos([new File([bytes],'x.jpg',{type:'image/jpeg'})]);
+  await assert.rejects(storeGuestPhotos(bucket,key,changed),error=>error.code==='IDEMPOTENCY_CONFLICT');
+  assert.equal(entries.get(`guest-requests/${key}/photo-1`)[100],0);
+  await assert.rejects(readGuestPhotos(Array(4).fill(new File([bytes],'x.jpg',{type:'image/jpeg'}))));
+  await assert.rejects(storeGuestPhotos({upload:async()=>({error:{}}),download:async()=>({error:{}})},key,photos),error=>error.code==='UNAVAILABLE');
+});
