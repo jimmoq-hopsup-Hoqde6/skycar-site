@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { AppIcon } from "@/components/app-icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CareRequestSummary } from "@/domain/care/list";
 import { careJobAction, careJobSummary, readCareJobsPage, type CareJobsPage } from "@/domain/care/my-jobs";
@@ -138,9 +139,9 @@ export function MyJobs() {
   return <main className="jobs-shell" aria-busy={loading || loadingMore}>
     <nav className="jobs-nav" aria-label="Main navigation">
       <Link className="jobs-wordmark" href="/">skycar<span>●</span></Link>
-      <div><Link href="/garage">Garage</Link><Link href="/care/request">Book a service</Link><span aria-current="page">My Jobs</span></div>
+      <div><Link href="/garage">Garage</Link><Link href="/care/request/garage">Request care</Link><span aria-current="page">My Jobs</span></div>
     </nav>
-    <header className="jobs-header"><div><p className="eyebrow">GARAGE · MY JOBS</p><h1>Your requests.<br /><span>Clearly tracked.</span></h1><p>See what Skycar has recorded and what needs to happen next.</p></div></header>
+    <header className="jobs-header"><div><p className="eyebrow">GARAGE · MY JOBS</p><h1>Your care.<br /><span>All together.</span></h1><p>See what Skycar has recorded and what needs to happen next.</p></div></header>
 
     <section className="jobs-controls" aria-label="Request controls">
       <label htmlFor="vehicle-filter">Vehicle</label>
@@ -154,11 +155,11 @@ export function MyJobs() {
 
     {filteredVehicle?.archived_at && <p className="jobs-archive-note" role="status">Showing saved history for archived vehicle: {vehicleName(filteredVehicle)}. New requests need an active vehicle.</p>}
     {stale && <div className="jobs-warning" role="alert"><strong>Last checked information</strong><p>{message}</p><button type="button" onClick={() => void load()}>Try again</button></div>}
-    {access === "session" && <section className="jobs-empty" role="alert"><div className="jobs-empty-icon" aria-hidden="true">↗</div><h2>Sign in to see My Jobs</h2><p>Your requests are private. Sign in to Skycar, then try again.</p><button type="button" onClick={() => void load({ discard: true })}>I’m signed in — try again</button></section>}
+    {access === "session" && <section className="jobs-empty" role="alert"><div className="jobs-empty-icon" aria-hidden="true">↗</div><h2>Sign in to see My Jobs</h2><p>Your requests are private. Sign in to Skycar, then try again.</p><Link className="jobs-link-button" href="/auth/sign-in?next=%2Fgarage%2Fjobs">Sign in</Link></section>}
     {access === "access" && <section className="jobs-empty" role="alert"><div className="jobs-empty-icon" aria-hidden="true">!</div><h2>These requests are unavailable</h2><p>Check the selected vehicle and signed-in account. No saved request details are being shown.</p><button type="button" onClick={() => { setVehicleId(""); void load({ discard: true }); }}>Reset and try again</button></section>}
     {access === "error" && !items.length && !loading && <section className="jobs-empty" role="alert"><div className="jobs-empty-icon" aria-hidden="true">…</div><h2>We couldn’t load My Jobs</h2><p>{message}</p><button type="button" onClick={() => void load({ discard: true })}>Try again</button></section>}
     {loading && !items.length && access === "ready" && <div className="jobs-loading" role="status"><span>Loading your requests…</span><div /><div /></div>}
-    {!loading && access === "ready" && !items.length && <section className="jobs-empty"><div className="jobs-empty-icon" aria-hidden="true">+</div><h2>{vehicleId ? "No requests for this vehicle" : "No requests yet"}</h2><p>{vehicleId ? "Choose All vehicles to see other saved requests." : "Repair and cleaning requests you submit will appear here."}</p><Link className="jobs-link-button" href="/care/request">Start a repair or cleaning request</Link></section>}
+    {!loading && access === "ready" && !items.length && <section className="jobs-empty"><div className="jobs-empty-icon" aria-hidden="true">+</div><h2>{vehicleId ? "No requests for this vehicle" : "No requests yet"}</h2><p>{vehicleId ? "Choose All vehicles to see other saved requests." : "Repair and cleaning requests you submit will appear here."}</p><Link className="jobs-link-button" href="/care/request/garage">Start a repair or cleaning request</Link></section>}
 
     {!!items.length && <section className="jobs-list" aria-label="Saved Care requests">
       {items.map(item => {
@@ -167,13 +168,14 @@ export function MyJobs() {
           <div className="job-card-top"><span className="job-service">{item.service === "repair" ? "Repair" : "Cleaning"}</span><span className="job-status">{summary.status}</span></div>
           <h2>{vehicle ? vehicleName(vehicle) : "Your vehicle"}</h2>
           <p>{summary.detail}</p>
+          <div className="job-next-action"><AppIcon name={item.responsible_role === "customer" ? "arrow" : "jobs"}/><div><span>WHAT HAPPENS NEXT</span><strong>{careJobAction(item)}</strong></div></div>
           {item.vehicle_archived && <span className="job-archived">Archived vehicle history</span>}
-          <dl><div><dt>Next action</dt><dd>{careJobAction(item)}</dd></div><div><dt>Responsible</dt><dd>{item.responsible_role === "customer" ? "You" : "Skycar operations"}</dd></div><div><dt>{item.is_overdue ? "Overdue since" : "Next update"}</dt><dd>{item.next_update_at ? displayDate(item.next_update_at) : "No update time committed"}</dd></div><div><dt>Submitted</dt><dd>{displayDate(item.created_at)}</dd></div></dl>
+          <dl><div><dt>Responsible</dt><dd>{item.responsible_role === "customer" ? "You" : "Skycar operations"}</dd></div><div><dt>{item.is_overdue ? "Overdue since" : "Next update"}</dt><dd>{item.next_update_at ? displayDate(item.next_update_at) : "No update time committed"}</dd></div><div><dt>Submitted</dt><dd>{displayDate(item.created_at)}</dd></div></dl>
           <Link className="job-detail-link" href={`/care/requests/${encodeURIComponent(item.id)}`}>View request and timeline <span aria-hidden="true">→</span></Link>
         </article>;
       })}
     </section>}
     {nextCursor && access === "ready" && <button className="jobs-load-more" type="button" disabled={loadingMore} onClick={() => void load({ cursor: nextCursor })}>{loadingMore ? "Loading more…" : "Load more requests"}</button>}
-    <p className="jobs-boundary">My Jobs shows recorded request progress only. A request is not a confirmed quote, technician, appointment or payment.</p>
+    <p className="jobs-boundary">My Jobs shows recorded request progress only. A request is not a confirmed quote, technician, appointment or payment.<br /><Link href="/auth/sign-out">Sign out on this device</Link></p>
   </main>;
 }

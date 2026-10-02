@@ -1,0 +1,7 @@
+{
+  "name": "skycar-staging-backup-tools",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24 <25" },
+  "dependencies": { "supabase": "2.117.0" }
+}

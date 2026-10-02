@@ -148,3 +148,43 @@ test('definitive storage failure is quarantined instead of reported as success',
     error => error.code === 'TEMPORARILY_UNAVAILABLE');
   assert.deepEqual(calls, ['garage_reserve_vehicle_photo', 'garage_fail_vehicle_photo']);
 });
+
+test('credential rejection before reservation reports an unsaved upload and never reaches storage', async () => {
+  for (const status of [401, 403]) {
+    const trustedClient = {
+      rpc: async name => {
+        assert.equal(name, 'garage_reserve_vehicle_photo');
+        return { data: null, error: { message: 'private provider detail' }, status };
+      },
+      storage: { from: () => { assert.fail('rejected reservation cannot upload'); } },
+    };
+    const repository = garagePhotoRepository(trustedClient, randomUUID());
+    const handle = createGaragePhotoHandler(async () => ({ repository }));
+    const response = await handle(request(), vehicleId);
+    const body = await response.json();
+    assert.equal(response.status, 503);
+    assert.equal(body.error.code, 'CONFIGURATION_UNAVAILABLE');
+    assert.equal(body.error.retryable, false);
+    assert.equal(body.data, undefined);
+    assert.ok(!JSON.stringify(body).includes('private provider detail'));
+  }
+});
+
+test('credential rejection during finalization retains the exact upload for reconciliation', async () => {
+  const calls = [];
+  const trustedClient = {
+    rpc: async name => {
+      calls.push(name);
+      if (name === 'garage_reserve_vehicle_photo') return { data: { processing_state: 'uploading' }, error: null, status: 200 };
+      return { data: null, error: { message: 'credential rejected' }, status: 401 };
+    },
+    storage: { from: () => ({ upload: async () => ({ data: {}, error: null }) }) },
+  };
+  const repository = garagePhotoRepository(trustedClient, randomUUID());
+  const handle = createGaragePhotoHandler(async () => ({ repository }));
+  const response = await handle(request(), vehicleId);
+  const body = await response.json();
+  assert.equal(body.error.retryable, true);
+  assert.equal(body.error.code, 'TEMPORARILY_UNAVAILABLE');
+  assert.deepEqual(calls, ['garage_reserve_vehicle_photo', 'garage_finalize_vehicle_photo']);
+});

@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { isTrustedWriteOrigin } from '../../server/http/request-origin.mjs';
 import { GarageError, requireUuid } from './vehicles.mjs';
 
-export const VEHICLE_PHOTO_MAX_BYTES = 10_000_000;
+// Leave headroom below Vercel's 4.5 MB request payload limit.
+export const VEHICLE_PHOTO_MAX_BYTES = 4_000_000;
 export const VEHICLE_PHOTO_MIN_BYTES = 128;
 export const VEHICLE_PHOTO_TYPES = Object.freeze(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -26,7 +27,7 @@ export async function readVehiclePhoto(request) {
   const key = requireUuid(request.headers.get('idempotency-key'), 'idempotencyKey');
   const declared = request.headers.get('content-length');
   if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > VEHICLE_PHOTO_MAX_BYTES)) {
-    throw new GarageError('PAYLOAD_TOO_LARGE', 413, 'The vehicle photo must be 10 MB or smaller.');
+    throw new GarageError('PAYLOAD_TOO_LARGE', 413, 'The vehicle photo must be 4 MB or smaller.');
   }
   const reader = request.body?.getReader();
   if (!reader) throw new GarageError('INVALID_IMAGE', 400, 'Choose an image to upload.');
@@ -39,7 +40,7 @@ export async function readVehiclePhoto(request) {
       sizeBytes += value.byteLength;
       if (sizeBytes > VEHICLE_PHOTO_MAX_BYTES) {
         await reader.cancel();
-        throw new GarageError('PAYLOAD_TOO_LARGE', 413, 'The vehicle photo must be 10 MB or smaller.');
+        throw new GarageError('PAYLOAD_TOO_LARGE', 413, 'The vehicle photo must be 4 MB or smaller.');
       }
       chunks.push(value);
     }
