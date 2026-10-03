@@ -10,6 +10,7 @@ Not deployed or ready for integration. The recovered API/UI source compiles, but
 - GET /api/v1/care/journey/:id/photos/:slot — verified customer or admin; private/no-store binary image, never a public storage URL.
 - GET /api/v1/operations/care — verified admin session; bounded queue and expert registry.
 - POST /api/v1/operations/care — verified admin, trusted origin, UUID Idempotency-Key. Create expert, publish quote, confirm booking, start work, complete work, cancel booking.
+- GET /operations/care — private admin workspace over the operations endpoints. Request selection, unsaved evidence and uncertain commands are cleared when the verified operations account changes.
 
 All writes derive actor authority from server-verified sessions or a verified guest capability; browser actor IDs and roles are never trusted. The database rechecks administrator/customer authority. Unknown body fields, invalid prices/times and unsupported transitions fail closed. Commands, projection changes and events are transactional. Provider capacity is locked and checked for overlapping confirmed/in-progress appointments. No fixtures or invented assessments are returned by hosted APIs.
 

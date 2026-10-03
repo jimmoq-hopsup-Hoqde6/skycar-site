@@ -4,13 +4,15 @@ export const runtime='nodejs';
 export async function GET(request:Request){return journeyBoundary(async()=>{
  const {db,actor}=await operationsAccess();const id=new URL(request.url).searchParams.get('id');
  if(id)return journeyJson(await journeySnapshot(await journeyAccess(request,identifier(id),true)),200,actor);
- const [accounts,guests,journeys,experts]=await Promise.all([
+ const [accounts,guests,experts]=await Promise.all([
   db.from('care_requests').select('id,service,description,created_at').order('created_at',{ascending:false}).limit(50),
   db.from('care_guest_requests').select('id,payload,created_at').order('created_at',{ascending:false}).limit(50),
-  db.from('care_journeys').select('id,state').order('updated_at',{ascending:false}).limit(200),
   db.from('care_experts').select('id,business_name,description,services,postcodes,insurance_valid_until,active').order('business_name').limit(200),
  ]);
- if([accounts,guests,journeys,experts].some(r=>r.error))throw new JourneyError('UNAVAILABLE');
+ if([accounts,guests,experts].some(r=>r.error))throw new JourneyError('UNAVAILABLE');
+ const ids=[...(accounts.data||[]),...(guests.data||[])].map(r=>r.id);
+ const journeys=ids.length?await db.from('care_journeys').select('id,state').in('id',ids):{data:[],error:null};
+ if(journeys.error)throw new JourneyError('UNAVAILABLE');
  const states=new Map(journeys.data?.map(j=>[j.id,j.state]));
  const queue=[...(accounts.data||[]).map(r=>({...r,kind:'account',state:states.get(r.id)||'review'})),...(guests.data||[]).map(r=>({id:r.id,service:r.payload.service,description:r.payload.description,created_at:r.created_at,kind:'guest',state:states.get(r.id)||'review'}))].sort((a,b)=>b.created_at.localeCompare(a.created_at));
  return journeyJson({queue,experts:experts.data,integrations:{assessment:'Manual expert review — Ravin API not connected',payments:'Not connected — no customer payments taken',notifications:'In-app updates only'}},200,actor);
