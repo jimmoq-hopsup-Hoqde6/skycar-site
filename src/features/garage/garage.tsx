@@ -28,7 +28,7 @@ function VehicleHistory({ vehicle }: { vehicle: Vehicle }) {
       .finally(() => { if (!current.signal.aborted) setLoading(false); });
   }, [vehicle.id]);
   useEffect(() => { void load(); return () => controller.current?.abort(); }, [load]);
-  const labels: Record<string, string> = { vehicle_added: 'Added to Garage', vehicle_updated: 'Vehicle details updated', vehicle_archived: 'Vehicle archived' };
+  const labels: Record<string, string> = { vehicle_added: 'Added to Garage', vehicle_updated: 'Vehicle details updated', vehicle_archived: 'Vehicle archived', care_service_completed: 'Care service completed' };
   return <section className="vehicle-history" aria-label={`${vehicle.make} ${vehicle.model} history`}>
     <h3>Vehicle history</h3>
     {error && <p role="alert">{error} <button className="text-button" onClick={() => { setLoading(true); setError(''); void load(page.nextCursor); }}>Try again</button></p>}

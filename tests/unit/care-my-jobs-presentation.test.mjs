@@ -52,3 +52,13 @@ test("presents only implemented receipt, delayed, overdue and recovery states", 
   assert.equal(careJobAction({ ...base, next_action: "review_overdue_request" }), "Skycar follow-up");
   assert.equal(careJobAction({ ...base, next_action: "choose_recovery" }), "Your decision");
 });
+
+test("connected milestones outrank stale overdue and no-match projections", () => {
+  const stale = { ...base, customer_stage: "no_match", next_action: "choose_recovery", responsible_role: "customer", next_update_at: null, is_overdue: true };
+  assert.equal(careJobSummary({ ...stale, quote_state: "issued" }).status, "Quote ready");
+  assert.equal(careJobAction({ ...stale, quote_state: "issued" }), "Review your quotes");
+  assert.equal(careJobSummary({ ...stale, quote_state: "accepted", assignment_state: "reserved" }).status, "Appointment requested");
+  assert.match(careJobSummary({ ...stale, quote_state: "accepted", assignment_state: "reserved" }).detail, /not confirmed/);
+  assert.equal(careJobSummary({ ...stale, quote_state: "accepted", assignment_state: "accepted", fulfilment_state: "scheduled" }).status, "Appointment confirmed");
+  assert.equal(careJobSummary({ ...stale, quote_state: "accepted", assignment_state: "accepted", fulfilment_state: "completed" }).status, "Service complete");
+});

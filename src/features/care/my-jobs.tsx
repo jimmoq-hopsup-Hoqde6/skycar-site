@@ -5,6 +5,7 @@ import { AppIcon } from "@/components/app-icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CareRequestSummary } from "@/domain/care/list";
 import { careJobAction, careJobSummary, readCareJobsPage, type CareJobsPage } from "@/domain/care/my-jobs";
+import { connectedCareStage } from "@/domain/care/presentation";
 import { garageApi, type Vehicle } from "@/features/garage/types";
 import "./my-jobs.css";
 
@@ -163,19 +164,19 @@ export function MyJobs() {
 
     {!!items.length && <section className="jobs-list" aria-label="Saved Care requests">
       {items.map(item => {
-        const summary = careJobSummary(item); const vehicle = vehicleMap.get(item.vehicle_id);
+        const summary = careJobSummary(item); const vehicle = vehicleMap.get(item.vehicle_id); const connected = connectedCareStage(item);
         return <article className={`job-card job-${summary.tone}`} key={item.id}>
           <div className="job-card-top"><span className="job-service">{item.service === "repair" ? "Repair" : "Cleaning"}</span><span className="job-status">{summary.status}</span></div>
           <h2>{vehicle ? vehicleName(vehicle) : "Your vehicle"}</h2>
           <p>{summary.detail}</p>
           <div className="job-next-action"><AppIcon name={item.responsible_role === "customer" ? "arrow" : "jobs"}/><div><span>WHAT HAPPENS NEXT</span><strong>{careJobAction(item)}</strong></div></div>
           {item.vehicle_archived && <span className="job-archived">Archived vehicle history</span>}
-          <dl><div><dt>Responsible</dt><dd>{item.responsible_role === "customer" ? "You" : "Skycar operations"}</dd></div><div><dt>{item.is_overdue ? "Overdue since" : "Next update"}</dt><dd>{item.next_update_at ? displayDate(item.next_update_at) : "No update time committed"}</dd></div><div><dt>Submitted</dt><dd>{displayDate(item.created_at)}</dd></div></dl>
-          <Link className="job-detail-link" href={`/care/requests/${encodeURIComponent(item.id)}`}>View request and timeline <span aria-hidden="true">→</span></Link>
+          <dl><div><dt>Responsible</dt><dd>{connected === "appointment_requested" ? "Skycar availability team" : item.responsible_role === "customer" ? "You" : "Skycar operations"}</dd></div><div><dt>{connected ? "Journey updated" : item.is_overdue ? "Overdue since" : "Next update"}</dt><dd>{connected ? displayDate(item.updated_at) : item.next_update_at ? displayDate(item.next_update_at) : "No update time committed"}</dd></div><div><dt>Submitted</dt><dd>{displayDate(item.created_at)}</dd></div></dl>
+          <Link className="job-detail-link" href={`/care/journey/${encodeURIComponent(item.id)}`}>{connected === "completed" ? "View completion record" : connected === "quote_ready" ? "Review quotes" : "Open service journey"} <span aria-hidden="true">→</span></Link>
         </article>;
       })}
     </section>}
     {nextCursor && access === "ready" && <button className="jobs-load-more" type="button" disabled={loadingMore} onClick={() => void load({ cursor: nextCursor })}>{loadingMore ? "Loading more…" : "Load more requests"}</button>}
-    <p className="jobs-boundary">My Jobs shows recorded request progress only. A request is not a confirmed quote, technician, appointment or payment.<br /><Link href="/auth/sign-out">Sign out on this device</Link></p>
+    <p className="jobs-boundary">A requested appointment is not confirmed until its status says “Appointment confirmed”. Payments are not connected in this test version.<br /><Link href="/auth/sign-out">Sign out on this device</Link></p>
   </main>;
 }

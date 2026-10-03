@@ -31,7 +31,7 @@ try {
   const evidence = new URL('../../docs/qa/care-status/', import.meta.url);
   await mkdir(evidence, { recursive: true });
   const id = '11111111-1111-4111-8111-111111111111';
-  const received = { id, vehicle_id: id, service: 'repair', description: 'Synthetic request for a door scratch', preferred_window: 'flexible', customer_stage: 'request_received', responsible_role: 'operations', next_action: 'review_request', created_at: '2026-09-20T12:00:00Z', updated_at: '2026-09-20T12:00:00Z', next_update_at: '2020-01-01T00:00:00Z', events: [{ id: 'event-1', sequence: 1, type: 'request_received', occurred_at: '2026-09-20T12:00:00Z' }] };
+  const received = { id, vehicle_id: id, service: 'repair', description: 'Synthetic request for a door scratch', preferred_window: 'flexible', quote_state: 'in_review', assignment_state: 'none', fulfilment_state: null, money_state: null, customer_stage: 'request_received', responsible_role: 'operations', next_action: 'review_request', created_at: '2026-09-20T12:00:00Z', updated_at: '2026-09-20T12:00:00Z', next_update_at: '2020-01-01T00:00:00Z', events: [{ id: 'event-1', sequence: 1, type: 'request_received', occurred_at: '2026-09-20T12:00:00Z' }] };
   let mode = 'received';
   let releaseDelayedStatus;
   let delayedStatusStarted;
