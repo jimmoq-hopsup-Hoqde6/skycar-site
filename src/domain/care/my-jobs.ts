@@ -1,4 +1,5 @@
 import type { CareRequestSummary } from "./list.ts";
+import { connectedCareStage } from "./presentation.ts";
 
 export type CareJobsPage = {
   items: CareRequestSummary[];
@@ -42,6 +43,13 @@ export function readCareJobsPage(value: unknown): CareJobsPage {
 }
 
 export function careJobSummary(item: CareRequestSummary) {
+  const connected = connectedCareStage(item);
+  if (connected === "completed") return { status: "Service complete", detail: "Completion evidence is saved in the service journey and your Garage history.", tone: "received" as const };
+  if (connected === "in_progress") return { status: "Service in progress", detail: "The expert has started the recorded work.", tone: "received" as const };
+  if (connected === "appointment_confirmed") return { status: "Appointment confirmed", detail: "Skycar has confirmed the expert and appointment details.", tone: "received" as const };
+  if (connected === "appointment_requested") return { status: "Appointment requested", detail: "Your preferred time is recorded, but expert availability is not confirmed yet.", tone: "delayed" as const };
+  if (connected === "quote_ready") return { status: "Quote ready", detail: "A human-reviewed quote is ready for your decision.", tone: "action" as const };
+  if (connected === "cancelled") return { status: "Request cancelled", detail: "This service journey is closed and no appointment is confirmed.", tone: "delayed" as const };
   if (item.customer_stage === "no_match") return {
     status: "No match yet",
     detail: "Choose whether you would like Skycar to review this request again.",
@@ -65,6 +73,13 @@ export function careJobSummary(item: CareRequestSummary) {
 }
 
 export function careJobAction(item: CareRequestSummary) {
+  const connected = connectedCareStage(item);
+  if (connected === "completed") return "View completion record";
+  if (connected === "in_progress") return "Expert completing the work";
+  if (connected === "appointment_confirmed") return "Attend confirmed appointment";
+  if (connected === "appointment_requested") return "Skycar availability check";
+  if (connected === "quote_ready") return "Review your quotes";
+  if (connected === "cancelled") return "No further action";
   if (item.next_action === "choose_recovery") return "Your decision";
   if (item.next_action === "review_overdue_request") return "Skycar follow-up";
   return "Skycar review";

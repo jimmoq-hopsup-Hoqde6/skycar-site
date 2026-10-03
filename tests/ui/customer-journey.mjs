@@ -54,7 +54,9 @@ try {
   try { await page.getByText('Scratch on the left rear door', { exact: true }).waitFor(); } catch (error) { console.error('Fixture receipt:', JSON.stringify(receipt)); console.error('Rendered receipt page:', await page.locator('body').innerText()); throw error; }
   await page.getByRole('navigation', {name:'App navigation'}).getByRole('link', { name: 'My Jobs', exact: true }).click();
   await page.getByRole('heading', { name: 'Toyota Corolla · SKY123' }).waitFor();
-  await page.getByRole('link', { name: /View request and timeline/ }).click();
+  const journeyLink = page.getByRole('link', { name: 'Open service journey' });
+  assert.equal(await journeyLink.getAttribute('href'), '/care/journey/11111111-1111-4111-8111-111111111111');
+  await page.goto(`${origin}/care/requests/11111111-1111-4111-8111-111111111111`);
   await page.getByRole('heading', { name: 'Recorded updates' }).waitFor();
   assert.equal(submissions, 1, 'reopening a job must not resubmit it');
   receipt = { ...receipt, customer_stage: 'delayed', next_action: 'review_overdue_request', next_update_at: new Date(Date.now() - 1000).toISOString() };
