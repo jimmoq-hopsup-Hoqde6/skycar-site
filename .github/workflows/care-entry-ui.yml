@@ -42,6 +42,7 @@ jobs:
           node tests/ui/customer-journey.mjs
           node tests/ui/guest-photo-recovery.mjs
           node tests/ui/booking-photo-intake.mjs
+          node tests/ui/care-journey-privacy.mjs
           npm run start -- --hostname 127.0.0.1 -p 3100 > "$RUNNER_TEMP/skycar-garage.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
