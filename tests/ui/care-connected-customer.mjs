@@ -130,7 +130,11 @@ try {
   await page.getByText('Service complete', { exact: true }).waitFor();
   assert.equal(await page.getByText('Update overdue', { exact: true }).count(), 0);
   await page.goto(`${origin}/garage`);
+  await page.getByRole('heading', { name: 'Corolla' }).waitFor();
+  await page.waitForTimeout(250);
+  const historyResponse = page.waitForResponse(response => response.url().includes(`/${vehicleId}/history`));
   await page.getByRole('button', { name: 'History +' }).click();
+  await historyResponse;
   await page.getByText('Care service completed', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.deepEqual(commands, ['select_quote', 'confirm', 'start', 'complete']);
