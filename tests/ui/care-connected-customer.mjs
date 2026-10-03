@@ -44,7 +44,7 @@ try {
   const projection = () => ({ id, vehicle_id: vehicleId, vehicle_archived: false, service: 'repair', quote_state: state === 'quotes_ready' ? 'issued' : 'accepted', assignment_state: state === 'quotes_ready' ? 'none' : state === 'booking_requested' ? 'reserved' : 'accepted', fulfilment_state: state === 'quotes_ready' || state === 'booking_requested' ? null : state === 'scheduled' ? 'scheduled' : state === 'in_progress' ? 'in_progress' : 'completed', money_state: null, customer_stage: 'no_match', next_action: 'choose_recovery', responsible_role: 'customer', created_at: now, updated_at: now, next_update_at: null, is_overdue: false });
   const receipt = () => ({ ...projection(), description: 'Visible scratch on the left rear door', preferred_window: 'flexible', events: [{ id: 'legacy-1', sequence: 1, type: 'request_received', occurred_at: now }] });
 
-  await page.route('**/api/v1/garage/vehicles**', async route => {
+  await page.route(/\/api\/v1\/garage\/vehicles(?:\/.*)?(?:\?.*)?$/, async route => {
     const url = new URL(route.request().url());
     if (url.pathname.endsWith('/history')) return route.fulfill({ json: { data: { items: state === 'completed' ? [{ id: 'history-1', event_type: 'care_service_completed', occurred_at: now, source: 'skycar_care', payload: { journey_id: id, quote_id: quoteId, expert_id: expertId } }] : [], nextCursor: null } } });
     if (url.pathname.endsWith('/photo')) return route.fulfill({ status: 204, headers: { 'X-Skycar-Account': customerAccount } });
