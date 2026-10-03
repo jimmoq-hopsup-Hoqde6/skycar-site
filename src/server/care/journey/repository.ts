@@ -88,8 +88,13 @@ export async function journeySnapshot(access:JourneyAccess) {
 }
 export async function journeyCommand(access:JourneyAccess,action:string,key:string,payload:unknown) {
  // Check every declared completion image before the database completion transition.
- if(action==='complete'){const list=await photoManifest(access,true);if(!list.length)throw new JourneyError('EVIDENCE_REQUIRED');await Promise.all(list.map(p=>journeyPhoto(access,p.slot,true)));}
- const {data,error}=await access.db.rpc('care_journey_command',{p_action:action,p_id:access.id,p_actor:access.actor,p_guest_key:access.guestKey,p_key:key,p_payload:payload});
+ let commandPayload=payload;
+ if(action==='complete'){
+  const list=await photoManifest(access,true);if(!list.length)throw new JourneyError('EVIDENCE_REQUIRED');
+  await Promise.all(list.map(p=>journeyPhoto(access,p.slot,true)));
+  commandPayload={evidence:list.map(p=>({slot:p.slot,mime_type:p.mime_type,size_bytes:p.size_bytes,sha256:p.sha256}))};
+ }
+ const {data,error}=await access.db.rpc('care_journey_command',{p_action:action,p_id:access.id,p_actor:access.actor,p_guest_key:access.guestKey,p_key:key,p_payload:commandPayload});
  if(error)throw new JourneyError(error.code==='P0001' ? error.message : 'UNAVAILABLE');
  return data;
 }
