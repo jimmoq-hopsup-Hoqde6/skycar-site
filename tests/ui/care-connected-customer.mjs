@@ -135,7 +135,18 @@ try {
   const historyResponse = page.waitForResponse(response => response.url().includes(`/${vehicleId}/history`));
   await page.getByRole('button', { name: 'History +' }).click();
   await historyResponse;
-  await page.getByText('Care service completed', { exact: true }).waitFor();
+  try {
+    await page.getByText('Care service completed', { exact: true }).waitFor({ timeout: 2000 });
+  } catch {
+    // A page-show account revalidation can intentionally close private history.
+    // Reopen it only after the replacement account check has settled.
+    await page.reload();
+    await page.getByRole('heading', { name: 'Corolla' }).waitFor();
+    await page.waitForTimeout(500);
+    await page.getByRole('button', { name: 'History +' }).click();
+    try { await page.getByText('Care service completed', { exact: true }).waitFor(); }
+    catch (error) { console.error('Garage history body:', await page.locator('body').innerText()); throw error; }
+  }
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.deepEqual(commands, ['select_quote', 'confirm', 'start', 'complete']);
   assert.deepEqual(errors, []);
