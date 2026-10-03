@@ -1,5 +1,19 @@
 # Connected Care implementation checkpoint — 3 October 2026
 
+## Connected customer milestone — verified 4 October 2026
+
+The implementation candidate through `bac759a4ddcce5a256e0bdf95188bda1bcc55d4f` connects the guest receipt, account receipt and Garage My Jobs cards to the authoritative journey. Quote, appointment and fulfilment projections now take precedence over stale legacy overdue/no-match text. A reserved quote is labelled **Appointment requested** and cannot appear as confirmed; only the accepted/scheduled projection is labelled **Appointment confirmed**.
+
+- Guest intake receipts now link straight to private request/quote tracking using the existing guest capability.
+- Account receipts and My Jobs link to the connected journey, surface human-reviewed quotes, confirmed work and completion records, and suppress obsolete recovery actions once a connected milestone exists.
+- Completed work has an explicit `Care service completed` label in Garage vehicle history.
+- Receipt parsing now fails closed for unsupported quote, assignment, fulfilment, payment and next-action fields.
+- `tests/ui/care-connected-customer.mjs` covers the customer and operator story from a stale legacy projection through quote choice, requested appointment, explicit operations confirmation, work start, private completion evidence, completion receipt/journey, My Jobs and Garage history.
+
+Verification for exact head and its integration candidate is green: application CI, Care database acceptance, Garage PostgreSQL verification, Garage/Care integration acceptance, and both customer browser matrices. Locally, ESLint and TypeScript were clean, 173 unit tests passed, and the production build passed. The local Chromium binary available to the continuation run was corrupt, so browser acceptance is based on the pinned clean browser installed by CI; it passed both exact-head and integration matrices.
+
+This still does not prove hosted database/API/RLS/storage behavior. The migration remains unapplied, staging remains untouched, and no test administrator has been granted or identified by this work. The next authorised step is a full candidate/access review, then real allowed/denied acceptance against a disposable or staging database using an already-authorised test administrator. Do not promote a customer to obtain that role.
+
 ## Status and ownership
 
 This is the continuation of the authorised customer/operations journey work, isolated from `fix/phone-test-delivery`. The recovered source is based on `47241fceed8f5207de918906a35a7f3165c6b6c4`. The staging branch remained at that revision when checked. No newer ownership handoff appeared in issue #12 comments since 1 October. This run owns only the recovered journey source and photo privacy regression on `work/care-journey-checkpoint`; the separate premium design branch is untouched.
