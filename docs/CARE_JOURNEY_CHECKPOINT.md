@@ -1,5 +1,11 @@
 # Connected Care implementation checkpoint — 3 October 2026
 
+## Release preparation — 4 October 2026
+
+Read-only hosted inspection confirmed a healthy staging project, no connected-journey migration, no development branches and no administrator role. RLS is enabled on the existing customer/request/media tables inspected. No database mutation, role grant or deployment occurred. Existing staging remains `47241fceed8f5207de918906a35a7f3165c6b6c4`.
+
+Added six guest-capability regressions covering request binding, changed signing secrets/intake keys, malformed/tampered cookies, cookie-name impersonation and secure path-scoped cookie issuance. All 179 unit tests passed locally. Corrected stale API documentation and added `CARE_JOURNEY_HOSTED_ACCEPTANCE.md` with the real allowed/denied acceptance procedure. Full hosted acceptance still requires an explicitly identified and authorised test operator; do not promote the existing customer by inference.
+
 ## Connected customer milestone — verified 4 October 2026
 
 The implementation candidate through `bac759a4ddcce5a256e0bdf95188bda1bcc55d4f` connects the guest receipt, account receipt and Garage My Jobs cards to the authoritative journey. Quote, appointment and fulfilment projections now take precedence over stale legacy overdue/no-match text. A reserved quote is labelled **Appointment requested** and cannot appear as confirmed; only the accepted/scheduled projection is labelled **Appointment confirmed**.
@@ -49,8 +55,8 @@ This is a development checkpoint, not a release candidate. The database migratio
 
 ## Next work, in order
 
-1. Connect the guest receipt and Garage My Jobs/status pages to the authoritative journey. Updated quote/fulfilment state must take precedence over old overdue/no-match messaging, and “requested” must never be presented as “confirmed”.
-2. Add a connected customer browser story from receipt/My Jobs through quote choice, booking request, operations confirmation, completion evidence and Garage history.
+1. Completed: connect receipt and My Jobs/status to authoritative journey state, preserving requested-versus-confirmed wording.
+2. Completed: connected customer browser story through completion and Garage history (mocked API acceptance).
 3. Review the migration and operator candidate together. Identify the authorised test administrator separately; do not silently promote a customer.
 4. Only then apply the migration to a disposable/staging database and run real API/RLS/storage/idempotency/state-transition acceptance with both allowed and denied sessions.
 5. Validate the hosted customer and operator path before any staging release. No claim of full acceptance until actual saves, private-media reads and permission failures have been verified.

@@ -1,6 +1,6 @@
 # Connected service journey — implementation draft
 
-Not deployed or ready for integration. The recovered API/UI source compiles, but the database migration/RPC draft was not retained. Database guarantees below describe the required contract, not verified deployed behaviour. See CARE_JOURNEY_CHECKPOINT.md for the next implementation steps.
+Implemented on the isolated journey branch, not deployed to staging. The database migration is `supabase/migrations/20261003064126_care_connected_journey.sql`; disposable PostgreSQL and mocked browser acceptance passed. Hosted database/API/storage acceptance remains outstanding. See CARE_JOURNEY_CHECKPOINT.md for current evidence and CARE_JOURNEY_HOSTED_ACCEPTANCE.md for the release test procedure.
 
 ## Routes
 
