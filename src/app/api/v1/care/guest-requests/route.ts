@@ -1,3 +1,5 @@
+import { guestCookie } from '@/server/care/journey/access.mjs';
+import { getPublicEnvironment } from '@/server/env';
 import { createHmac } from 'node:crypto';
 import { storeGuestPhotos } from '@/server/care/guest-photos.mjs';
 import { guestReceipt } from '@/domain/care/guest.mjs';
@@ -10,6 +12,7 @@ import { SecretConfigurationError } from '@/server/supabase/secret-config.mjs';
 export const runtime = 'nodejs';
 export const POST = guestHandler({
   enabled: () => featureEnabled('CARE'),
+  receiptHeaders: (key: string, receipt: {id:string}) => ({'Set-Cookie':guestCookie(requireSupabaseSecretConfig().secretKey,receipt.id,key,getPublicEnvironment()!=='demo')}),
   save: async (key: string, payload: Record<string,unknown>, request: Request, photos: {bytes: Buffer; mimeType: string; hash: string}[]) => {
     let secretKey:string;
     try { ({secretKey}=requireSupabaseSecretConfig()); }

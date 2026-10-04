@@ -11,7 +11,7 @@ const replies = {
   UNAVAILABLE: [503,'Guest requests are temporarily unavailable. Your request has not been confirmed.'],
   CONFIGURATION_UNAVAILABLE: [503,'Service requests are unavailable right now. Nothing was saved. Please try again later.'],
 };
-export function guestHandler({enabled, save}) {
+export function guestHandler({enabled, save, receiptHeaders = (key,receipt) => { void key; void receipt; return {}; }}) {
   return async request => {
     const json = (body,status) => Response.json(body,{status,headers:{'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
     try {
@@ -42,7 +42,9 @@ export function guestHandler({enabled, save}) {
       catch { throw new GuestError('VALIDATION_FAILED'); }
       const key = guestKey(request.headers.get('idempotency-key'));
       const receipt = guestReceipt(await save(key,guestInput(input),request,photos));
-      return json({data:receipt},201);
+      const response=json({data:receipt},201);
+      for(const [name,value] of Object.entries(receiptHeaders(key,receipt))) response.headers.set(name,String(value));
+      return response;
     } catch(error) {
       const code = error instanceof GuestError && error.code in replies ? error.code : 'UNAVAILABLE';
       const [status,message] = replies[code];

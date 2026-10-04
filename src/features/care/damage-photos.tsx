@@ -17,6 +17,8 @@ export function DamagePhotos({files,disabled,onChange,onProcessing}: Props) {
   const [error,setError] = useState('');
   const [processing,setProcessing] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   async function add(selected: File[]) {
     if (processing || disabled) return;
     setError('');
@@ -40,9 +42,9 @@ export function DamagePhotos({files,disabled,onChange,onProcessing}: Props) {
           next.push(new File([blob],`damage-${files.length+next.length+1}.jpg`,{type:'image/jpeg'}));
         } finally { bitmap.close(); }
       }
-      onChange([...files,...next]);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Could not read this photo. Please try another.'); }
-    finally { setProcessing(false); onProcessing(false); if (input.current) input.current.value = ''; }
+      if (active.current) onChange([...files,...next]);
+    } catch (caught) { if (active.current) setError(caught instanceof Error ? caught.message : 'Could not read this photo. Please try another.'); }
+    finally { if (active.current) { setProcessing(false); onProcessing(false); if (input.current) input.current.value = ''; } }
   }
   return <section className="damage-photos" aria-labelledby="damage-photo-title">
     <div className="damage-photo-heading"><h3 id="damage-photo-title">Show us what needs attention</h3><span>Optional · {files.length}/3</span></div>

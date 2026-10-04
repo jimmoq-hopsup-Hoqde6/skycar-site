@@ -77,11 +77,11 @@ try {
   await page.getByText("Loading your requests…").waitFor();
   await navigation;
   await page.getByRole("heading", { name: "Toyota Corolla · SKY123" }).waitFor();
-  assert.equal(await page.getByRole("link", { name: /View request and timeline/ }).count(), 2);
+  assert.equal(await page.getByRole("link", { name: /Open service journey/ }).count(), 2);
   await page.screenshot({ path: new URL("desktop-list.png", evidence).pathname, fullPage: true });
   await page.getByRole("button", { name: "Load more requests" }).click();
   await page.getByRole("heading", { name: "Toyota Corolla · SKY123" }).nth(1).waitFor();
-  assert.equal(await page.getByRole("link", { name: /View request and timeline/ }).count(), 3);
+  assert.equal(await page.getByRole("link", { name: /Open service journey/ }).count(), 3);
   assert.ok(requestedCursors.includes("page-two"));
 
   // Successful account replacement must refetch ownership and never restore
@@ -134,17 +134,17 @@ try {
   await page.getByText("Archived vehicle history").waitFor();
   await page.waitForFunction(() => !document.querySelector("#vehicle-filter").disabled);
   assert.equal(await page.getByLabel("Vehicle").inputValue(), archivedVehicle.id, "ordinary filtering retains the archived selection");
-  assert.equal(await page.getByRole("link", { name: /View request and timeline/ }).count(), 1, "archived filter loads only archived history");
+  assert.equal(await page.getByRole("link", { name: /Open service journey/ }).count(), 1, "archived filter loads only archived history");
   await page.screenshot({ path: new URL("mobile-archived-filter.png", evidence).pathname, fullPage: true });
   mode = "offline";
   await page.getByRole("button", { name: "Refresh" }).click();
   await page.getByRole("alert").filter({ hasText: "Last checked information" }).waitFor();
-  assert.equal(await page.getByRole("link", { name: /View request and timeline/ }).count(), 1);
+  assert.equal(await page.getByRole("link", { name: /Open service journey/ }).count(), 1);
   await page.screenshot({ path: new URL("mobile-stale-retry.png", evidence).pathname, fullPage: true });
   mode = "session";
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await page.getByRole("heading", { name: "Sign in to see My Jobs" }).waitFor();
-  assert.equal(await page.getByRole("link", { name: /View request and timeline/ }).count(), 0);
+  assert.equal(await page.getByRole("link", { name: /Open service journey/ }).count(), 0);
   assert.equal(await page.getByRole("option", { name: /Mazda/ }).count(), 0);
   await page.screenshot({ path: new URL("mobile-session-required.png", evidence).pathname, fullPage: true });
   const signInLink = page.getByRole("link", { name: "Sign in" });
@@ -158,7 +158,7 @@ try {
   mode = "access";
   await page.getByRole("button", { name: "Refresh" }).click();
   await page.getByRole("heading", { name: "These requests are unavailable" }).waitFor();
-  assert.equal(await page.getByRole("link", { name: /View request and timeline/ }).count(), 0);
+  assert.equal(await page.getByRole("link", { name: /Open service journey/ }).count(), 0);
   console.log("PASS: loading, owner list, A→B focus/pageshow vehicle revalidation, prior-account label redaction, late-response isolation, archived history, pagination, stale retry, session redaction, empty and access-denied states");
 } finally {
   if (browser) await browser.close();

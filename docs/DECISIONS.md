@@ -128,3 +128,15 @@ Garage UI consumes docs/GARAGE_API.md. Other workstreams must not write vehicles
 directly or introduce another ownership model. New migration remains subject to
 isolated database and release verification under #1/#8. No live migration is authorised
 or performed by committing the implementation.
+
+## D-008 — Connected service journey in isolated staging
+Date: 2026-10-02
+Status: AUTHORISED TEST BUILD
+
+Implement the complete reviewed-quote path requested by the owner: guest or Garage intake, private damage photos, operations review, named expert quote and proposed appointment, customer selection, capacity-checked operations confirmation, work progress and completion evidence. Guest access uses a request-specific HttpOnly capability cookie; an account is not required. The shared Garage vehicle remains the account request's source of ownership.
+
+A new journey projection references either the existing guest intake or existing Care request. It owns reviewed-quote/booking/progress state without reinterpreting receipt acknowledgement as a booking. The old isolated offer experiment remains separate. Once the connected journey issues a quote, its account request's quote state stops the acknowledgement worker. Existing receipt pages link to the authoritative journey.
+
+Operations require the existing server-granted admin role. No existing customer is silently promoted. Expert identity, service coverage and insurance validity are entered and reviewed by operations; availability is only confirmed after atomic overlap checks. Customer selection is a booking request until operations confirms it. Repeated commands reuse their keys and never create duplicate bookings.
+
+Money remains a separate lifecycle: there is no charge, payout, refund, paid badge or live Stripe checkout without a configured provider. Ravin trial links are not APIs. Manual review supports the working service path while official Ravin credentials/contracts remain a setup dependency. No external notifications are sent by this build.
