@@ -47,8 +47,9 @@ export async function journeyAccess(request:Request,idValue:string,adminOnly=fal
  return {db,id,actor:admin ? actor : null,admin,guestKey:admin ? null : guest.data.idempotency_key,account:admin ? actor! : `guest:${id}`,kind:'guest' as const,source:{service:p.service,description:p.description,vehicle:p.vehicle,created_at:guest.data.created_at},initialDetails:{name:p.name,phone:p.phone,suburb:p.suburb,postcode:p.postcode} as Record<string,string>};
 }
 export type JourneyAccess = Awaited<ReturnType<typeof journeyAccess>>;
-function photoPrefix(access:JourneyAccess,completion=false) {return `${completion ? 'care-completion' : access.kind==='guest' ? 'guest-requests' : 'care-requests'}/${access.id}`;}
-export async function photoManifest(access:JourneyAccess,completion=false):Promise<ManifestEntry[]> {
+type MediaAccess = Pick<JourneyAccess,'db'|'kind'|'id'>;
+function photoPrefix(access:MediaAccess,completion=false) {return `${completion ? 'care-completion' : access.kind==='guest' ? 'guest-requests' : 'care-requests'}/${access.id}`;}
+export async function photoManifest(access:MediaAccess,completion=false):Promise<ManifestEntry[]> {
  const result=await access.db.storage.from('private-media').download(`${photoPrefix(access,completion)}/manifest.json`);
  if(result.error){if(String(result.error.statusCode)==='404'||result.error.message==='Object not found')return [];throw new JourneyError('UNAVAILABLE');}
  if(result.data.size>4096)throw new JourneyError('UNAVAILABLE');
@@ -56,7 +57,7 @@ export async function photoManifest(access:JourneyAccess,completion=false):Promi
  if(!Array.isArray(list)||list.length<1||list.length>3||list.some((v,i)=>!v||v.slot!==i+1||!['image/jpeg','image/png','image/webp'].includes(v.mime_type)||!Number.isInteger(v.size_bytes)||v.size_bytes<128||v.size_bytes>900000||typeof v.sha256!=='string'||!/^[0-9a-f]{64}$/.test(v.sha256)))throw new JourneyError('UNAVAILABLE');
  return list;
 }
-export async function journeyPhoto(access:JourneyAccess,slot:number,completion=false) {
+export async function journeyPhoto(access:MediaAccess,slot:number,completion=false) {
  const manifest=await photoManifest(access,completion);const meta=manifest.find(v=>v.slot===slot);if(!meta)throw new JourneyError('NOT_FOUND');
  const result=await access.db.storage.from('private-media').download(`${photoPrefix(access,completion)}/photo-${slot}`);
  if(result.error || !result.data)throw new JourneyError('UNAVAILABLE');

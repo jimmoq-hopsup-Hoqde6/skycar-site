@@ -12,6 +12,9 @@ export const API_ROUTE_TEMPLATES = Object.freeze({
   authSignIn: '/api/v1/auth/sign-in',
   authSignOut: '/api/v1/auth/sign-out',
   garageVehiclePhoto: '/api/v1/garage/vehicles/[vehicleId]/photo',
+  technicianJobs: '/api/v1/technician/jobs',
+  technicianJob: '/api/v1/technician/jobs/[jobId]',
+  technicianJobPhoto: '/api/v1/technician/jobs/[jobId]/photos/[slot]',
 });
 
 const REGISTERED_ROUTE_TEMPLATES = new Set(Object.values(API_ROUTE_TEMPLATES));

@@ -8,7 +8,7 @@ import {
 
 const MAX_BODY_BYTES = 8192;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const SAFE_RETURN_ROOTS = ['/garage', '/care/request', '/care/requests'];
+const SAFE_RETURN_ROOTS = ['/garage', '/care/request', '/care/requests', '/technician'];
 
 function fault(code, status, message, options = {}) {
   throw new ApiFault(code, status, message, options);

@@ -5,6 +5,7 @@ import { readdirSync } from "node:fs";
 import { promisify } from "node:util";
 import { verifyCareOffers } from "./care-offers.acceptance.mjs";
 import { verifyCareJourney } from "./care-journey.acceptance.mjs";
+import { verifyTechnicianInbox } from "./technician-inbox.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
@@ -96,6 +97,7 @@ before(() => {
     '202609300001_staging_access_hardening.sql',
     '20261001030000_care_guest_requests.sql',
     '20261003064126_care_connected_journey.sql',
+    '20261004090000_technician_inbox.sql',
   ], 'combined verification must include every public migration in filename order');
   for (const migration of migrations) file(`supabase/migrations/${migration}`);
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
@@ -260,4 +262,8 @@ test('Care offers enforce authorization, valid appointment times, expiry and ato
 
 test('Connected Care enforces authority, exact commands, capacity and completion evidence', async () => {
   await verifyCareJourney({ sql, auth, quote, garageCreate, carePayload, expectSqlError, result });
+});
+
+test('Technician identity and inbox permissions follow invitations and selected jobs', async () => {
+  await verifyTechnicianInbox({sql,auth,quote});
 });

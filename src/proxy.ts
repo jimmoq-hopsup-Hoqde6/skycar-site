@@ -14,5 +14,7 @@ export const config = {
     "/api/v1/auth/:path*",
     "/api/v1/garage/:path*",
     "/api/v1/care/requests/:path*",
+    "/technician/:path*",
+    "/api/v1/technician/:path*",
   ],
 };
