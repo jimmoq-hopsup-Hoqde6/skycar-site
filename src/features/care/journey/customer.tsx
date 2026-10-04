@@ -4,25 +4,27 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import {DamagePhotos} from '../damage-photos';
 import {PrivateJourneyPhoto} from './private-photo';
 import {api,readJourney,states,events,money,date,JourneyApiError,type Journey,type Quote} from './types';
+import {readCustomerCompletionReviewResult} from '@/domain/care/completion-review.mjs';
 import '../request-form.css';
 import '../guest-request-form.css';
 import './journey.css';
-type Attempt={key:string;account:string;body?:string;photos?:File[]};
+type Attempt={key:string;account:string;action?:string;body?:string;photos?:File[]};
 export function CustomerJourney({id}:{id:string}){
  const[data,setData]=useState<Journey|null>(null);const[account,setAccount]=useState('');const[loading,setLoading]=useState(true);
  const[error,setError]=useState('');const[busy,setBusy]=useState(false);const[uncertain,setUncertain]=useState(false);
  const[files,setFiles]=useState<File[]>([]);const[preparing,setPreparing]=useState(false);const[chosen,setChosen]=useState<Quote|null>(null);
+ const[issueDetails,setIssueDetails]=useState('');
  const verifiedScope=useRef('');const attempt=useRef<Attempt|null>(null);const epoch=useRef(0);const locked=useRef(false);const read=useRef<AbortController|null>(null);
  const clearPrivate=useCallback(()=>{
   verifiedScope.current='';attempt.current=null;
-  setData(null);setAccount('');setChosen(null);setFiles([]);setPreparing(false);setUncertain(false);
+  setData(null);setAccount('');setChosen(null);setFiles([]);setIssueDetails('');setPreparing(false);setUncertain(false);
  },[]);
  const load=useCallback(async()=>{
   read.current?.abort();const controller=new AbortController();read.current=controller;const version=++epoch.current;
   setData(null);setAccount('');setLoading(true);setError('');setChosen(null);
   try{const result=await api(`/api/v1/care/journey/${id}`,{signal:controller.signal});if(version!==epoch.current)return;if(!result.account)throw new Error('We could not verify access to this request.');
    const scope=`${id}:${result.account}`;
-   if(verifiedScope.current!==scope){attempt.current=null;setUncertain(false);setFiles([]);}
+   if(verifiedScope.current!==scope){attempt.current=null;setUncertain(false);setFiles([]);setIssueDetails('');}
    verifiedScope.current=scope;
    setData(readJourney(result.data,id));setAccount(result.account);
   }catch(e){if(version!==epoch.current||controller.signal.aborted)return;setError(e instanceof Error?e.message:'Unable to load request.');if(e instanceof JourneyApiError&&[401,403,404].includes(e.status))clearPrivate();}
@@ -32,7 +34,7 @@ export function CustomerJourney({id}:{id:string}){
  useEffect(()=>{const refresh=()=>{void load();};const visible=()=>{if(document.visibilityState==='visible')refresh();};queueMicrotask(refresh);window.addEventListener('focus',refresh);window.addEventListener('pageshow',refresh);document.addEventListener('visibilitychange',visible);return()=>{invalidate();window.removeEventListener('focus',refresh);window.removeEventListener('pageshow',refresh);document.removeEventListener('visibilitychange',visible);};},[load,invalidate]);
  async function send(action?:string,payload?:unknown,upload=false){
   if(locked.current||!account||preparing)return;
-  if(!attempt.current)attempt.current={key:crypto.randomUUID(),account,...(upload?{photos:[...files]}:{body:JSON.stringify({action,payload})})};
+  if(!attempt.current)attempt.current={key:crypto.randomUUID(),account,action,...(upload?{photos:[...files]}:{body:JSON.stringify({action,payload})})};
   const original=attempt.current;if(original.account!==account)return;
   locked.current=true;setBusy(true);setError('');const version=epoch.current;
   try{
@@ -40,11 +42,12 @@ export function CustomerJourney({id}:{id:string}){
    if(original.photos){const form=new FormData();original.photos.forEach(file=>form.append('photos',file));body=form;}else headers['Content-Type']='application/json';
    const result=await api(`/api/v1/care/journey/${id}${original.photos?'/photos':''}`,{method:'POST',headers,body});
    if(version!==epoch.current)return;if(result.account!==account)throw new JourneyApiError('Your account changed. Refresh before continuing.',403,false);
-   attempt.current=null;setUncertain(false);setFiles([]);await load();
+   if(original.action==='confirm_completion'||original.action==='report_completion_issue')readCustomerCompletionReviewResult(result.data,id,original.action);
+   attempt.current=null;setUncertain(false);setFiles([]);setIssueDetails('');await load();
   }catch(e){
    if(version!==epoch.current)return;
    if(e instanceof JourneyApiError&&[401,403,404].includes(e.status))clearPrivate();
-   else{const retry=e instanceof JourneyApiError?e.retryable:true;setUncertain(uncertain||retry);if(!uncertain&&!retry)attempt.current=null;}
+   else{const retry=e instanceof JourneyApiError?e.retryable:true;setUncertain(retry);if(!retry)attempt.current=null;}
    setError(e instanceof Error?e.message:'Could not confirm this action.');
   }
   finally{locked.current=false;setBusy(false);if(attempt.current)setUncertain(true);}
@@ -67,6 +70,12 @@ export function CustomerJourney({id}:{id:string}){
    <div className="journey-review-note"><strong>Reviewed by an expert</strong><p>Photos help explain visible damage. Any inspection needed and the proposed repair work should be included in the expert’s quote.</p></div></section>
    <section className="journey-panel"><p className="eyebrow">WHERE &amp; WHO</p><h2>Service details</h2>{['review','quotes_ready'].includes(data.state)?<form key={`${account}:${data.revision}`} onSubmit={e=>{e.preventDefault();void send('update_details',Object.fromEntries(new FormData(e.currentTarget)));}}><fieldset disabled={busy||uncertain}><label className="care-field">Contact name<input name="name" required minLength={2} maxLength={100} defaultValue={data.details.name||''} autoComplete="name"/></label><label className="care-field">Phone<input name="phone" type="tel" required minLength={8} maxLength={24} defaultValue={data.details.phone||''} autoComplete="tel"/></label><label className="care-field">Suburb<input name="suburb" required minLength={2} maxLength={100} defaultValue={data.details.suburb||''} autoComplete="address-level2"/></label><label className="care-field">Postcode<input name="postcode" required pattern="[0-9]{4}" maxLength={4} defaultValue={data.details.postcode||''} autoComplete="postal-code"/></label><button className="care-entry-button" type="submit">Save service details</button></fieldset></form>:<p>{data.details.name}<br/>{data.details.phone}<br/>{data.details.suburb} {data.details.postcode}</p>}<p className="care-help">{data.kind==='guest'?'Keep this link in this browser to return without an account.':'This request is connected to your Garage vehicle.'}</p></section></div>
    {!!data.completion_photos.length&&<section className="journey-panel"><p className="eyebrow">THE RESULT</p><h2>Completion photos</h2><div className="journey-private-photos">{data.completion_photos.map(slot=><PrivateJourneyPhoto key={`${account}:complete:${slot}`} id={id} slot={slot} account={account} completion/>)}</div></section>}
+   {data.state==='completed'&&data.completion_review.state==='awaiting_review'&&<section className="journey-panel journey-completion-review"><p className="eyebrow">YOUR REVIEW</p><h2>How does the completed work look?</h2><p>Check the completion photos before choosing. Neither option charges, releases or refunds money.</p>
+    <form onSubmit={event=>{event.preventDefault();void send('confirm_completion',{});}}><fieldset disabled={busy||uncertain}><label className="journey-review-choice"><input type="checkbox" required/> The completed work looks good and I confirm this service record.</label><button className="care-entry-button" type="submit">Confirm completed work</button></fieldset></form>
+    <form onSubmit={event=>{event.preventDefault();void send('report_completion_issue',{details:issueDetails});}}><fieldset disabled={busy||uncertain}><label className="care-field">Report an issue privately<textarea value={issueDetails} onChange={event=>setIssueDetails(event.target.value)} minLength={10} maxLength={2000} required placeholder="Describe what needs Skycar operations to review."/></label><p className="care-help">Skycar operations will review this report. This does not automatically create a refund or change payment.</p><button className="journey-text-button" type="submit">Report completion issue</button></fieldset></form>
+   </section>}
+   {data.state==='completed'&&data.completion_review.state==='confirmed'&&<section className="journey-panel journey-completion-outcome"><p className="eyebrow">REVIEW SAVED</p><h2>Completed work confirmed</h2><p>Your confirmation is saved with this service record. No payment action was taken.</p></section>}
+   {data.state==='completed'&&data.completion_review.state==='issue_reported'&&<section className="journey-panel journey-completion-outcome"><p className="eyebrow">PRIVATE ISSUE SAVED</p><h2>Skycar operations review requested</h2><p>Your report is saved privately for operations:</p><blockquote>{data.completion_review.issue_details}</blockquote><p className="care-help">No refund or payment change was made automatically.</p></section>}
    <section className="journey-panel"><h2>Recorded updates</h2><ol className="journey-events"><li><span>Request received</span><time>{date(data.request.created_at)}</time></li>{data.events.map(event=><li key={event.id}><span>{events[event.type]}</span><time>{date(event.occurred_at)}</time></li>)}</ol></section>
    <footer className="journey-footer"><p>Request reference <span>{id}</span></p>{['review','quotes_ready','booking_requested','scheduled'].includes(data.state)&&<button className="journey-text-button" disabled={busy||uncertain} onClick={()=>void send('request_cancel',{})}>Request cancellation</button>}</footer>
   </>}
