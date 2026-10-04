@@ -43,7 +43,7 @@ export async function readTechnicianPhoto(id:string,slot:number) {
 
 export async function technicianCommand(id:string,key:string,body:{action:string;payload:Record<string,unknown>},expectedAccount:string) {
   const {db,actor}=await sessionAccess();requireTechnicianAccount(actor,expectedAccount);
-  const result=await db.rpc('care_technician_job_command',{p_actor:actor,p_key:key,p_action:body.action,p_id:id,p_payload:body.payload});
+  const result=await db.rpc(body.action==='start'?'care_technician_work_command':'care_technician_job_command',{p_actor:actor,p_key:key,p_action:body.action,p_id:id,p_payload:body.payload});
   if(result.error)throw technicianFault(result.error.code==='P0001'?result.error.message:'UNAVAILABLE');
   return {account:actor,data:result.data};
 }
