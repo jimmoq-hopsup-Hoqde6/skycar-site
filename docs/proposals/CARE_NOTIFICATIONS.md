@@ -106,7 +106,7 @@ It returns one of:
 
 - `{status:"accepted",provider_message_id:string}`
 - `{status:"retry",code:"PROVIDER_TEMPORARY"}`
-- `{status:"failed",code:"PROVIDER_REJECTED"}`
+- `{status:"failed",code:"PROVIDER_REJECTED"|"IDEMPOTENCY_CONFLICT"}`
 
 Provider-specific errors, response bodies and credentials never escape this
 interface. Unexpected exceptions become retryable `PROVIDER_TEMPORARY` without
