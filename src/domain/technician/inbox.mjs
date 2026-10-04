@@ -1,3 +1,4 @@
+import {readOwnTechnicianQuotes} from './commands.mjs';
 export const technicianStates = Object.freeze(['review','quotes_ready','booking_requested','scheduled','in_progress','completed','cancellation_requested']);
 const uuid = value => typeof value==='string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const object = value => value!==null && typeof value==='object' && !Array.isArray(value);
@@ -30,6 +31,6 @@ export function readTechnicianInbox(value) {
   return value;
 }
 export function readTechnicianDetail(value,id) {
-  if(!exact(value,['profile','job']))throw new Error('Unsupported technician detail');
-  readTechnicianProfile(value.profile);readTechnicianJob(value.job,{id,detail:true});return value;
+  if(!exact(value,['profile','job',...(Object.hasOwn(value??{},'own_quotes')?['own_quotes']:[])]))throw new Error('Unsupported technician detail');
+  readTechnicianProfile(value.profile);readTechnicianJob(value.job,{id,detail:true});if(Object.hasOwn(value,'own_quotes'))readOwnTechnicianQuotes(value.own_quotes);return value;
 }
