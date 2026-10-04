@@ -27,6 +27,9 @@ export function CareOperations(){
  const[files,setFiles]=useState<File[]>([]);const[preparing,setPreparing]=useState(false);const[availability,setAvailability]=useState(false);
  const epoch=useRef(0);const read=useRef<AbortController|null>(null);const attempt=useRef<Attempt|null>(null);const locked=useRef(false);const verifiedAccount=useRef('');
  const clearPrivate=useCallback(()=>{setData(null);setSelected('');setFiles([]);setAvailability(false);attempt.current=null;setUncertain(false);},[]);
+ const clearAccess=useCallback(()=>{
+  verifiedAccount.current='';setAccount('');setList(null);setNotice('');setPreparing(false);clearPrivate();
+ },[clearPrivate]);
  const invalidate=useCallback(()=>{epoch.current++;read.current?.abort();},[]);
  const load=useCallback(async(id?:string)=>{
   read.current?.abort();const controller=new AbortController();read.current=controller;const version=++epoch.current;setLoading(true);setError('');
@@ -35,9 +38,9 @@ export function CareOperations(){
    if(!result.account)throw new Error('The signed-in operations account could not be verified.');
    if(verifiedAccount.current&&verifiedAccount.current!==result.account)clearPrivate();verifiedAccount.current=result.account;setAccount(result.account);
    if(id){setData(readJourney(result.data,id));setSelected(id);setFiles([]);setAvailability(false);}else setList(readOperations(result.data));
-  }catch(caught){if(version!==epoch.current||controller.signal.aborted)return;const problem=caught instanceof Error?caught.message:'Unable to load operations.';setError(problem);if(caught instanceof JourneyApiError&&[401,403].includes(caught.status)){verifiedAccount.current='';setAccount('');setList(null);clearPrivate();}}
+  }catch(caught){if(version!==epoch.current||controller.signal.aborted)return;const problem=caught instanceof Error?caught.message:'Unable to load operations.';setError(problem);if(caught instanceof JourneyApiError&&[401,403,404].includes(caught.status))clearAccess();}
   finally{if(version===epoch.current)setLoading(false);}
- },[clearPrivate]);
+ },[clearPrivate,clearAccess]);
  useEffect(()=>{const refresh=()=>{void load();};const visible=()=>{if(document.visibilityState==='visible')refresh();};queueMicrotask(refresh);window.addEventListener('focus',refresh);window.addEventListener('pageshow',refresh);document.addEventListener('visibilitychange',visible);return()=>{invalidate();window.removeEventListener('focus',refresh);window.removeEventListener('pageshow',refresh);document.removeEventListener('visibilitychange',visible);};},[load,invalidate]);
  async function run(url:string,body?:unknown,uploadFiles?:File[]){
   if(locked.current||!account||preparing)return;
@@ -49,7 +52,12 @@ export function CareOperations(){
    const result=await api(original.url,{method:'POST',headers,body:requestBody});if(version!==epoch.current)return;if(result.account!==account)throw new JourneyApiError('Your operations account changed. Refresh before continuing.',403,false);
    attempt.current=null;setUncertain(false);setFiles([]);setAvailability(false);setNotice(original.files?'Completion evidence saved privately.':'The operations record was updated.');
    if(selected)await load(selected);await load();
-  }catch(caught){if(version!==epoch.current)return;const retry=caught instanceof JourneyApiError?caught.retryable:true;if(!retry)attempt.current=null;setUncertain(retry);setError(caught instanceof Error?caught.message:'The action could not be confirmed.');}
+  }catch(caught){
+   if(version!==epoch.current)return;
+   if(caught instanceof JourneyApiError&&[401,403,404].includes(caught.status))clearAccess();
+   else{const retry=caught instanceof JourneyApiError?caught.retryable:true;if(!retry)attempt.current=null;setUncertain(retry);}
+   setError(caught instanceof Error?caught.message:'The action could not be confirmed.');
+  }
   finally{locked.current=false;setBusy(false);if(attempt.current)setUncertain(true);}
  }
  const command=(action:string,payload:unknown,id=selected)=>run('/api/v1/operations/care',{action,...(action==='create_expert'?{}:{id}),payload});

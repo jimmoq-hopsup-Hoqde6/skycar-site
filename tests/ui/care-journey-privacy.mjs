@@ -13,14 +13,15 @@ try {
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
  const page=await browser.newPage({viewport:{width:390,height:844}});page.setDefaultTimeout(10000);
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
- let account='account-a',deny=false,postFails=false;
+ let account='account-a',deny=false,postFails=false,postDenial=0,responseAccount=null;
  const posts=[];
  const snapshot=()=>({id,kind:'account',state:'review',revision:0,request:{vehicle:`Synthetic vehicle ${account}`,service:'repair',description:'Synthetic visible scratch',created_at:'2026-10-01T00:00:00Z'},details:{name:account,phone:'0400000000',suburb:'Adelaide',postcode:'5000'},quotes:[],selected_quote_id:null,appointment:null,events:[],photos:[],completion_photos:[]});
  await page.route('**/api/v1/care/journey/**',async route=>{
   if(route.request().method()==='POST'){
    posts.push({key:route.request().headers()['idempotency-key'],body:route.request().postData()});
+   if(postDenial)return route.fulfill({status:postDenial,json:{error:{message:'Save access denied',retryable:false}}});
    if(postFails)return route.abort('failed');
-   return route.fulfill({json:{data:{ok:true}},headers:{'X-Skycar-Account':account}});
+   return route.fulfill({json:{data:{ok:true}},headers:{'X-Skycar-Account':responseAccount||account}});
   }
   return route.fulfill({status:deny?403:200,json:deny?{error:{message:'Access denied',retryable:false}}:{data:snapshot()},headers:{'X-Skycar-Account':account}});
  });
@@ -53,7 +54,28 @@ try {
  assert.equal(posts.length,2);assert.deepEqual(posts[0],posts[1]);
  account='account-d';await refresh(account);assert.equal(await page.getByRole('button',{name:'Check same action'}).count(),0);
  assert.equal(await page.getByLabel('Contact name').inputValue(),'account-d');
+ // A denied save is an access boundary even without a focus/GET refresh.
+ // Include a prior uncertain action so it cannot survive the denial as a retry.
+ for(const denial of [401,403,404,'changed-account']){
+  postDenial=0;responseAccount=null;postFails=false;await page.reload();
+  await page.getByRole('heading',{name:`Synthetic vehicle ${account}`}).waitFor();
+  await choose();await hasPhoto().waitFor();
+  await page.getByLabel('Contact name').fill('Private unsaved name');
+  postFails=true;await page.getByRole('button',{name:'Save service details',exact:true}).click();
+  await page.getByRole('button',{name:'Check same action'}).waitFor();
+  postFails=false;if(denial==='changed-account')responseAccount='different-account';else postDenial=denial;
+  const before=posts.length;await page.getByRole('button',{name:'Check same action'}).click();
+  await page.getByRole('alert').filter({hasText:denial==='changed-account'?'Your account changed':'Save access denied'}).waitFor();
+  assert.equal(await page.getByRole('heading',{name:`Synthetic vehicle ${account}`}).count(),0,`${denial}: redact the private request immediately`);
+  assert.equal(await page.getByLabel('Contact name').count(),0,`${denial}: clear private form`);
+  assert.equal(await hasPhoto().count(),0,`${denial}: clear selected photos`);
+  assert.equal(await page.getByRole('button',{name:'Check same action'}).count(),0,`${denial}: discard the old pending command`);
+  assert.equal(posts.length,before+1,`${denial}: do not automatically retry a denied write`);
+  postDenial=0;responseAccount=null;await refresh(account);
+  assert.equal(await page.getByLabel('Contact name').inputValue(),account,'re-entry reads authoritative details');
+  assert.equal(await hasPhoto().count(),0,'denied photos must not reappear for the same account');
+ }
  for(const width of [320,390,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);}
  assert.deepEqual(errors,[]);
- console.log('PASS: same-account preservation, account-switch clearing, late photo decoding, denied access, exact command retry, three viewport widths, no browser errors');
+ console.log('PASS: same-account preservation, account-switch clearing, late photo decoding, denied reads/writes, changed-account write response, exact command retry, three viewport widths, no browser errors');
 } finally {if(browser)await browser.close();server.kill('SIGTERM');}

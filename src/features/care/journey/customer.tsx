@@ -13,6 +13,10 @@ export function CustomerJourney({id}:{id:string}){
  const[error,setError]=useState('');const[busy,setBusy]=useState(false);const[uncertain,setUncertain]=useState(false);
  const[files,setFiles]=useState<File[]>([]);const[preparing,setPreparing]=useState(false);const[chosen,setChosen]=useState<Quote|null>(null);
  const verifiedScope=useRef('');const attempt=useRef<Attempt|null>(null);const epoch=useRef(0);const locked=useRef(false);const read=useRef<AbortController|null>(null);
+ const clearPrivate=useCallback(()=>{
+  verifiedScope.current='';attempt.current=null;
+  setData(null);setAccount('');setChosen(null);setFiles([]);setPreparing(false);setUncertain(false);
+ },[]);
  const load=useCallback(async()=>{
   read.current?.abort();const controller=new AbortController();read.current=controller;const version=++epoch.current;
   setData(null);setAccount('');setLoading(true);setError('');setChosen(null);
@@ -21,9 +25,9 @@ export function CustomerJourney({id}:{id:string}){
    if(verifiedScope.current!==scope){attempt.current=null;setUncertain(false);setFiles([]);}
    verifiedScope.current=scope;
    setData(readJourney(result.data,id));setAccount(result.account);
-  }catch(e){if(version!==epoch.current||controller.signal.aborted)return;setError(e instanceof Error?e.message:'Unable to load request.');if(e instanceof JourneyApiError&&[401,403,404].includes(e.status)){verifiedScope.current='';attempt.current=null;setUncertain(false);setFiles([]);}}
+  }catch(e){if(version!==epoch.current||controller.signal.aborted)return;setError(e instanceof Error?e.message:'Unable to load request.');if(e instanceof JourneyApiError&&[401,403,404].includes(e.status))clearPrivate();}
   finally{if(version===epoch.current){setLoading(false);setPreparing(false);}}
- },[id]);
+ },[id,clearPrivate]);
  const invalidate=useCallback(()=>{epoch.current++;read.current?.abort();},[]);
  useEffect(()=>{const refresh=()=>{void load();};const visible=()=>{if(document.visibilityState==='visible')refresh();};queueMicrotask(refresh);window.addEventListener('focus',refresh);window.addEventListener('pageshow',refresh);document.addEventListener('visibilitychange',visible);return()=>{invalidate();window.removeEventListener('focus',refresh);window.removeEventListener('pageshow',refresh);document.removeEventListener('visibilitychange',visible);};},[load,invalidate]);
  async function send(action?:string,payload?:unknown,upload=false){
@@ -37,7 +41,12 @@ export function CustomerJourney({id}:{id:string}){
    const result=await api(`/api/v1/care/journey/${id}${original.photos?'/photos':''}`,{method:'POST',headers,body});
    if(version!==epoch.current)return;if(result.account!==account)throw new JourneyApiError('Your account changed. Refresh before continuing.',403,false);
    attempt.current=null;setUncertain(false);setFiles([]);await load();
-  }catch(e){if(version!==epoch.current)return;const retry=e instanceof JourneyApiError?e.retryable:true;setUncertain(uncertain||retry);if(!uncertain&&!retry)attempt.current=null;setError(e instanceof Error?e.message:'Could not confirm this action.');}
+  }catch(e){
+   if(version!==epoch.current)return;
+   if(e instanceof JourneyApiError&&[401,403,404].includes(e.status))clearPrivate();
+   else{const retry=e instanceof JourneyApiError?e.retryable:true;setUncertain(uncertain||retry);if(!uncertain&&!retry)attempt.current=null;}
+   setError(e instanceof Error?e.message:'Could not confirm this action.');
+  }
   finally{locked.current=false;setBusy(false);if(attempt.current)setUncertain(true);}
  }
  const state=data?states[data.state]:null;const selected=data?.quotes.find(q=>q.id===data.selected_quote_id);
