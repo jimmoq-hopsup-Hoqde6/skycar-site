@@ -1,5 +1,15 @@
 # Connected Care implementation checkpoint — 3 October 2026
 
+## Access-denied write privacy correction — 4 October 2026
+
+The new app-developer continuation owns a separate `fix/care-journey-write-privacy` branch based on PR #47 at `1d3142f36a60deeddfa92af9a38bcf426049bf9c`. Its acknowledgement is recorded on issue #4 and links to #12/#28. The existing journey and premium design branches remain separate.
+
+Customer and operations screens now clear private request/queue data, unsaved photos and form selections, verified account state and retained commands immediately after a save/upload receives 401, 403 or 404, or a successful write reports a different account. A later read for the same account cannot restore those discarded drafts. Transient same-account failures still preserve the original idempotency key and payload for an explicit retry.
+
+Local verification: lint, TypeScript, all 179 unit tests and production build passed. Both extended browser suites fail against the pristine base at their 401 private-request/queue redaction assertion and pass with this correction, including denied writes, changed-account responses, discarded uncertain commands, same-account re-entry, and 320/390/1440 pixel layouts. The connected customer/operator completion story also passed. Browser execution used the project's pinned Playwright 1.55.0 headless shell; launching full Chromium was blocked by this runtime's process-socket restriction.
+
+This is a bounded frontend correction for independent review. It changes no API, database migration, dependency, environment, administrator role, backup control or hosted deployment. The hosted acceptance procedure below remains outstanding.
+
 ## Release preparation — 4 October 2026
 
 Read-only hosted inspection confirmed a healthy staging project, no connected-journey migration, no development branches and no administrator role. RLS is enabled on the existing customer/request/media tables inspected. No database mutation, role grant or deployment occurred. Existing staging remains `47241fceed8f5207de918906a35a7f3165c6b6c4`.

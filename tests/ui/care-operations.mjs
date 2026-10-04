@@ -13,8 +13,8 @@ try{
  let ready=false;for(let i=0;i<150;i++){try{if((await fetch(origin)).ok){ready=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,100));}assert.ok(ready,'server started');
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
  const page=await browser.newPage({viewport:{width:390,height:844}});page.setDefaultTimeout(10000);
- const errors=[];page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error'&&message.text()!=='Failed to load resource: net::ERR_FAILED')errors.push(message.text());});
- let account='admin-a';let state='review';let completion=[];let quotePublished=false;let failConfirm=true;const commands=[];const uploads=[];
+ const errors=[];page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error'&&!/^Failed to load resource: (net::ERR_FAILED|the server responded with a status of (401|403|404))/.test(message.text()))errors.push(message.text());});
+ let account='admin-a';let state='review';let completion=[];let quotePublished=false;let failConfirm=true;let postDenial=0,responseAccount=null,failUpload=false;const commands=[];const uploads=[];
  const now=new Date().toISOString();const start=new Date(Date.now()+2*86400000).toISOString();const end=new Date(Date.now()+2*86400000+7200000).toISOString();
  const expert={id:expertId,business_name:'Adelaide Panel Care',description:'Verified mobile repair specialist.',services:['repair'],postcodes:['5000'],insurance_valid_until:'2027-12-31',active:true};
  const queue=()=>[{id,kind:'guest',service:'repair',description:'Visible scratch on the left rear door',created_at:now,state}];
@@ -23,6 +23,8 @@ try{
   const request=route.request();const url=new URL(request.url());
   if(request.method()==='GET')return route.fulfill({json:{data:url.searchParams.has('id')?snapshot():{queue:queue(),experts:[expert],integrations:{assessment:'Manual expert review — Ravin API not connected',payments:'Not connected — no customer payments taken',notifications:'In-app updates only'}}},headers:{'X-Skycar-Account':account}});
   const body=request.postDataJSON();commands.push({key:request.headers()['idempotency-key'],body});
+  if(postDenial)return route.fulfill({status:postDenial,json:{error:{message:'Operations access denied',retryable:false}}});
+  if(responseAccount)return route.fulfill({json:{data:{id,state,replayed:false}},headers:{'X-Skycar-Account':responseAccount}});
   if(body.action==='publish_quote'){assert.equal(body.id,id);assert.equal(body.payload.expert_id,expertId);assert.equal(body.payload.total_price_cents,49500);quotePublished=true;state='quotes_ready';}
   if(body.action==='confirm'){assert.deepEqual(body.payload,{availability_confirmed:true});if(failConfirm){failConfirm=false;return route.abort('failed');}state='scheduled';}
   if(body.action==='complete')state='completed';
@@ -31,7 +33,11 @@ try{
  const pixel=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
  await page.route(/\/api\/v1\/care\/journey\/[^/]+\/photos(?:\/\d+)?(?:\?.*)?$/,async route=>{
   if(route.request().method()==='GET')return route.fulfill({body:pixel,contentType:'image/png',headers:{'X-Skycar-Account':account}});
-  uploads.push({key:route.request().headers()['idempotency-key'],body:await route.request().postDataBuffer()});completion=[1];return route.fulfill({status:201,json:{data:{stored:1}},headers:{'X-Skycar-Account':account}});
+  uploads.push({key:route.request().headers()['idempotency-key'],body:await route.request().postDataBuffer()});
+  if(postDenial)return route.fulfill({status:postDenial,json:{error:{message:'Operations access denied',retryable:false}}});
+  if(failUpload)return route.abort('failed');
+  if(responseAccount)return route.fulfill({json:{data:{stored:1}},headers:{'X-Skycar-Account':responseAccount}});
+  completion=[1];return route.fulfill({status:201,json:{data:{stored:1}},headers:{'X-Skycar-Account':account}});
  });
  await page.goto(`${origin}/operations/care`);await page.getByRole('heading',{name:'Care command centre.'}).waitFor();
  assert.match(await page.getByLabel('Integration status').innerText(),/Ravin API not connected/);await page.getByRole('button',{name:/Repair · Your request is under review/}).click();await page.getByRole('paragraph').filter({hasText:'Visible scratch on the left rear door'}).waitFor();
@@ -45,5 +51,31 @@ try{
  await page.locator('.operations-queue button').first().click();await page.getByLabel('Add damage photos').setInputFiles({name:'completion.png',mimeType:'image/png',buffer:photo});await page.getByRole('button',{name:'Save completion evidence'}).click();await page.getByRole('button',{name:'Complete job with this evidence'}).waitFor();assert.equal(uploads.length,1);assert.ok(uploads[0].key);await page.getByRole('button',{name:'Complete job with this evidence'}).click();await page.getByRole('heading',{name:'Your service is complete'}).waitFor();
  for(const width of [320,390,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);}
  await mkdir('.garage-qa',{recursive:true});await page.screenshot({path:'.garage-qa/care-operations-390.png',fullPage:true});assert.deepEqual(errors,[]);
- console.log('PASS: private review, manual quote, explicit confirmation, exact retry, account-switch clearing, completion evidence, completion, responsive layout');
+ // Denied commands and uploads immediately remove all prior-admin private data.
+ for(const upload of [false,true])for(const denial of [401,403,404,'changed-account']){
+  state=upload?'in_progress':'scheduled';completion=[];postDenial=0;responseAccount=null;failUpload=false;
+  await page.reload();await page.locator('.operations-queue button').first().click();
+  await page.getByRole('heading',{name:upload?'Record the result':'Confirmed appointment',exact:true}).waitFor();
+  if(upload){
+   await page.getByLabel('Add damage photos').setInputFiles({name:'private-draft.png',mimeType:'image/png',buffer:photo});
+   await page.getByRole('button',{name:'Remove photo 1'}).waitFor();
+   failUpload=true;await page.getByRole('button',{name:'Save completion evidence'}).click();
+   await page.getByRole('button',{name:'Retry same action'}).waitFor();failUpload=false;
+  }
+  if(denial==='changed-account')responseAccount='different-admin';else postDenial=denial;
+  const before=commands.length+uploads.length;
+  await page.getByRole('button',{name:upload?'Retry same action':'Cancel request or booking'}).click();
+  await page.getByRole('alert').filter({hasText:denial==='changed-account'?'Your operations account changed':'Operations access denied'}).waitFor();
+  assert.equal(await page.locator('.operations-queue button').count(),0,`${denial}: redact private request queue`);
+  assert.equal(await page.getByText('Synthetic Customer',{exact:true}).count(),0,`${denial}: redact customer details`);
+  assert.equal(await page.getByRole('button',{name:'Remove photo 1'}).count(),0,`${denial}: discard unsaved evidence`);
+  assert.equal(await page.getByRole('button',{name:'Retry same action'}).count(),0,`${denial}: discard pending command`);
+  assert.equal(await page.getByRole('link',{name:'Sign in with an authorised operations account'}).count(),1);
+  assert.equal(commands.length+uploads.length,before+1,'denial must not trigger an automatic write');
+  postDenial=0;responseAccount=null;await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await page.getByRole('heading',{name:'Select a request'}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Remove photo 1'}).count(),0,'same-admin re-entry must not recover denied evidence');
+ }
+ assert.deepEqual(errors,[]);
+ console.log('PASS: private review, manual quote, explicit confirmation, exact retry, account-switch and denied-write clearing, completion evidence, completion, responsive layout');
 }finally{if(browser)await browser.close();server.kill('SIGTERM');}
