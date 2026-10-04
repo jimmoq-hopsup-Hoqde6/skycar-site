@@ -12,7 +12,7 @@ type Job={id:string;kind:'account'|'guest';vehicle:string;service:'repair'|'clea
 type Inbox={profile:Profile;jobs:Job[];has_more:boolean};
 type OwnQuote={id:string;scope_summary:string;total_price_cents:number;currency:string;status:string;expires_at:string;starts_at:string;ends_at:string};
 type Detail={profile:Profile;job:Job;own_quotes?:OwnQuote[]};
-type Attempt={key:string;account:string;id:string;action:'quote'|'decline';body:string};
+type Attempt={key:string;account:string;id:string;action:'quote'|'decline'|'start';body:string};
 
 function PrivatePhoto({id,slot,account}:{id:string;slot:number;account:string}){
   const element=useRef<HTMLImageElement>(null);const[failed,setFailed]=useState(false);
@@ -31,7 +31,7 @@ export function TechnicianInbox({id}:{id?:string}){
   const[loading,setLoading]=useState(true);const[error,setError]=useState('');const[status,setStatus]=useState(0);
   const epoch=useRef(0);const read=useRef<AbortController|null>(null);
   const attempt=useRef<Attempt|null>(null);const verifiedAccount=useRef('');const locked=useRef(false);
-  const[busy,setBusy]=useState(false);const[uncertain,setUncertain]=useState(false);const[notice,setNotice]=useState('');
+  const[checkedAt,setCheckedAt]=useState(0);const[busy,setBusy]=useState(false);const[uncertain,setUncertain]=useState(false);const[notice,setNotice]=useState('');
   const clearPrivate=useCallback(()=>{attempt.current=null;verifiedAccount.current='';setUncertain(false);setAccount('');setInbox(null);setDetail(null);},[]);
   const load=useCallback(async()=>{
     read.current?.abort();const controller=new AbortController();read.current=controller;const version=++epoch.current;
@@ -40,7 +40,7 @@ export function TechnicianInbox({id}:{id?:string}){
       const result=await api(`/api/v1/technician/jobs${id?`/${id}`:''}`,{signal:controller.signal});if(version!==epoch.current)return;
       if(!result.account||!/^[0-9a-f-]{36}$/i.test(result.account))throw new Error('The technician account could not be verified.');
       if(verifiedAccount.current&&verifiedAccount.current!==result.account){attempt.current=null;setUncertain(false);setNotice('');}verifiedAccount.current=result.account;
-      if(id)setDetail(readTechnicianDetail(result.data,id));else setInbox(readTechnicianInbox(result.data));setAccount(result.account);
+      if(id)setDetail(readTechnicianDetail(result.data,id));else setInbox(readTechnicianInbox(result.data));setAccount(result.account);setCheckedAt(Date.now());
     }catch(caught){if(version!==epoch.current||controller.signal.aborted)return;setError(caught instanceof Error?caught.message:'Technician jobs could not be loaded.');if(caught instanceof JourneyApiError){setStatus(caught.status);if([401,403,404].includes(caught.status))clearPrivate();}}
     finally{if(version===epoch.current)setLoading(false);}
   },[id,clearPrivate]);
@@ -49,10 +49,10 @@ export function TechnicianInbox({id}:{id?:string}){
     window.addEventListener('focus',refresh);window.addEventListener('pageshow',refresh);document.addEventListener('visibilitychange',visible);
     return()=>{invalidate();window.removeEventListener('focus',refresh);window.removeEventListener('pageshow',refresh);document.removeEventListener('visibilitychange',visible);};
   },[load,invalidate]);
-  async function send(action?:'quote'|'decline',payload?:Record<string,unknown>){
+  async function send(action?:'quote'|'decline'|'start',payload?:Record<string,unknown>){
     if(locked.current||loading||!account||!id)return;
     if(!attempt.current){
-      if(!action||detail?.job.access!=='invited')return;
+      if(!action||(action==='start'?(detail?.job.access!=='selected'||detail.job.state!=='scheduled'):detail?.job.access!=='invited'))return;
       try{const command=readTechnicianCommand({action,payload});attempt.current={key:crypto.randomUUID(),account,id,action,body:JSON.stringify(command)};}
       catch{setError('Check the scope, AUD price and proposed times.');return;}
     }
@@ -64,7 +64,7 @@ export function TechnicianInbox({id}:{id?:string}){
       if(result.account!==original.account)throw new JourneyApiError('Your technician account changed. Refresh before continuing.',403,false);
       readTechnicianCommandResult(result.data,original.id,original.action);attempt.current=null;setUncertain(false);
       if(original.action==='decline'){setDetail(null);setInbox(null);setNotice('You declined this request. It has been removed from your review inbox.');}
-      else{setNotice('Your proposal is saved for the customer to review. The appointment is not confirmed.');await load();}
+      else{setNotice(original.action==='start'?'Work has started. The customer can see this saved progress.':'Your proposal is saved for the customer to review. The appointment is not confirmed.');await load();}
     }catch(caught){
       if(version!==epoch.current)return;
       if(caught instanceof JourneyApiError&&[401,403,404].includes(caught.status)){clearPrivate();setStatus(caught.status);}
@@ -89,10 +89,11 @@ export function TechnicianInbox({id}:{id?:string}){
       {job.access==='invited'&&<section className="technician-panel"><h2>Propose your work and appointment</h2><p>Submit the complete AUD price and a time you can offer. Skycar operations confirms capacity after the customer selects a proposal.</p><form key={`${account}:${id}`} onSubmit={event=>{event.preventDefault();const form=new FormData(event.currentTarget);try{void send('quote',{scope_summary:form.get('scope_summary'),total_price_cents:quotePriceCents(form.get('total_price')),expires_at:quoteInstant(form.get('expires_at')),starts_at:quoteInstant(form.get('starts_at')),ends_at:quoteInstant(form.get('ends_at'))});}catch(caught){setError(caught instanceof Error?caught.message:'Check your proposal.');}}}>
         <fieldset disabled={busy||uncertain||loading}><label>Work and inspection scope<textarea name="scope_summary" required minLength={10} maxLength={2000}/></label><label>Total quote price (AUD)<input name="total_price" required inputMode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" placeholder="495.00"/></label><div className="technician-form-grid"><label>Quote valid until<input name="expires_at" type="datetime-local" required/></label><label>Proposed appointment start<input name="starts_at" type="datetime-local" required/></label><label>Proposed appointment end<input name="ends_at" type="datetime-local" required/></label></div><p>Enter times in this device’s timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}). Saved appointments display in Adelaide time.</p><button type="submit">Send proposal to customer</button></fieldset>
       </form><form onSubmit={event=>{event.preventDefault();void send('decline',{});}}><fieldset disabled={busy||uncertain||loading}><label className="technician-check"><input type="checkbox" required/> I cannot take this request and want to withdraw my current proposal.</label><button type="submit">Decline request</button></fieldset></form></section>}
+      {job.access==='selected'&&job.state==='scheduled'&&<section className="technician-panel"><h2>Start your confirmed work</h2><p>Start when you are ready to work at the confirmed appointment. The customer will see the saved progress.</p>{job.appointment&&Date.parse(job.appointment.starts_at)<=checkedAt?<form key={`${account}:${id}:start`} onSubmit={event=>{event.preventDefault();void send('start',{});}}><fieldset disabled={busy||uncertain||loading}><label className="technician-check"><input type="checkbox" required/> I am ready to start this confirmed job.</label><button type="submit">Start work</button></fieldset></form>:<p>Work can start at the appointment time. Refresh jobs when it is due.</p>}</section>}
       <section className="technician-panel"><h2>Private request photos</h2>{job.photos?.length?<div className="technician-photos">{job.photos.map(slot=><PrivatePhoto key={`${account}:${id}:${slot}`} account={account} id={job.id} slot={slot}/>)}</div>:<p>No request photos are saved.</p>}</section>
       <section className="technician-panel"><h2>Service contact</h2>{job.contact?<address>{job.contact.name}<br/>{job.contact.phone}<br/>{job.contact.address}<br/>{job.contact.suburb} {job.contact.postcode}</address>:<p>Contact and street address are shared with the selected technician after appointment confirmation.</p>}</section>
       <section className="technician-panel"><h2>Expected payout</h2><p>Unavailable. A technician payout has not been recorded for this job.</p></section>
-      <p className="technician-note">An invitation and proposal do not reserve an appointment. Work updates and completion uploads will be connected next.</p>
+      <p className="technician-note">An invitation and proposal do not reserve an appointment. Completion photos and customer review will be connected next.</p>
     </>}
   </main>;
 }

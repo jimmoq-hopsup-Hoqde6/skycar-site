@@ -8,7 +8,7 @@ const payload={scope_summary:'Inspect and repair the visible bumper scratch.',to
 const command={action:'quote',payload};const result={id,action:'quote',state:'quotes_ready',quote_id:quoteId,replayed:false};
 const quiet={logger:{info(){},error(){}},origin:{environment:'demo',appOrigin:undefined}};
 function request(body=command,headers={},path=`/api/v1/technician/jobs/${id}`){return new Request(`http://localhost${path}`,{method:'POST',headers:{origin:'http://localhost','content-type':'application/json','idempotency-key':quoteId,'x-skycar-account':account,...headers},body:typeof body==='string'?body:JSON.stringify(body)});}
-test('technician command accepts only quote/decline and server-owned identity is not client input',()=>{
+test('technician command accepts documented commands and server-owned identity is not client input',()=>{
  assert.equal(readTechnicianCommand(command),command);assert.deepEqual(readTechnicianCommand({action:'decline',payload:{}}),{action:'decline',payload:{}});
  for(const v of [{...command,actor:account},{...command,id},{action:'confirm',payload:{}},{action:'decline',payload:{reason:'x'}},{...command,payload:{...payload,expert_id:account}}])assert.throws(()=>readTechnicianCommand(v));
 });
@@ -40,4 +40,13 @@ test('malformed mutation response fails closed while preserving exact retry safe
 
 test('session account precondition prevents a switched account from writing a previous draft',()=>{
  assert.doesNotThrow(()=>requireTechnicianAccount(account,account));assert.throws(()=>requireTechnicianAccount(quoteId,account),error=>error.status===403&&error.code==='FORBIDDEN');
+});
+
+test('start requires empty payload and an exact in-progress result',async()=>{
+ const start={action:'start',payload:{}};const data={id,action:'start',state:'in_progress',quote_id:null,replayed:false};
+ assert.deepEqual(readTechnicianCommand(start),start);assert.deepEqual(readTechnicianCommandResult(data,id,'start'),data);
+ for(const change of [{state:'scheduled'},{quote_id:quoteId},{action:'complete'},{replayed:'false'}])assert.throws(()=>readTechnicianCommandResult({...data,...change},id,'start'));
+ for(const payload of [null,[],{expert_id:account},{evidence:[]}])assert.throws(()=>readTechnicianCommand({action:'start',payload}));
+ const h=createTechnicianHandlers({async command(job,key,body,expected){assert.equal(expected,account);assert.equal(job,id);assert.equal(key,quoteId);assert.deepEqual(body,start);return {account,data};}},quiet);
+ const response=await h.command(request(start),id);assert.equal(response.status,200);assert.deepEqual((await response.json()).data,data);
 });
