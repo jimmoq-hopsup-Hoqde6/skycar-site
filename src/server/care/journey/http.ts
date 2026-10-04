@@ -12,6 +12,8 @@ const errors: Record<string,[number,string]> = {
  SLOT_UNAVAILABLE:[409,'This expert already has work in that time window. Choose another appointment.'],
  EXPERT_UNAVAILABLE:[409,'The expert’s service area, insurance or availability needs review.'],
  EVIDENCE_REQUIRED:[409,'Upload completion evidence before marking the work complete.'],
+ LINK_CONFLICT:[409,'This technician account or expert already has a different link.'],
+ DETAILS_REQUIRED:[409,'The customer must save a service postcode before a technician is invited.'],
  PAYLOAD_TOO_LARGE:[413,'Choose up to three smaller photos.'],
  UNAVAILABLE:[503,'We could not confirm the result. Retry the same action safely.'],
 };

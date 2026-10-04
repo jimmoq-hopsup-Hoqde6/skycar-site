@@ -14,7 +14,7 @@ const destinations = [
 
 export function AppDock() {
   const path = usePathname();
-  if (path.startsWith("/auth/")) return null;
+  if (path.startsWith("/auth/") || path.startsWith("/technician/")) return null;
   const active = path === "/" ? "/" : path.startsWith("/garage/jobs") || path.startsWith("/care/requests/") ? "/garage/jobs" : path.startsWith("/garage") ? "/garage" : path.startsWith("/care/request") ? "/care/request" : null;
   return <nav className="app-dock" aria-label="App navigation">{destinations.map(item => <Link key={item.href} href={item.href} aria-current={active === item.href ? "page" : undefined}><AppIcon name={item.icon}/><span>{item.label}</span></Link>)}</nav>;
 }
