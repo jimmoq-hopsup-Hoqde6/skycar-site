@@ -5,6 +5,7 @@ import { readdirSync } from "node:fs";
 import { promisify } from "node:util";
 import { verifyCareOffers } from "./care-offers.acceptance.mjs";
 import { verifyCareJourney } from "./care-journey.acceptance.mjs";
+import { verifyTechnicianCompletion } from "./technician-completion.acceptance.mjs";
 import { verifyTechnicianWorkStart } from "./technician-work-start.acceptance.mjs";
 import { verifyTechnicianQuotes } from "./technician-quotes.acceptance.mjs";
 import { verifyTechnicianInbox } from "./technician-inbox.acceptance.mjs";
@@ -102,6 +103,7 @@ before(() => {
     '20261004090000_technician_inbox.sql',
     '20261004124000_technician_quotes.sql',
     '20261004133000_technician_work_start.sql',
+    '20261004140000_technician_completion.sql',
   ], 'combined verification must include every public migration in filename order');
   for (const migration of migrations) file(`supabase/migrations/${migration}`);
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
@@ -275,3 +277,5 @@ test('Technician identity and inbox permissions follow invitations and selected 
 test('Technician proposals share customer quote state and safely withdraw/replay',async()=>{await verifyTechnicianQuotes({sql,auth,quote,result,waitForQuery});});
 
 test('Selected technicians start confirmed work on the shared journey',async()=>{await verifyTechnicianWorkStart({sql,auth,quote,result,waitForQuery});});
+
+test('Technician completion shares evidence and writes account history atomically',async()=>{await verifyTechnicianCompletion({sql,auth,quote,result,waitForQuery});});

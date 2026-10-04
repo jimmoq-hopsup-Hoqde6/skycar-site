@@ -4,6 +4,7 @@ import { createSupabaseServerClient,createSupabaseTrustedServerClient } from '@/
 import { featureEnabled,requireSupabaseSecretConfig } from '@/server/env';
 import { verifyGuestCookie } from './access.mjs';
 import { JourneyError,identifier } from './http';
+import {verifyCompletionEvidence} from '@/server/care/completion-evidence.mjs';
 import { storeCarePhotos } from '@/server/care/guest-photos.mjs';
 
 type Photo = {bytes:Buffer;mimeType:string;hash:string};
@@ -80,7 +81,7 @@ export async function journeySnapshot(access:JourneyAccess) {
  ]);
  if(results.some(r=>r.error))throw new JourneyError('UNAVAILABLE');
  const j=results[0].data; const quotes=results[1].data || [];const now=Date.now();
- const photos=await photoManifest(access);const completion=await photoManifest(access,true);
+ const photos=await photoManifest(access);const completion=access.admin||j?.state==='completed'?await photoManifest(access,true):[];
  return {id:access.id,kind:access.kind,request:access.source,state:j?.state||'review',details:j?.customer_details||access.initialDetails,revision:j?.revision||0,
   quotes:quotes.filter(q=>q.status==='selected'||(q.status==='issued'&&Date.parse(q.expires_at)>now&&Date.parse(q.starts_at)>now)),
   selected_quote_id:j?.selected_quote_id||null,appointment:j?.starts_at ? {starts_at:j.starts_at,ends_at:j.ends_at}:null,
@@ -92,10 +93,15 @@ export async function journeyCommand(access:JourneyAccess,action:string,key:stri
  let commandPayload=payload;
  if(action==='complete'){
   const list=await photoManifest(access,true);if(!list.length)throw new JourneyError('EVIDENCE_REQUIRED');
-  await Promise.all(list.map(p=>journeyPhoto(access,p.slot,true)));
-  commandPayload={evidence:list.map(p=>({slot:p.slot,mime_type:p.mime_type,size_bytes:p.size_bytes,sha256:p.sha256}))};
+  try{commandPayload={evidence:await verifyCompletionEvidence(list,(slot:number)=>journeyPhoto(access,slot,true))};}catch(error){throw new JourneyError(error instanceof Error&&'code' in error?String(error.code):'UNAVAILABLE');}
  }
  const {data,error}=await access.db.rpc('care_journey_command',{p_action:action,p_id:access.id,p_actor:access.actor,p_guest_key:access.guestKey,p_key:key,p_payload:commandPayload});
  if(error)throw new JourneyError(error.code==='P0001' ? error.message : 'UNAVAILABLE');
  return data;
+}
+
+export async function customerCompletionVisible(access:JourneyAccess){
+ if(access.admin)return;
+ const {data,error}=await access.db.from('care_journeys').select('state').eq('id',access.id).maybeSingle();
+ if(error)throw new JourneyError('UNAVAILABLE');if(data?.state!=='completed')throw new JourneyError('NOT_FOUND');
 }

@@ -46,6 +46,7 @@ jobs:
           node tests/ui/care-operations.mjs
           node tests/ui/technician-inbox.mjs
           node tests/ui/technician-quotes.mjs
+          node tests/ui/technician-completion.mjs
           node tests/ui/care-connected-customer.mjs
           npm run start -- --hostname 127.0.0.1 -p 3100 > "$RUNNER_TEMP/skycar-garage.log" 2>&1 &
           server_pid=$!

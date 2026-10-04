@@ -14,6 +14,8 @@ export const API_ROUTE_TEMPLATES = Object.freeze({
   garageVehiclePhoto: '/api/v1/garage/vehicles/[vehicleId]/photo',
   technicianJobs: '/api/v1/technician/jobs',
   technicianJob: '/api/v1/technician/jobs/[jobId]',
+  technicianCompletionPhotos: '/api/v1/technician/jobs/[jobId]/completion-photos',
+  technicianCompletionPhoto: '/api/v1/technician/jobs/[jobId]/completion-photos/[slot]',
   technicianJobPhoto: '/api/v1/technician/jobs/[jobId]/photos/[slot]',
 });
 

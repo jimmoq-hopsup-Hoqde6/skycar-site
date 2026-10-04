@@ -25,7 +25,7 @@ export async function verifyTechnicianWorkStart({sql,auth,quote,result,waitForQu
  await fail(auth(tech,`select public.care_technician_work_command(${quote(tech)},gen_random_uuid(),'start',${quote(guest.id)},'{}')`),'permission denied');
  await fail(command(guest.id,randomUUID(),customer),'FORBIDDEN');await fail(command(guest.id,randomUUID(),unlinked),'FORBIDDEN');
  for(const payload of [{expert_id:expert},{evidence:[]},null])await fail(command(guest.id,randomUUID(),tech,payload),'VALIDATION_FAILED');
- await fail(command(guest.id,randomUUID(),tech,{},'complete'),'VALIDATION_FAILED');
+ await fail(command(guest.id,randomUUID(),tech,{},'complete'),'INVALID_TRANSITION');
  const unassigned=await fixture('guest','scheduled',expertB);await fail(command(unassigned.id),'NOT_FOUND');
  await run(`update public.care_journeys set starts_at=clock_timestamp()+interval '30 minutes' where id=${quote(guest.id)}`);await fail(command(guest.id),'INVALID_TRANSITION');
  await run(`update public.care_journeys set starts_at=clock_timestamp()-interval '1 hour' where id=${quote(guest.id)}`);

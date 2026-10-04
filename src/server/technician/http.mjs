@@ -1,9 +1,10 @@
+import {readGuestPhotos} from '../care/guest-photos.mjs';
 import {isTrustedWriteOrigin} from '../http/request-origin.mjs';
 import {readTechnicianCommand,readTechnicianCommandResult} from '../../domain/technician/commands.mjs';
 import {ApiFault,API_ROUTE_TEMPLATES,apiResult,withApiBoundary} from '../http/api-boundary.mjs';
 import {readTechnicianInbox,readTechnicianDetail} from '../../domain/technician/inbox.mjs';
 export function technicianFault(code) {
-  const errors={UNAUTHENTICATED:[401,'Sign in with your invited technician account.'],FORBIDDEN:[403,'An active, linked technician account is required.'],NOT_FOUND:[404,'This job is unavailable to your technician account.'],VALIDATION_FAILED:[400,'Check the job, scope, price and appointment times.'],CSRF_FAILED:[403,'Submit this action from Skycar.'],PAYLOAD_TOO_LARGE:[413,'The command is too large.'],INVALID_TRANSITION:[409,'This job has changed. Refresh before continuing.'],IDEMPOTENCY_CONFLICT:[409,'This key was already used with different details.'],EXPERT_UNAVAILABLE:[409,'Your service area, insurance or invitation needs review.']};
+  const errors={EVIDENCE_REQUIRED:[409,'Save completion photos before completing this work.'],UNAUTHENTICATED:[401,'Sign in with your invited technician account.'],FORBIDDEN:[403,'An active, linked technician account is required.'],NOT_FOUND:[404,'This job is unavailable to your technician account.'],VALIDATION_FAILED:[400,'Check the job, scope, price and appointment times.'],CSRF_FAILED:[403,'Submit this action from Skycar.'],PAYLOAD_TOO_LARGE:[413,'The command is too large.'],INVALID_TRANSITION:[409,'This job has changed. Refresh before continuing.'],IDEMPOTENCY_CONFLICT:[409,'This key was already used with different details.'],EXPERT_UNAVAILABLE:[409,'Your service area, insurance or invitation needs review.']};
   const [status,message]=errors[code]||[503,'Technician access could not be verified. Please retry.'];
   return new ApiFault(Object.hasOwn(errors,code)?code:'TECHNICIAN_UNAVAILABLE',status,message);
 }
@@ -34,14 +35,30 @@ export function createTechnicianHandlers(dependencies,options={}) {
       let data;try{data=readTechnicianCommandResult(result.data,key,body.action);}catch{throw technicianFault('UNAVAILABLE');}
       return apiResult(data,{headers:{Vary:'Cookie','X-Skycar-Account':result.account}});
     }),
-    async photo(request,id,slot){
+    upload:(request,id)=>boundary(request,API_ROUTE_TEMPLATES.technicianCompletionPhotos,async()=>{
+      query(request);const key=identifier(id),expected=identifier(request.headers.get('x-skycar-account'));
+      if(!isTrustedWriteOrigin(request,options.origin))throw technicianFault('CSRF_FAILED');
+      if(request.headers.get('content-type')?.split(';')[0].trim()!=='multipart/form-data')throw technicianFault('VALIDATION_FAILED');
+      const reader=request.body?.getReader();if(!reader)throw technicianFault('VALIDATION_FAILED');const chunks=[];let size=0;
+      try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>2800000){await reader.cancel();throw technicianFault('PAYLOAD_TOO_LARGE');}chunks.push(value);}}finally{reader.releaseLock();}
+      let photos;try{const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
+        const form=await new Response(bytes,{headers:{'Content-Type':request.headers.get('content-type')}}).formData();
+        if([...form.keys()].some(k=>k!=='photos'))throw new Error();photos=await readGuestPhotos(form.getAll('photos'));if(!photos.length)throw new Error();
+      }catch{throw technicianFault('VALIDATION_FAILED');}
+      const result=await dependencies.upload(key,photos,expected);
+      try{identifier(result.account);}catch{throw technicianFault('UNAVAILABLE');}
+      requireTechnicianAccount(result.account,expected);
+      if(result.stored!==photos.length)throw technicianFault('UNAVAILABLE');
+      return apiResult({stored:result.stored},{status:201,headers:{Vary:'Cookie','X-Skycar-Account':result.account}});
+    }),
+    async photo(request,id,slot,completion=false){
       // Binary replies still recheck the session/link/job before reading private storage.
       try{
         query(request);const key=identifier(id);if(!/^[1-3]$/.test(slot))throw technicianFault('VALIDATION_FAILED');
-        const result=await dependencies.photo(key,Number(slot));try{identifier(result.account);}catch{throw technicianFault('UNAVAILABLE');}
+        const result=await (completion?dependencies.completionPhoto:dependencies.photo)(key,Number(slot));try{identifier(result.account);}catch{throw technicianFault('UNAVAILABLE');}
         if(!['image/jpeg','image/png','image/webp'].includes(result.mime)||!result.bytes||result.bytes.byteLength<128||result.bytes.byteLength>900000)throw technicianFault('UNAVAILABLE');
         return new Response(result.bytes,{headers:{'Content-Type':result.mime,'Cache-Control':'private, no-store',Vary:'Cookie','X-Content-Type-Options':'nosniff','X-Skycar-Account':result.account}});
-      }catch(error){return boundary(request,API_ROUTE_TEMPLATES.technicianJobPhoto,()=>{throw error;});}
+      }catch(error){return boundary(request,completion?API_ROUTE_TEMPLATES.technicianCompletionPhoto:API_ROUTE_TEMPLATES.technicianJobPhoto,()=>{throw error;});}
     },
   };
 }
