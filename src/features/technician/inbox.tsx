@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element -- Private images are fetched after access verification and use local object URLs. */
 import Link from 'next/link';
+import {DamagePhotos} from '@/features/care/damage-photos';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {readTechnicianInbox,readTechnicianDetail} from '@/domain/technician/inbox.mjs';
 import {quotePriceCents,quoteInstant,readTechnicianCommand,readTechnicianCommandResult} from '@/domain/technician/commands.mjs';
@@ -11,19 +12,19 @@ type Profile={expert_id:string;business_name:string;description:string;services:
 type Job={id:string;kind:'account'|'guest';vehicle:string;service:'repair'|'cleaning';description:string;postcode:string;state:string;access:'invited'|'selected';created_at:string;appointment:{starts_at:string;ends_at:string}|null;contact:Record<string,string>|null;photos?:number[]};
 type Inbox={profile:Profile;jobs:Job[];has_more:boolean};
 type OwnQuote={id:string;scope_summary:string;total_price_cents:number;currency:string;status:string;expires_at:string;starts_at:string;ends_at:string};
-type Detail={profile:Profile;job:Job;own_quotes?:OwnQuote[]};
-type Attempt={key:string;account:string;id:string;action:'quote'|'decline'|'start';body:string};
+type Detail={profile:Profile;job:Job;own_quotes?:OwnQuote[];completion_photos?:number[]};
+type Attempt={key:string;account:string;id:string;action:'quote'|'decline'|'start'|'complete'|'upload';body?:string;files?:File[]};
 
-function PrivatePhoto({id,slot,account}:{id:string;slot:number;account:string}){
+function PrivatePhoto({id,slot,account,completion=false}:{id:string;slot:number;account:string;completion?:boolean}){
   const element=useRef<HTMLImageElement>(null);const[failed,setFailed]=useState(false);
   useEffect(()=>{const controller=new AbortController();let url:string|undefined;const image=element.current;
-    void fetch(`/api/v1/technician/jobs/${id}/photos/${slot}`,{cache:'no-store',credentials:'same-origin',signal:controller.signal}).then(async response=>{
+    void fetch(`/api/v1/technician/jobs/${id}/${completion?'completion-photos':'photos'}/${slot}`,{cache:'no-store',credentials:'same-origin',signal:controller.signal}).then(async response=>{
       if(!response.ok||response.headers.get('X-Skycar-Account')!==account)throw new Error();
       const blob=await response.blob();if(controller.signal.aborted)return;url=URL.createObjectURL(blob);if(image)image.src=url;
     }).catch(()=>{if(!controller.signal.aborted)setFailed(true);});
     return()=>{controller.abort();if(image)image.removeAttribute('src');if(url)URL.revokeObjectURL(url);};
-  },[id,slot,account]);
-  return <figure>{failed?<figcaption>Private photo unavailable. Refresh to retry.</figcaption>:<img ref={element} alt={`Request photo ${slot}`}/>}</figure>;
+  },[id,slot,account,completion]);
+  return <figure>{failed?<figcaption>Private photo unavailable. Refresh to retry.</figcaption>:<img ref={element} alt={`${completion?'Completion':'Request'} photo ${slot}`}/>}</figure>;
 }
 
 export function TechnicianInbox({id}:{id?:string}){
@@ -31,11 +32,11 @@ export function TechnicianInbox({id}:{id?:string}){
   const[loading,setLoading]=useState(true);const[error,setError]=useState('');const[status,setStatus]=useState(0);
   const epoch=useRef(0);const read=useRef<AbortController|null>(null);
   const attempt=useRef<Attempt|null>(null);const verifiedAccount=useRef('');const locked=useRef(false);
-  const[checkedAt,setCheckedAt]=useState(0);const[busy,setBusy]=useState(false);const[uncertain,setUncertain]=useState(false);const[notice,setNotice]=useState('');
-  const clearPrivate=useCallback(()=>{attempt.current=null;verifiedAccount.current='';setUncertain(false);setAccount('');setInbox(null);setDetail(null);},[]);
+  const[files,setFiles]=useState<File[]>([]);const[preparing,setPreparing]=useState(false);const[checkedAt,setCheckedAt]=useState(0);const[busy,setBusy]=useState(false);const[uncertain,setUncertain]=useState(false);const[notice,setNotice]=useState('');
+  const clearPrivate=useCallback(()=>{setFiles([]);setPreparing(false);attempt.current=null;verifiedAccount.current='';setUncertain(false);setAccount('');setInbox(null);setDetail(null);},[]);
   const load=useCallback(async()=>{
     read.current?.abort();const controller=new AbortController();read.current=controller;const version=++epoch.current;
-    setInbox(null);setDetail(null);setAccount('');setLoading(true);setError('');setStatus(0);
+    setFiles([]);setPreparing(false);setInbox(null);setDetail(null);setAccount('');setLoading(true);setError('');setStatus(0);
     try{
       const result=await api(`/api/v1/technician/jobs${id?`/${id}`:''}`,{signal:controller.signal});if(version!==epoch.current)return;
       if(!result.account||!/^[0-9a-f-]{36}$/i.test(result.account))throw new Error('The technician account could not be verified.');
@@ -49,22 +50,23 @@ export function TechnicianInbox({id}:{id?:string}){
     window.addEventListener('focus',refresh);window.addEventListener('pageshow',refresh);document.addEventListener('visibilitychange',visible);
     return()=>{invalidate();window.removeEventListener('focus',refresh);window.removeEventListener('pageshow',refresh);document.removeEventListener('visibilitychange',visible);};
   },[load,invalidate]);
-  async function send(action?:'quote'|'decline'|'start',payload?:Record<string,unknown>){
-    if(locked.current||loading||!account||!id)return;
+  async function send(action?:'quote'|'decline'|'start'|'complete'|'upload',payload?:Record<string,unknown>){
+    if(locked.current||loading||preparing||!account||!id)return;
     if(!attempt.current){
-      if(!action||(action==='start'?(detail?.job.access!=='selected'||detail.job.state!=='scheduled'):detail?.job.access!=='invited'))return;
-      try{const command=readTechnicianCommand({action,payload});attempt.current={key:crypto.randomUUID(),account,id,action,body:JSON.stringify(command)};}
+      if(!action||(['start','complete','upload'].includes(action)?(detail?.job.access!=='selected'||detail.job.state!==(action==='start'?'scheduled':'in_progress')):detail?.job.access!=='invited'))return;
+      try{if(action==='upload'){if(!files.length)return;attempt.current={key:crypto.randomUUID(),account,id,action,files:[...files]};}else{const command=readTechnicianCommand({action,payload});attempt.current={key:crypto.randomUUID(),account,id,action,body:JSON.stringify(command)};}}
       catch{setError('Check the scope, AUD price and proposed times.');return;}
     }
     const original=attempt.current;if(original.account!==account||original.id!==id)return;
     locked.current=true;setBusy(true);setError('');setNotice('');const version=epoch.current;
     try{
-      const result=await api(`/api/v1/technician/jobs/${original.id}`,{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':original.key,'X-Skycar-Account':original.account},body:original.body});
+      let body:BodyInit=original.body||'';const headers:Record<string,string>={'X-Skycar-Account':original.account};if(original.files){const form=new FormData();original.files.forEach(file=>form.append('photos',file));body=form;}else{headers['Content-Type']='application/json';headers['Idempotency-Key']=original.key;}
+      const result=await api(`/api/v1/technician/jobs/${original.id}${original.files?'/completion-photos':''}`,{method:'POST',headers,body});
       if(version!==epoch.current)return;
       if(result.account!==original.account)throw new JourneyApiError('Your technician account changed. Refresh before continuing.',403,false);
-      readTechnicianCommandResult(result.data,original.id,original.action);attempt.current=null;setUncertain(false);
+      if(original.files){if(!result.data||Object.keys(result.data).length!==1||result.data.stored!==original.files.length)throw new Error('Completion upload could not be verified.');}else readTechnicianCommandResult(result.data,original.id,original.action);attempt.current=null;setFiles([]);setUncertain(false);
       if(original.action==='decline'){setDetail(null);setInbox(null);setNotice('You declined this request. It has been removed from your review inbox.');}
-      else{setNotice(original.action==='start'?'Work has started. The customer can see this saved progress.':'Your proposal is saved for the customer to review. The appointment is not confirmed.');await load();}
+      else{setNotice(original.action==='upload'?'Completion photos are saved privately. Confirm completion when ready.':original.action==='complete'?'Work completion is recorded. The customer can view your completion photos.':original.action==='start'?'Work has started. The customer can see this saved progress.':'Your proposal is saved for the customer to review. The appointment is not confirmed.');await load();}
     }catch(caught){
       if(version!==epoch.current)return;
       if(caught instanceof JourneyApiError&&[401,403,404].includes(caught.status)){clearPrivate();setStatus(caught.status);}
@@ -90,10 +92,26 @@ export function TechnicianInbox({id}:{id?:string}){
         <fieldset disabled={busy||uncertain||loading}><label>Work and inspection scope<textarea name="scope_summary" required minLength={10} maxLength={2000}/></label><label>Total quote price (AUD)<input name="total_price" required inputMode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" placeholder="495.00"/></label><div className="technician-form-grid"><label>Quote valid until<input name="expires_at" type="datetime-local" required/></label><label>Proposed appointment start<input name="starts_at" type="datetime-local" required/></label><label>Proposed appointment end<input name="ends_at" type="datetime-local" required/></label></div><p>Enter times in this device’s timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}). Saved appointments display in Adelaide time.</p><button type="submit">Send proposal to customer</button></fieldset>
       </form><form onSubmit={event=>{event.preventDefault();void send('decline',{});}}><fieldset disabled={busy||uncertain||loading}><label className="technician-check"><input type="checkbox" required/> I cannot take this request and want to withdraw my current proposal.</label><button type="submit">Decline request</button></fieldset></form></section>}
       {job.access==='selected'&&job.state==='scheduled'&&<section className="technician-panel"><h2>Start your confirmed work</h2><p>Start when you are ready to work at the confirmed appointment. The customer will see the saved progress.</p>{job.appointment&&Date.parse(job.appointment.starts_at)<=checkedAt?<form key={`${account}:${id}:start`} onSubmit={event=>{event.preventDefault();void send('start',{});}}><fieldset disabled={busy||uncertain||loading}><label className="technician-check"><input type="checkbox" required/> I am ready to start this confirmed job.</label><button type="submit">Start work</button></fieldset></form>:<p>Work can start at the appointment time. Refresh jobs when it is due.</p>}</section>}
+      {job.access==='selected'&&['in_progress','completed'].includes(job.state)&&<section className="technician-panel">
+        <h2>Completion evidence</h2>
+        {!!detail?.completion_photos?.length&&<div className="technician-photos">{detail.completion_photos.map(slot=><PrivatePhoto key={`${account}:${id}:completion:${slot}`} account={account} id={job.id} slot={slot} completion/>)}</div>}
+        {job.state==='in_progress'&&<>
+          <p>Save one to three clear photos of your finished work. The saved set cannot be replaced; select the original files in the same order to retry an interrupted upload.</p>
+          <DamagePhotos key={`${account}:${id}:completion`} purpose="completion" files={files} disabled={busy||uncertain||loading} onChange={setFiles} onProcessing={setPreparing}/>
+          <button disabled={!files.length||busy||uncertain||loading||preparing} onClick={()=>void send('upload')}>Save completion photos</button>
+          <form key={`${account}:${id}:complete`} onSubmit={event=>{event.preventDefault();void send('complete',{});}}>
+            <fieldset disabled={!detail?.completion_photos?.length||busy||uncertain||loading||preparing}>
+              <label className="technician-check"><input type="checkbox" required/> I have finished the confirmed work and saved its completion photos.</label>
+              <button type="submit">Complete work</button>
+            </fieldset>
+          </form>
+        </>}
+        {job.state==='completed'&&<p>The completed work and photos are saved on the customer’s journey.</p>}
+      </section>}
       <section className="technician-panel"><h2>Private request photos</h2>{job.photos?.length?<div className="technician-photos">{job.photos.map(slot=><PrivatePhoto key={`${account}:${id}:${slot}`} account={account} id={job.id} slot={slot}/>)}</div>:<p>No request photos are saved.</p>}</section>
       <section className="technician-panel"><h2>Service contact</h2>{job.contact?<address>{job.contact.name}<br/>{job.contact.phone}<br/>{job.contact.address}<br/>{job.contact.suburb} {job.contact.postcode}</address>:<p>Contact and street address are shared with the selected technician after appointment confirmation.</p>}</section>
       <section className="technician-panel"><h2>Expected payout</h2><p>Unavailable. A technician payout has not been recorded for this job.</p></section>
-      <p className="technician-note">An invitation and proposal do not reserve an appointment. Completion photos and customer review will be connected next.</p>
+      <p className="technician-note">An invitation and proposal do not reserve an appointment. Work updates and completion photos stay with this job.</p>
     </>}
   </main>;
 }

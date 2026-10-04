@@ -31,6 +31,6 @@ export function readTechnicianInbox(value) {
   return value;
 }
 export function readTechnicianDetail(value,id) {
-  if(!exact(value,['profile','job',...(Object.hasOwn(value??{},'own_quotes')?['own_quotes']:[])]))throw new Error('Unsupported technician detail');
-  readTechnicianProfile(value.profile);readTechnicianJob(value.job,{id,detail:true});if(Object.hasOwn(value,'own_quotes'))readOwnTechnicianQuotes(value.own_quotes);return value;
+  if(!exact(value,['profile','job',...(Object.hasOwn(value??{},'own_quotes')?['own_quotes']:[]),...(Object.hasOwn(value??{},'completion_photos')?['completion_photos']:[])]))throw new Error('Unsupported technician detail');
+  readTechnicianProfile(value.profile);readTechnicianJob(value.job,{id,detail:true});if(Object.hasOwn(value,'completion_photos')){const slots=value.completion_photos;if(!Array.isArray(slots)||slots.length>3||slots.some((n,i)=>n!==i+1)||(slots.length&&!(value.job.access==='selected'&&['in_progress','completed'].includes(value.job.state))))throw new Error('Unsupported completion photos');}if(Object.hasOwn(value,'own_quotes'))readOwnTechnicianQuotes(value.own_quotes);return value;
 }
