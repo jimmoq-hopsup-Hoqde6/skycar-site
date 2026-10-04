@@ -43,3 +43,30 @@ Acceptance: bounded/auth/origin/account media HTTP tests, byte-integrity/storage
 Recovery clarification: technician detail completion_photos lists ready slots only after every private image verifies. During in_progress an incomplete set yields no ready slots and the upload control stays available to reselect identical files/order after a browser restart. Immutable storage still rejects a changed set. Completed evidence failures remain unavailable errors. No second media ledger or booking state is introduced.
 
 Upload preflight: service-only care_technician_completion_upload_access(p_actor uuid,p_id uuid) returns true for a currently linked technician's selected in_progress job, including source ownership and unarchived account vehicle. Historical selected inbox/media read permissions are preserved. The upload preflight and completion commit are independent current-authority checks.
+
+## M3 slice 3 — customer completion review contract (published before consumption)
+
+Base: frozen #58 75713f15d12a3ca89531e1146b8e6213ccf0a2bf. Dedicated feature/customer-completion-review branch.
+
+Data remains separated:
+- care_journeys.state remains completed after technician/operations completion.
+- completion_review_state is a separate nullable lifecycle: awaiting_review, confirmed, issue_reported. A forward trigger sets awaiting_review whenever work first becomes completed; existing completed test rows are backfilled.
+- completion_issue_details is private, trimmed plain text only for issue_reported, 10–2000 characters. No public review, rating, payment, refund, payout, technician penalty or external notification is created.
+
+Existing POST /api/v1/care/journey/{id}, same guest HttpOnly capability/account ownership/origin/idempotency/account-response rules:
+- {"action":"confirm_completion","payload":{}}.
+- {"action":"report_completion_issue","payload":{"details":"..."}}.
+- success keeps state:"completed" and returns exact {"id":UUID,"state":"completed","revision":integer,"review_state":"confirmed"|"issue_reported","replayed":boolean}.
+- only the owning customer/guest, never admin/technician, can write. Job must be completed with verified completion evidence and review_state awaiting_review. One final outcome only; new keys after either outcome return INVALID_TRANSITION.
+- report text is required exact shape, trimmed, length 10–2000; confirmation payload is exactly empty. No attachments in this slice.
+- a service-only security-invoker care_customer_completion_review_command rechecks current customer role/account vehicle ownership or guest capability, locks in Garage/Care order, shares care_journey_commands actor-scope/key ledger with existing customer commands, and atomically writes review state/revision, completion_confirmed or completion_issue_reported event, audit and exact result. Exact retry remains valid with the same current access and produces no duplicate event. Audit failure rolls back.
+
+GET customer/operations projection adds completion_review:{state,issue_details}. issue_details is present only for issue_reported. Technician projection remains unchanged and never receives issue text. Events expose only the outcome type, never the report text.
+
+Customer UI after completed evidence:
+- awaiting_review shows two explicit paths: confirm the completed work, or report a private issue with 10–2000 characters. Copy states that neither action charges/releases/refunds money.
+- exact key/body is retained after an uncertain reply. 401/403/404 or account/capability change clears issue draft, private journey and pending attempt.
+- confirmed and issue_reported render final acknowledgement and no duplicate controls. Issue report directs the customer that Skycar operations will review it; no promise of refund/resolution timing.
+- operations can read the private issue through the existing authorised journey projection for manual follow-up. No notification send.
+
+Acceptance: guest/account positive outcomes; admin/technician/other owner denial; not-completed/missing-evidence/final-state/shape/length/replay/key-conflict/source-transfer negatives; event/audit rollback and real concurrent confirm-vs-issue race; customer/operations projection privacy; mocked browser exact retry/account clearing and responsive states. Independent/hosted/device gates #51/#8 remain HIGH PRIORITY.

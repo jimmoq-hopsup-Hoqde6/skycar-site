@@ -488,3 +488,4 @@
     width: 100%;
   }
 }
+.journey-completion-review form+form{margin-top:24px;padding-top:22px;border-top:1px solid var(--line)}.journey-review-choice{display:flex;align-items:flex-start;gap:10px;line-height:1.5}.journey-review-choice input{flex:0 0 auto;width:20px;height:20px;margin-top:2px}.journey-completion-outcome blockquote,.journey-completion-review blockquote{margin:16px 0;padding:16px;border-left:4px solid var(--accent);background:rgba(255,255,255,.04);white-space:pre-wrap;overflow-wrap:anywhere}.journey-completion-review textarea{min-height:120px}

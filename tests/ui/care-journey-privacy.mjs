@@ -15,7 +15,7 @@ try {
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  let account='account-a',deny=false,postFails=false,postDenial=0,responseAccount=null;
  const posts=[];
- const snapshot=()=>({id,kind:'account',state:'review',revision:0,request:{vehicle:`Synthetic vehicle ${account}`,service:'repair',description:'Synthetic visible scratch',created_at:'2026-10-01T00:00:00Z'},details:{name:account,phone:'0400000000',suburb:'Adelaide',postcode:'5000'},quotes:[],selected_quote_id:null,appointment:null,events:[],photos:[],completion_photos:[]});
+ const snapshot=()=>({id,kind:'account',state:'review',revision:0,request:{vehicle:`Synthetic vehicle ${account}`,service:'repair',description:'Synthetic visible scratch',created_at:'2026-10-01T00:00:00Z'},details:{name:account,phone:'0400000000',suburb:'Adelaide',postcode:'5000'},quotes:[],selected_quote_id:null,appointment:null,events:[],photos:[],completion_photos:[],completion_review:{state:null}});
  await page.route('**/api/v1/care/journey/**',async route=>{
   if(route.request().method()==='POST'){
    posts.push({key:route.request().headers()['idempotency-key'],body:route.request().postData()});

@@ -75,7 +75,7 @@ export async function saveJourneyPhotos(access:JourneyAccess,photos:Photo[],comp
 }
 export async function journeySnapshot(access:JourneyAccess) {
  const results=await Promise.all([
-  access.db.from('care_journeys').select('state,customer_details,selected_quote_id,starts_at,ends_at,revision,updated_at').eq('id',access.id).maybeSingle(),
+  access.db.from('care_journeys').select('state,customer_details,selected_quote_id,starts_at,ends_at,completion_review_state,completion_issue_details,revision,updated_at').eq('id',access.id).maybeSingle(),
   access.db.from('care_reviewed_quotes').select('id,expert_name,expert_description,scope_summary,total_price_cents,currency,status,expires_at,starts_at,ends_at,created_at').eq('journey_id',access.id).order('total_price_cents').limit(50),
   access.db.from('care_journey_events').select('id,type,occurred_at').eq('journey_id',access.id).order('id').limit(100),
  ]);
@@ -86,9 +86,15 @@ export async function journeySnapshot(access:JourneyAccess) {
   quotes:quotes.filter(q=>q.status==='selected'||(q.status==='issued'&&Date.parse(q.expires_at)>now&&Date.parse(q.starts_at)>now)),
   selected_quote_id:j?.selected_quote_id||null,appointment:j?.starts_at ? {starts_at:j.starts_at,ends_at:j.ends_at}:null,
   events:results[2].data||[],photos:photos.map(v=>v.slot),completion_photos:completion.map(v=>v.slot),
+  completion_review:{state:j?.completion_review_state||null,...(j?.completion_review_state==='issue_reported'?{issue_details:j.completion_issue_details}: {})},
   assessment:{mode:'expert_review'},payment:{status:'not_requested'}};
 }
 export async function journeyCommand(access:JourneyAccess,action:string,key:string,payload:unknown) {
+ if(['confirm_completion','report_completion_issue'].includes(action)){
+  const {data,error}=await access.db.rpc('care_customer_completion_review_command',{p_actor:access.actor,p_guest_key:access.guestKey,p_key:key,p_action:action,p_id:access.id,p_payload:payload});
+  if(error)throw new JourneyError(error.code==='P0001' ? error.message : 'UNAVAILABLE');
+  return data;
+ }
  // Check every declared completion image before the database completion transition.
  let commandPayload=payload;
  if(action==='complete'){
