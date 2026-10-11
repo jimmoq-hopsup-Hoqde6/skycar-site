@@ -37,7 +37,7 @@ server reloads and locks the current records before money work:
 | Currency | selected quote currency, initially exact `AUD` | no client/provider override |
 | Technician | selected quote expert plus current technician link | never a browser payout recipient |
 | Refund ceiling | succeeded captured amount minus succeeded refunds | provider request cannot exceed it |
-| Payout basis | future approved server policy applied to the immutable charge snapshot | unavailable while fee policy is undecided |
+| Payout basis | future approved server policy applied to the immutable charge snapshot | agreed base/markup approved; tax, provider fees and release policy remain unresolved |
 
 The future money order must store the selected quote ID, quote revision or
 immutable fingerprint, amount, currency and approved payment-policy version.
