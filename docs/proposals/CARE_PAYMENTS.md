@@ -37,14 +37,50 @@ server reloads and locks the current records before money work:
 | Currency | selected quote currency, initially exact `AUD` | no client/provider override |
 | Technician | selected quote expert plus current technician link | never a browser payout recipient |
 | Refund ceiling | succeeded captured amount minus succeeded refunds | provider request cannot exceed it |
-| Payout basis | future approved server policy applied to the immutable charge snapshot | unavailable while fee policy is undecided |
+| Payout basis | future approved server policy applied to the immutable charge snapshot | agreed base/markup approved; tax, provider fees and release policy remain unresolved |
 
 The future money order must store the selected quote ID, quote revision or
 immutable fingerprint, amount, currency and approved payment-policy version.
 Later quote or journey edits cannot mutate that snapshot. A changed quote needs
 a new explicitly approved money order; it must not reuse the old provider key.
 
-## Required commercial decisions — deliberately unresolved
+## Founder-approved pricing direction and reference arithmetic
+
+The 5 October founder approval in issue #54 (comment 5987689305) resolves
+the markup base: a technician sets the agreed pre-GST job price; Skycar adds
+15% of that price, without deducting the fee from the technician amount.
+For example, AUD 500.00 + 75.00 = 575.00 before applicable GST. Both amounts
+and the full customer payable total must be visible before acceptance.
+Accepted amounts are locked; extra work needs a newly customer-approved quote.
+
+This revision proposes nearest-cent, half-up rounding of the service fee,
+once per job: `(technician_cents * 15 + 50) / 100` using integer division.
+Delivery & Review must accept this rounding rule before application consumption.
+The reference implementation uses BigInt intermediates and rejects unsafe
+numeric outputs. This is an arithmetic bound, not a provider transaction limit.
+
+Reference input is an explicitly supplied, trusted server quote ID/revision,
+technician base cents, technician GST cents, service-fee GST cents and tax-policy
+version. Unknown tax is rejected; explicit zero is permitted only when resolved
+by the future tax authority. The helper never guesses registration, taxable
+supplier, agency structure or a GST rate. Customer total is base + markup + both
+tax components; technician agreed amount is base + technician GST. Provider fees
+are not silently deducted. This amount is not an eligible/settled payout.
+
+The flat, frozen output records currency, quote ID/revision, pricing version,
+tax version, base, service fee, both GST components, technician agreed amount
+and customer total. Customer commands supply an empty body; any price, fee or
+tax override is rejected. No existing quote schema is changed by this proposal.
+The helper cannot authorize a quote, charge, refund, payout or tax policy.
+
+Other founder direction recorded in #54: per-job charging; technician release
+only after completion and successful customer payment; rework-ticket direction;
+six-hour/$50 cancellation direction; Apple Pay/Google Pay target. Charge trigger,
+tax/fee allocation, cancellation exceptions, dispute holds and provider model
+still need their complete versioned policies. The live Stripe account is
+founder-reported (comment 5993965486); sandbox configuration remains unverified.
+
+## Required commercial decisions — remaining unresolved details
 
 Implementation beyond this proposal is blocked until the Product Owner, with
 payments/legal/accounting input where required, records these decisions:
@@ -53,7 +89,7 @@ payments/legal/accounting input where required, records these decisions:
 | --- | --- | --- |
 | Charge trigger: booking request, capacity confirmation, pre-work or completion | Product Owner | changes customer promise and failure recovery |
 | Immediate capture versus authorization then capture; authorization expiry behavior | Product Owner + payments | changes cancellation and fulfilment dependencies |
-| Customer price composition, platform fee, tax/GST treatment and who bears fees | Product Owner + accounting/legal | defines charged and reported amounts |
+| GST supplier/agency/registration treatment and who bears provider fees; accept proposed cent rounding | Product Owner + accounting/legal, Delivery & Review for arithmetic | 15% markup base is approved; remaining details define charged and reported amounts |
 | Cancellation windows, full/partial refund matrix and non-refundable components | Product Owner + legal | creates financial/customer obligations |
 | Customer-issue/dispute hold, evidence, resolution authority and response targets | Product Owner + operations/legal | controls refunds and technician funds |
 | Technician payout basis, release trigger, delay, fees, reversals and failed-payout handling | Product Owner + accounting | defines earnings and liabilities |
