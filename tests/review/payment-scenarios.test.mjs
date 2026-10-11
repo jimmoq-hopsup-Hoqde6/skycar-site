@@ -34,11 +34,13 @@ function ledger({policyVersion = POLICY} = {}) {
     checkout({key, journeyId, body, serverQuote}) {
       if (!policyVersion) return {error: 'PAYMENT_CONFIGURATION_UNAVAILABLE'};
       if (!exactKeys(body, [])) return {error: 'VALIDATION_FAILED'};
-      if (!serverQuote || !Number.isInteger(serverQuote.total_price_cents) || serverQuote.total_price_cents <= 0 || serverQuote.currency !== 'AUD') {
+      if (!serverQuote || !Number.isSafeInteger(serverQuote.total_price_cents) || serverQuote.total_price_cents <= 0 || serverQuote.currency !== 'AUD') {
         return {error: 'QUOTE_UNAVAILABLE'};
       }
 
-      const fingerprint = JSON.stringify({journeyId, quoteId: serverQuote.id, quoteRevision: serverQuote.revision});
+      const fingerprint = JSON.stringify({journeyId, quoteId: serverQuote.id,
+        quoteRevision: serverQuote.revision, amountCents: serverQuote.total_price_cents,
+        currency: serverQuote.currency, policyVersion});
       const replay = commandReplay(commands, key, fingerprint);
       if (replay) return replay;
 
@@ -199,6 +201,19 @@ test('exact checkout replay is stable and changed quote input conflicts', () => 
   assert.equal(replay.id, first.id);
   assert.equal(replay.replayed, true);
   assert.deepEqual(checkout(book, {serverQuote: {...quote, revision: 5, total_price_cents: 83_000}}), {error: 'IDEMPOTENCY_CONFLICT'});
+});
+
+test('same quote revision with changed authoritative amount conflicts instead of replaying', () => {
+  const book = ledger();
+  const first = checkout(book);
+  assert.deepEqual(checkout(book, {serverQuote: {...quote, total_price_cents: quote.total_price_cents + 1}}), {error: 'IDEMPOTENCY_CONFLICT'});
+  assert.equal(book.order(first.id).amount_cents, quote.total_price_cents);
+  assert.equal(checkout(book).id, first.id, 'original snapshot still replays');
+});
+
+test('unsafe quote amounts cannot create a money order', () => {
+  const book = ledger();
+  assert.deepEqual(checkout(book, {serverQuote: {...quote, total_price_cents: Number.MAX_SAFE_INTEGER + 1}}), {error: 'QUOTE_UNAVAILABLE'});
 });
 
 test('invalid, duplicate and out-of-order provider events cannot duplicate or regress money state', () => {
