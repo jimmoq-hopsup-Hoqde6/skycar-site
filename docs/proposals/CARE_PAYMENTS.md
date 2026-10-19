@@ -327,3 +327,77 @@ Executable reference scenarios must prove, without a provider or database:
 
 Passing these scenarios establishes proposal consistency only. It is not schema,
 provider, accounting, legal, hosted, security-review or money-movement evidence.
+
+## Developer 4 preparation handoff — 19 October 2026
+
+Owner: Developer 4 (payments), branch `dev4/payment-interfaces-20261019`.
+Base: frozen #65 `19c88f7ae002e2283d72de4ee5fbce7334ab483c`.
+Scope: this proposal and `tests/review/payment-scenarios.interfaces*.mjs` only.
+Developer 1 retains all shared database, permission and booking-command work.
+No existing frozen branch is edited. This is an isolated reference packet,
+not a route, production adapter, payment screen or provider integration.
+
+### Interfaces for customer and technician consumers
+
+- Checkout request: authenticated/capability-scoped journey, UUID idempotency
+  header, empty JSON body; no browser amount, fee, currency or recipient.
+- Preparation response: HTTP 503 `PAYMENT_CONFIGURATION_UNAVAILABLE`, private
+  and no-store. Unauthorized requests return indistinguishable 404 before
+  inspecting payment records. The reference cannot enable payments even when
+  passed `sandbox` or `live`; it never reads credentials or calls a provider.
+- Customer view: `{state, label, canPay:false}` for mocked display. Pending
+  means confirmation pending, not paid. Authorization is not capture.
+  Browser return URLs are never evidence of success. Refund records must be
+  displayed separately; captured history must not imply no refund occurred.
+- Technician view contract (deferred implementation): authorized own-job only;
+  separate held/eligible/submitted/paid/failed states from the payout ledger.
+  Missing record means unavailable, never zero earnings or an estimated payout.
+- Developers 2/3 can build mocked displays from these contracts. No checkout URL,
+  client secret, card details, provider metadata or payout recipient is supplied.
+
+### Webhook adapter contract and durable acknowledgement
+
+`webhookInterface(rawBytes, {verify, commit})` is a synthetic test harness.
+`verify` is injected and mocked: passing tests does NOT verify Stripe signatures.
+The eventual provider adapter must validate original raw bytes, signature age,
+endpoint secret, expected account, test/live mode and supported API version
+before normalizing an event. No production route may import this fixture.
+The 64 KiB test bound is a proposal requiring provider compatibility review.
+
+Normalized fixture: `{id, version:'skycar-mock-v1', account:'fixture-account',
+livemode:false, type, objectId, amountCents, currency:'AUD'}`. Fixture event names
+are not Stripe event names. Capture/refund/payout mappings require a separate
+provider-specific contract and sandbox evidence before adoption.
+
+`commit` must resolve an existing server-owned object, compare its immutable
+amount/currency, lock the aggregate, and atomically record the event receipt,
+transition and audit (or reconciliation record). Its only acknowledged outcomes
+are `committed`, `duplicate`, `reconciliation_recorded`. Unknown/transient storage
+outcomes return 503; no success acknowledgement before durable commit. Verified
+unsupported types return 200 ignored. Invalid context or normalized data returns
+400 without money writes; operators must monitor these failures.
+
+Deduplication must include provider account and mode plus event ID, not merely
+an ID across environments. Distinct event IDs for the same captured object must
+also be effect-idempotent. Late failures cannot regress a captured state.
+Concurrent refunds must reserve pending amounts as well as succeeded refunds,
+so their combined obligations never exceed captured funds. Ambiguous refunds
+retain their reservation until reconciled. This clarifies the refund-ceiling
+requirement above; shared persistence remains Developer 1's implementation.
+
+### Acceptance and remaining integration tests
+
+Run `node --test tests/review/payment-scenarios*.test.mjs` explicitly; these review
+tests are not added to CI by this packet. New tests cover disabled modes, input
+and privacy boundaries, pending presentation, raw byte forwarding, size limits,
+verification failure, account/mode/version validation, amount/currency validation,
+durable acknowledgement and retry behavior. Existing reference tests cover
+checkout retries, pricing, refunds, disputes and payout recovery.
+
+Before real integration: actual signed sandbox payloads (including expired and
+rotated secrets), concurrent duplicate delivery, different event IDs for one
+object, rollback after receipt insert, unknown-object reconciliation, reordered
+events, concurrent refund reservations, authorization revocation and real
+customer/technician access tests are required. These are acceptance cases, not
+claims of completed PostgreSQL/provider verification. No taxes, provider fees,
+cancellation exceptions, dispute release policy or payment timing are invented.
