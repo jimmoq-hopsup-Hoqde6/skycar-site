@@ -33,6 +33,28 @@ export async function verifyCustomerCompletionReview({sql,auth,quote,result,wait
  for(const [action,payload] of [['report_completion_issue',{}],['report_completion_issue',{details:'short'}],['report_completion_issue',{details:'x'.repeat(2001)}],['report_completion_issue',{details:10}],['report_completion_issue',{details:'A valid issue report',rating:1}],['unknown',{}]])await fail(command(account.id,customer,null,action,payload),'VALIDATION_FAILED');
  const inProgress=await fixture('account','in_progress');await fail(command(inProgress.id,customer,null,'confirm_completion',{}),'INVALID_TRANSITION');
  await run(`update public.care_journeys set state='completed',completion_evidence=null where id=${quote(inProgress.id)}`);await fail(command(inProgress.id,customer,null,'confirm_completion',{}),'INVALID_TRANSITION');
+ // Security regression #66: privilege overlap never grants customer-only completion authority.
+ const dualConfirm=await fixture();
+ await run(`insert into public.user_roles(user_id,role) values(${quote(customer)},'admin') on conflict do nothing`);
+ await fail(command(dualConfirm.id,customer,null,'confirm_completion',{}),'NOT_FOUND');
+ await fail(command(dualConfirm.id,customer,null,'report_completion_issue',{details:'This is a private defect report.'}),'NOT_FOUND');
+ equal(await run(`select completion_review_state from public.care_journeys where id=${quote(dualConfirm.id)}`),'awaiting_review');
+ await run(`delete from public.user_roles where user_id=${quote(customer)} and role='admin'`);
+ const dualTechnician=await fixture();
+ await run(`insert into public.user_roles(user_id,role) values(${quote(customer)},'technician') on conflict do nothing`);
+ await fail(command(dualTechnician.id,customer,null,'confirm_completion',{}),'NOT_FOUND');
+ await fail(command(dualTechnician.id,customer,null,'report_completion_issue',{details:'Another valid private defect report.'}),'NOT_FOUND');
+ await run(`delete from public.user_roles where user_id=${quote(customer)} and role='technician'`);
+ const roleChange=await fixture(),roleKey=randomUUID();
+ equal((await json(command(roleChange.id,customer,null,'confirm_completion',{},roleKey))).replayed,false);
+ await run(`insert into public.user_roles(user_id,role) values(${quote(customer)},'admin') on conflict do nothing`);
+ await fail(command(roleChange.id,customer,null,'confirm_completion',{},roleKey),'NOT_FOUND');
+ await run(`delete from public.user_roles where user_id=${quote(customer)} and role='admin'`);
+ equal((await json(command(roleChange.id,customer,null,'confirm_completion',{},roleKey))).replayed,true);
+ const archive=await fixture();
+ await run(`update public.vehicles set archived_at=clock_timestamp() where id=${quote(archive.vehicle)}`);
+ await fail(command(archive.id,customer,null,'confirm_completion',{}),'NOT_FOUND');
+
  const key=randomUUID(),confirmed=await json(command(account.id,customer,null,'confirm_completion',{},key));
  equal(confirmed.review_state,'confirmed');equal(confirmed.state,'completed');equal(confirmed.replayed,false);
  equal((await json(command(account.id,customer,null,'confirm_completion',{},key))).replayed,true);
