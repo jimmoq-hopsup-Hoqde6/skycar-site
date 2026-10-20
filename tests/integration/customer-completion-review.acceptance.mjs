@@ -58,6 +58,27 @@ export async function verifyCustomerCompletionReview({sql,auth,quote,result,wait
  const key=randomUUID(),confirmed=await json(command(account.id,customer,null,'confirm_completion',{},key));
  equal(confirmed.review_state,'confirmed');equal(confirmed.state,'completed');equal(confirmed.replayed,false);
  equal((await json(command(account.id,customer,null,'confirm_completion',{},key))).replayed,true);
+ // A saved result never bypasses current source authority (#66).
+ await run(`update public.vehicles set archived_at=clock_timestamp() where id=${quote(account.vehicle)}`);
+ await fail(command(account.id,customer,null,'confirm_completion',{},key),'NOT_FOUND');
+ await run(`update public.vehicles set archived_at=null where id=${quote(account.vehicle)}`);
+ equal((await json(command(account.id,customer,null,'confirm_completion',{},key))).replayed,true);
+ await run(`delete from public.user_roles where user_id=${quote(customer)} and role='customer'`);
+ await fail(command(account.id,customer,null,'confirm_completion',{},key),'NOT_FOUND');
+ await run(`insert into public.user_roles(user_id,role) values(${quote(customer)},'customer')`);
+ for(const action of ['confirm_completion','report_completion_issue']){
+  const owned=await fixture(),savedKey=randomUUID();
+  const payload=action==='confirm_completion'?{}:{details:'A valid private review for replay checks.'};
+  await json(command(owned.id,customer,null,action,payload,savedKey));
+  for(const role of ['admin','technician']){
+   await run(`insert into public.user_roles(user_id,role) values(${quote(customer)},${quote(role)})`);
+   await fail(command(owned.id,customer,null,action,payload,savedKey),'NOT_FOUND');
+   await run(`delete from public.user_roles where user_id=${quote(customer)} and role=${quote(role)}`);
+  }
+  await fail(`update public.vehicles set owner_id=${quote(other)} where id=${quote(owned.vehicle)}`,'VEHICLE_HAS_CARE_HISTORY');
+  await run(`update public.care_requests set customer_id=${quote(other)} where id=${quote(owned.id)}`);
+  await fail(command(owned.id,customer,null,action,payload,savedKey),'NOT_FOUND');
+ }
  await fail(command(account.id,customer,null,'report_completion_issue',{details:'Changed final outcome'},key),'IDEMPOTENCY_CONFLICT');
  await fail(command(account.id,customer,null,'report_completion_issue',{details:'A different final outcome'}),'INVALID_TRANSITION');
  equal(await run(`select state||':'||completion_review_state from public.care_journeys where id=${quote(account.id)}`),'completed:confirmed');
@@ -96,6 +117,65 @@ export async function verifyCustomerCompletionReview({sql,auth,quote,result,wait
   const [a,b]=await Promise.all([first,second]);equal(a.error,undefined);assert.ok(b.output?.includes('INVALID_TRANSITION'));checks++;
   equal(await run(`select completion_review_state from public.care_journeys where id=${quote(race.id)}`),'confirmed');
   equal(await run(`select count(*) from public.care_journey_events where journey_id=${quote(race.id)} and type in ('completion_confirmed','completion_issue_reported')`),'1');
+
+  const waitAtSleep=async tag=>{
+   for(let attempt=0;attempt<100;attempt++){
+    if(await run(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event='PgSleep' and query like ${quote('%'+tag+'%')}`)!=='0')return;
+    await new Promise(resolve=>setTimeout(resolve,20));
+   }
+   throw new Error('First transaction did not reach its lock-holding barrier');
+  };
+  // Two real connections, both first-writer orders, one vehicle and shared key
+  // across the selection and completion-review RPCs. The loser must conflict,
+  // never deadlock, duplicate a mutation or silently reuse another action.
+  for(const reviewFirst of [true,false]){
+   const review=await fixture(),selection=await fixture('account','in_progress');
+   const expert=randomUUID(),quoteId=randomUUID(),sharedKey=randomUUID();
+   await run(`update public.care_requests set vehicle_id=${quote(review.vehicle)} where id=${quote(selection.id)};
+    update public.care_journeys set state='quotes_ready',customer_details='{"postcode":"5000"}' where id=${quote(selection.id)};
+    insert into public.care_experts(id,business_name,description,services,postcodes,insurance_valid_until)
+     values(${quote(expert)},'Synthetic expert','Synthetic concurrency fixture',array['repair'],array['5000'],current_date+30);
+    insert into public.care_reviewed_quotes(id,journey_id,expert_id,expert_name,expert_description,scope_summary,total_price_cents,expires_at,starts_at,ends_at)
+     values(${quote(quoteId)},${quote(selection.id)},${quote(expert)},'Synthetic expert','Synthetic fixture','Inspect synthetic repair work',10000,now()+interval '1 day',now()+interval '2 days',now()+interval '2 days 1 hour');`);
+   const reviewCommand=command(review.id,customer,null,'confirm_completion',{},sharedKey);
+   const selectCommand=service(`select public.care_journey_command('select_quote',${quote(selection.id)}::uuid,${quote(customer)}::uuid,null,${quote(sharedKey)}::uuid,${quote(JSON.stringify({quote_id:quoteId,address:'1 Synthetic Street'}))}::jsonb)`);
+   const tag=`review_select_${reviewFirst?'review':'select'}_first`;
+   const firstStatement=(reviewFirst?reviewCommand:selectCommand).replace(';commit;',`;select pg_sleep(1);/* ${tag} */commit;`);
+   const firstResult=result(firstStatement);await waitAtSleep(tag);
+   const secondResult=result(reviewFirst?selectCommand:reviewCommand);
+   const [firstOutcome,secondOutcome]=await Promise.all([firstResult,secondResult]);
+   equal(firstOutcome.error,undefined,'first cross-RPC command succeeds');
+   assert.ok(secondOutcome.output?.includes('IDEMPOTENCY_CONFLICT'),'second cross-RPC command conflicts');checks++;
+   equal(await run(`select count(*) from public.care_journey_commands where actor_scope=${quote('user:'+customer)} and idempotency_key=${quote(sharedKey)}`),'1');
+   equal(await run(`select completion_review_state from public.care_journeys where id=${quote(review.id)}`),reviewFirst?'confirmed':'awaiting_review');
+   equal(await run(`select state from public.care_journeys where id=${quote(selection.id)}`),reviewFirst?'quotes_ready':'booking_requested');
+  }
+
+  const waitBlocked=async tag=>{
+   for(let attempt=0;attempt<100;attempt++){
+    if(await run(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event_type='Lock' and query like ${quote('%'+tag+'%')}`)!=='0')return;
+    await new Promise(resolve=>setTimeout(resolve,20));
+   }
+   throw new Error('Review command did not reach the expected lock wait');
+  };
+  // Revalidate after a wait, including replay: a concurrent role grant,
+  // archive or request transfer must not use the pre-wait authority snapshot.
+  for(const mutation of ['role','archive','transfer']){
+   const owned=await fixture(),savedKey=randomUUID();
+   await json(command(owned.id,customer,null,'confirm_completion',{},savedKey));
+   const tag=`review_authority_wait_${mutation}`;
+   const holder=result(`begin;select pg_advisory_xact_lock(hashtextextended(${quote('user:'+customer+':'+savedKey)},0));select pg_sleep(2);/* holder_${tag} */commit;`);
+   await waitAtSleep('holder_'+tag);
+   const pending=result(command(owned.id,customer,null,'confirm_completion',{},savedKey).replace('begin;',`begin;/* pending_${tag} */`));
+   await waitBlocked('pending_'+tag);
+   if(mutation==='role')await run(`insert into public.user_roles(user_id,role) values(${quote(customer)},'technician')`);
+   if(mutation==='archive')await run(`update public.vehicles set archived_at=clock_timestamp() where id=${quote(owned.vehicle)}`);
+   if(mutation==='transfer')await run(`update public.care_requests set customer_id=${quote(other)} where id=${quote(owned.id)}`);
+   const [holdOutcome,outcome]=await Promise.all([holder,pending]);equal(holdOutcome.error,undefined);
+   assert.ok(outcome.output?.includes('NOT_FOUND'),'current authority checked after lock wait');checks++;
+   equal(await run(`select count(*) from public.care_journey_events where journey_id=${quote(owned.id)} and type='completion_confirmed'`),'1');
+   if(mutation==='role')await run(`delete from public.user_roles where user_id=${quote(customer)} and role='technician'`);
+  }
  }
  console.log(`PASS: ${checks} customer completion confirmation/issue authority, privacy, replay, rollback and race assertions (disposable database).`);
 }
