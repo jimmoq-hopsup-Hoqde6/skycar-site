@@ -169,3 +169,41 @@ test('logging failure cannot change a successful delivery result', async () => {
   assert.equal(result.status, 'delivered');
   assert.equal(sink.messages.length, 1);
 });
+
+test('impossible dates and malformed absolute instants fail before dependencies', async () => {
+  const sink = createNotificationTestSink();
+  let authorizations = 0;
+  const delivery = adapter(sink, {authorize: async () => {
+    authorizations += 1;
+    return {allowed: true, destination: DESTINATION};
+  }});
+  for (const available_at of [
+    '2026-02-30T00:00:00Z', '2026-02-29T00:00:00Z', '1900-02-29T00:00:00Z',
+    '2026-04-31T00:00:00+09:30', '2026-00-01T00:00:00Z', '2026-13-01T00:00:00Z',
+    '2026-01-00T00:00:00Z', '2026-01-01T24:00:00Z', '2026-01-01T00:60:00Z',
+    '2026-01-01T00:00:60Z', '2026-01-01T00:00:00+24:00', '2026-01-01T00:00:00+09:60',
+    '2026-01-01T00:00:00', '2026-01-01', '2026-01-01 00:00:00Z',
+  ]) {
+    await assert.rejects(delivery.deliver({...job, available_at}), NotificationJobError, available_at);
+  }
+  assert.equal(authorizations, 0);
+  assert.equal(sink.calls.length, 0);
+});
+
+test('valid leap dates and explicit offsets preserve instant-based scheduling', async () => {
+  const sink = createNotificationTestSink();
+  const delivery = adapter(sink);
+  for (const available_at of [
+    '2000-02-29T00:00:00Z', '2024-02-29T23:59:59.123456Z',
+    '2026-10-05T10:30:00+10:30', '2026-10-04T14:30:00-09:30',
+  ]) {
+    assert.equal((await delivery.deliver({...job, available_at})).status, 'delivered', available_at);
+  }
+  const callsBefore = sink.calls.length;
+  for (const available_at of ['2026-10-05T10:30:00.001+10:30', '2028-02-29T00:00:00Z']) {
+    assert.deepEqual(await delivery.deliver({...job, available_at}), {
+      delivery_id: job.delivery_id, status: 'not_due', code: 'NOT_DUE', available_at,
+    });
+  }
+  assert.equal(sink.calls.length, callsBefore);
+});

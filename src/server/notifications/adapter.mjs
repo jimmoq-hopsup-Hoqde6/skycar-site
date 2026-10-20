@@ -36,6 +36,19 @@ function exactKeys(value, expected) {
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
+function validInstant(value) {
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(value);
+  if (!match || !Number.isFinite(Date.parse(value))) return false;
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const monthDays = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  // Validate the written calendar date before Date.parse can normalize it.
+  return month >= 1 && month <= 12 && day >= 1 && day <= monthDays[month - 1] &&
+    hour <= 23 && minute <= 59 && second <= 59 &&
+    (match[7] === undefined || (Number(match[7]) <= 23 && Number(match[8]) <= 59));
+}
+
 function readJob(value) {
   if (!exactKeys(value, JOB_KEYS)) throw new NotificationJobError();
   if (!UUID.test(value.delivery_id) || !UUID.test(value.event_id) || !UUID.test(value.recipient_id)) {
@@ -47,11 +60,7 @@ function readJob(value) {
   if (!Number.isInteger(value.attempt) || value.attempt < 0 || value.attempt > 9) {
     throw new NotificationJobError();
   }
-  if (
-    typeof value.available_at !== 'string' ||
-    !/(?:Z|[+-]\d{2}:\d{2})$/.test(value.available_at) ||
-    !Number.isFinite(Date.parse(value.available_at))
-  ) {
+  if (!validInstant(value.available_at)) {
     throw new NotificationJobError();
   }
   return value;
