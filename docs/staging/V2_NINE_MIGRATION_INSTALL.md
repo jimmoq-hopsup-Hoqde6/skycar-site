@@ -1,6 +1,6 @@
 # V2 nine-migration install: manifest, pre-migration checklist, post-migration verification, backup gap review
 
-> **Revision 5 (adds section 11: install results of 1 Nov 2026). Revision 4 (adds section 10: live staging inventory of 1 Nov 2026, the sequence-revoke migration `20261101133000` in the install set, and checklist items 14-15 with query P8). Revision 3 added section 9: pre-launch ops for request-photo uploads. Revision 2 added sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed.**
+> **Revision 6 (adds section 12: changed install set `60a48da`, pre-checks P9 to P11). Revision 5 (adds section 11: install results of 1 Nov 2026). Revision 4 (adds section 10: live staging inventory of 1 Nov 2026, the sequence-revoke migration `20261101133000` in the install set, and checklist items 14-15 with query P8). Revision 3 added section 9: pre-launch ops for request-photo uploads. Revision 2 added sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed.**
 >
 > **Status: documentation only. Nothing in this document has been executed against any hosted
 > database.** No migration has been applied, no workflow has been dispatched, and no secret or
@@ -1234,3 +1234,67 @@ Advisors (`get_advisors`, about 20:43 ACDT):
 2. **`supabase_admin` default ACLs** on public sequences still grant `anon` and `authenticated` SELECT, UPDATE and USAGE. Sequences created by `supabase_admin` in `public` in future would be exposed again. No such sequence exists now (both are owned by `postgres`). Needs an explicit decision (a separate `alter default privileges for role supabase_admin`, which `postgres` may not be allowed to run).
 3. **Hosted versions are generated** (`20261101101109` to `20261101101228`), not the repository filenames, so A1, A2 and A3 fail by design; A1n and A4 by name are the valid checks.
 4. Not verified: the QA record for `39a2f89`, an application-level test against the installed schema, edge or rate-limit behaviour, and any restore of the logical export.
+
+## 12. Update 2 Nov 2026: changed install set, new pre-checks (docs only, nothing applied)
+
+Written 2 Nov 2026 at about 01:15 ACDT (Australia/Adelaide, UTC+10:30). Everything below was read-only; no migration was applied, nothing was created and no grants were changed.
+
+### 12.1 The install set has changed
+
+- The set to install is now **`integration/week1-candidate` @ `60a48dab27b72cdfd987fa5e2293aa26adc78919`**: 26 migration files, last `20261101160000_care_service_coverage_enforcement.sql` (VERIFIED by `git ls-tree` on 2 Nov 2026).
+- Compared with staging (18 migration rows: 8 baseline plus the ten from section 11), the 26 files add **8 not yet installed**: `20261101062300_technician_availability`, `20261101062400_my_jobs_journey_status`, `20261101063000_technician_availability_enforcement_delta`, `20261101120000_care_journey_command_lock_order`, `20261101130000_request_photo_flag_and_upload_quota`, `20261101140000_revoke_supabase_admin_sequence_default_acl`, `20261101150000_request_photo_marker_legacy_state_and_cleanup`, `20261101160000_care_service_coverage_enforcement`. The ten files already installed have the same git blob at `60a48da` as at the pins in section 11 (VERIFIED).
+- `20261101130000` (photos) was skipped in section 11; it is part of this set, so that skip no longer applies. Re-confirm the intended order and the Q6 check before use.
+- **Status: QA is PENDING** on the 26-file set at `60a48da` and on the ops scripts at `cd1e3ae4a515d7f2f3cab4e9c28c392b281c19d4`. Nothing here is approved for installing. Installing needs **Marcel's direct approval** and a **verified backup** taken first (section 11.1 describes the logical export route and its limits; it is not a restore-tested copy). Re-run P1 to P8b and re-verify every blob SHA at the then-current pin immediately before any apply.
+- Note: `fix/supabase-admin-sequence-default-acl` head was `6fe754b1f9e170cbd98dedbde3517a3f4f1baa88` on 2 Nov 2026 (a runbook-only change on top of `cd1e3ae`: `docs/SUPABASE_ADMIN_SEQUENCE_DEFAULT_ACL.md` and one acceptance test, no change to the scripts or the migration). The pin of record stays `cd1e3ae`.
+
+### 12.2 New pre-checks
+
+All are read-only SELECTs. Results below are from staging on 2 Nov 2026 shortly before this was written (VERIFIED).
+
+**P9: `btree_gist` (needed by `20261101063000`, GiST exclusion constraints on uuid and smallint)** BLOCKING if both parts fail.
+
+```sql
+select
+  (select jsonb_agg(to_jsonb(a)) from (select name, default_version, installed_version
+     from pg_available_extensions where name = 'btree_gist') a) as available,
+  (select jsonb_agg(to_jsonb(e)) from (select e.extname, n.nspname as schema, e.extversion
+     from pg_extension e join pg_namespace n on n.oid = e.extnamespace
+     where e.extname = 'btree_gist') e) as installed,
+  has_database_privilege('postgres', current_database(), 'CREATE') as postgres_create_on_db,
+  has_schema_privilege('postgres', 'extensions', 'CREATE') as postgres_create_on_extensions_schema,
+  (select rolsuper from pg_roles where rolname = 'postgres') as postgres_is_superuser;
+```
+
+Expected: either `installed` is non-empty, or `available` is non-empty and the CREATE privilege is true. Staging result:
+- available: `btree_gist`, default version `1.7`, `installed_version` null.
+- installed: none. Installed extensions are `pg_stat_statements`, `pgcrypto`, `plpgsql`, `supabase_vault`, `uuid-ossp`.
+- `has_database_privilege('postgres', 'postgres', 'CREATE')` true; `has_schema_privilege('postgres', 'extensions', 'CREATE')` true and for `public` true.
+- `postgres`: `rolsuper` false, `rolcreatedb` true, `rolcreaterole` true, `rolbypassrls` true, `rolreplication` true, `rolinherit` true. Database owner is `postgres`.
+- Memberships of `postgres` (not exhaustive of privileges): `anon`, `authenticated`, `authenticator`, `service_role`, `pg_monitor`, `pg_read_all_data`, `pg_signal_backend`, `pg_create_subscription` (all with admin option) and `supabase_privileged_role` (no admin option). It is not a member of `supabase_admin`.
+- Supabase documentation: the `postgres` role is intentionally not a superuser, and extension creation is gated by the `supautils` extension. `btree_gist` is on `supautils.privileged_extensions`, so `postgres` may create it (the supabase/postgres repository, `supautils.conf.j2`; the Supabase docs on roles and superuser access, and the extensions guide). Supabase creates such extensions as `supabase_admin` even when `postgres` runs `create extension`.
+- Result: **PASS expected** but the actual `create extension` is UNVERIFIED until the migration runs. The migration creates it `with schema extensions` when that schema exists (it does), so its objects do not land in `public` owned by `supabase_admin` (VERIFIED by reading the file at `60a48da`; Supabase's guidance for avoiding `supabase_admin` default ACLs on `public` objects is the same).
+- If the migration fails here, stop. The fix is a person with the right access running `create extension if not exists btree_gist with schema extensions;` (the Dashboard Database > Extensions page does this); it is not an ad-hoc fix to make during the install.
+
+**P10: storage schema USAGE** (the migrations reference `storage.*`, for example `20261101150000`, and `foundation` creates the bucket and policies)
+
+```sql
+select has_schema_privilege('postgres', 'storage', 'USAGE') as postgres_storage_usage,
+       has_schema_privilege('postgres', 'storage', 'CREATE') as postgres_storage_create,
+       (select pg_get_userbyid(nspowner) from pg_namespace where nspname = 'storage') as storage_owner,
+       (select nspacl::text from pg_namespace where nspname = 'storage') as storage_acl;
+```
+
+Expected: `postgres_storage_usage` true. Staging: usage **true**, create **false**, owner `supabase_admin`, ACL `{supabase_admin=UC/supabase_admin,postgres=U*/supabase_admin,anon=U/supabase_admin,authenticated=U/supabase_admin,service_role=U/supabase_admin,supabase_storage_admin=U*C*/supabase_admin,dashboard_user=UC/supabase_admin}`. All objects in the install set that exist in `public` are owned by `postgres` (26 relations and sequences, 27 functions at that time). **PASS**. Use `postgres` as the migration owner for every check, since that is the role that applied all of the section 11 migrations.
+
+**P11 (NON-BLOCKING): `supabase_admin` sequence default-ACL ops step**
+
+This is the open finding of section 11.5 (item 2). It does **not** block installing the migration set: the sequences that exist are owned by `postgres` and are already revoked (D4, P8b). It is an exposure for sequences that `supabase_admin` might create in `public` in future (for example by an extension installed into `public`).
+
+- Scripts: `scripts/ops/sequence-default-acl-gate.sql` (read-only) and `scripts/ops/supabase-admin-sequence-default-acl.sql` on branch `fix/supabase-admin-sequence-default-acl` @ `cd1e3ae4a515d7f2f3cab4e9c28c392b281c19d4`. QA PENDING.
+- The ops script must run **as `supabase_admin`** (or a member of it). A hosted customer cannot act as `supabase_admin`, so it may have to go through Supabase support; Supabase's knowledge base also states these defaults cannot be changed by customers. If that stays impossible, accept the risk in writing and keep extensions out of `public` (create them `with schema extensions`).
+- Order: apply the migrations (including `20261101133000` and `20261101140000`) first, then the ops script.
+- Read-only gate. Run the full script with `psql -X -v ON_ERROR_STOP=1 -f scripts/ops/sequence-default-acl-gate.sql`: a final `GO` row means go; any finding raises `SKYCAR-SEQ-ACL: NO-GO`. Because the gate fails by raising, the connector cannot show its row set. Its findings SELECT (the text between the `findings:begin` and `findings:end` markers) was run as a plain read-only SELECT:
+
+Staging result today, **NO-GO as expected** (6 findings, all `default_acl`, creator `supabase_admin`, scope `public`): grantees `anon` and `authenticated`, each with `SELECT`, `UPDATE` and `USAGE`. There is **no** `sequence` finding (no public sequence grants anon, authenticated or PUBLIC anything) and **no** global (all-schemas) default ACL. The full set of sequence default ACLs on staging: `supabase_admin` in `public`, `graphql_public`, `graphql` (grants to `anon`, `authenticated`, `service_role`) and `extensions`, `realtime`; `postgres` in `public` (`service_role` only) and `storage`; `supabase_auth_admin` in `auth`.
+
+After the ops script and the migration, the gate must print `GO`. Until then the gate result NO-GO is the known state and is **non-blocking** for the install.
