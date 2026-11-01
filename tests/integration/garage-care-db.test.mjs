@@ -23,6 +23,7 @@ import { verifyRequestPhotos } from "./request-photos.acceptance.mjs";
 import { verifyRequestPhotoMarker } from "./request-photo-marker.acceptance.mjs";
 import { verifyCoverageEnforcement } from "./coverage-enforcement.acceptance.mjs";
 import { verifyCrossLockOrder } from "./week1-cross-lock-order.acceptance.mjs";
+import { verifyCrossLockStress } from "./week1-cross-lock-stress.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
@@ -341,4 +342,7 @@ test('Technician availability delta rejects overlaps and provides a DST-aware, l
 });
 test('Journey RPCs share no lock inversion with care_submit_request, the photo-marker RPCs and the availability RPC', async () => {
   await verifyCrossLockOrder({ sql, quote, result });
+});
+test('Concurrent sessions queued behind one journey lock never deadlock (real lock-order stress)', async () => {
+  await verifyCrossLockStress({ database });
 });
