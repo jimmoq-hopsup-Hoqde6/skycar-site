@@ -1,4 +1,5 @@
 // Connected UI integration with synthetic owner/API fixtures; not hosted auth proof.
+import { coverageRoute } from './support/coverage-fixture.mjs';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
@@ -45,10 +46,12 @@ try {
     return route.fulfill({ json: { data: receipt } });
   });
   await page.route('**/api/v1/garage/vehicles/*/photo',route=>route.fulfill({status:204,headers:{'X-Skycar-Account':vehicle.id}}));
+  const coverage = coverageRoute(); await page.route(coverage.pattern, coverage.handler);
   await page.goto(`${origin}/garage`);
   await page.getByRole('link', { name: 'Request car care', exact: true }).click();
   await page.getByLabel('Active Garage vehicle').selectOption(vehicle.id);
   await page.getByLabel('Describe the damage or cleaning work').fill('Scratch on the left rear door');
+  await page.getByLabel('Where will the work happen? Postcode').fill('5000');
   await page.getByRole('button', { name: 'Submit for review' }).click();
   await page.waitForURL(`**/care/requests/11111111-1111-4111-8111-111111111111`);
   try { await page.getByText('Scratch on the left rear door', { exact: true }).waitFor(); } catch (error) { console.error('Fixture receipt:', JSON.stringify(receipt)); console.error('Rendered receipt page:', await page.locator('body').innerText()); throw error; }

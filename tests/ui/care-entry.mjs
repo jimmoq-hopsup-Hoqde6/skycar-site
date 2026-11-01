@@ -1,4 +1,5 @@
 // Synthetic intercepted API fixtures: not live authentication or database verification.
+import { coverageRoute } from './support/coverage-fixture.mjs';
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
@@ -40,6 +41,8 @@ try {
   const keys = [];
   const bodies = [];
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const coverage = coverageRoute();
+  await context.route(coverage.pattern, coverage.handler);
   await context.route("**/api/v1/garage/vehicles?*", async route => {
     vehicleLoads++;
     let mode = vehicleMode;
@@ -86,6 +89,7 @@ try {
   await page.getByRole("heading", { name: /What does your car need today/ }).waitFor();
   await page.getByLabel("Active Garage vehicle").selectOption(vehicle.id);
   await page.getByLabel("Describe the damage or cleaning work").fill(received.description);
+  await page.getByLabel("Where will the work happen? Postcode").fill("5000");
   await page.screenshot({ path: new URL("desktop-request.png", evidence).pathname, fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -108,18 +112,20 @@ try {
   assert.equal(keys.length, 2);
   assert.equal(keys[0], keys[1]);
   assert.equal(bodies[0], bodies[1]);
-  assert.deepEqual(JSON.parse(bodies[0]), { vehicle_id: vehicle.id, service: "repair", description: received.description, preferred_window: "flexible" });
+  assert.deepEqual(JSON.parse(bodies[0]), { vehicle_id: vehicle.id, service: "repair", description: received.description, preferred_window: "flexible", postcode: "5000" });
 
   submissionMode = "malformed400";
   const validationPage = await context.newPage();
   await validationPage.goto(`${origin}/care/request/garage`);
   await validationPage.getByLabel("Describe the damage or cleaning work").fill("Initial invalid response attempt");
+  await validationPage.getByLabel("Where will the work happen? Postcode").fill("5000");
   const validationStart = keys.length;
   await validationPage.getByRole("button", { name: "Submit for review" }).click();
   await validationPage.getByText("We could not confirm whether your request was saved.").waitFor();
   assert.equal(await validationPage.getByLabel("Describe the damage or cleaning work").isEnabled(), true);
   assert.equal(await validationPage.getByRole("button", { name: "Submit for review" }).isEnabled(), true);
   await validationPage.getByLabel("Describe the damage or cleaning work").fill("Corrected after definitive malformed response");
+  await validationPage.getByLabel("Where will the work happen? Postcode").fill("5000");
   submissionMode = "success";
   await validationPage.getByRole("button", { name: "Submit for review" }).click();
   await validationPage.waitForURL(`${origin}/care/requests/${requestId}`);
@@ -131,6 +137,7 @@ try {
   await focusPage.getByLabel("Detail or clean my car").check();
   await focusPage.getByLabel("Active Garage vehicle").selectOption(vehicle.id);
   await focusPage.getByLabel("Describe the damage or cleaning work").fill("Keep this same-account draft after focus");
+  await focusPage.getByLabel("Where will the work happen? Postcode").fill("5000");
   await focusPage.getByLabel("When would you prefer the work?").selectOption("seven_to_fourteen_days");
   const sameAccountRefresh = focusPage.waitForResponse(response => response.url().includes("/api/v1/garage/vehicles?") && response.request().method() === "GET");
   await focusPage.evaluate(() => window.dispatchEvent(new Event("focus")));
@@ -156,6 +163,7 @@ try {
   const inFlightPage = await context.newPage();
   await inFlightPage.goto(`${origin}/care/request/garage`);
   await inFlightPage.getByLabel("Describe the damage or cleaning work").fill("Keep one request while focus changes");
+  await inFlightPage.getByLabel("Where will the work happen? Postcode").fill("5000");
   const inFlightStart = keys.length;
   const started = new Promise(resolve => { deferredSubmissionStarted = resolve; });
   const submitClick = inFlightPage.getByRole("button", { name: "Submit for review" }).click();
@@ -181,6 +189,7 @@ try {
   const samePostFirstPage = await context.newPage();
   await samePostFirstPage.goto(`${origin}/care/request/garage`);
   await samePostFirstPage.getByLabel("Describe the damage or cleaning work").fill("Keep the original command through validation replacement");
+  await samePostFirstPage.getByLabel("Where will the work happen? Postcode").fill("5000");
   const samePostFirstStart = keys.length;
   const samePostStarted = new Promise(resolve => { deferredSubmissionStarted = resolve; });
   const samePostResponse = samePostFirstPage.waitForResponse(response => response.url().endsWith("/api/v1/care/requests") && response.request().method() === "POST");
@@ -215,6 +224,7 @@ try {
   const switchedInFlightPage = await context.newPage();
   await switchedInFlightPage.goto(`${origin}/care/request/garage`);
   await switchedInFlightPage.getByLabel("Describe the damage or cleaning work").fill("Private in-flight request from the first account");
+  await switchedInFlightPage.getByLabel("Where will the work happen? Postcode").fill("5000");
   const switchedStarted = new Promise(resolve => { deferredSubmissionStarted = resolve; });
   const switchedPostResponse = switchedInFlightPage.waitForResponse(response => response.url().endsWith("/api/v1/care/requests") && response.request().method() === "POST");
   await switchedInFlightPage.getByRole("button", { name: "Submit for review" }).click();
@@ -246,6 +256,7 @@ try {
   const failedValidationPage = await context.newPage();
   await failedValidationPage.goto(`${origin}/care/request/garage`);
   await failedValidationPage.getByLabel("Describe the damage or cleaning work").fill("Retain this exact request after validation failure");
+  await failedValidationPage.getByLabel("Where will the work happen? Postcode").fill("5000");
   const failedValidationStart = keys.length;
   const failedPostStarted = new Promise(resolve => { deferredSubmissionStarted = resolve; });
   const failedPostResponse = failedValidationPage.waitForResponse(response => response.url().endsWith("/api/v1/care/requests") && response.request().method() === "POST");
@@ -282,6 +293,7 @@ try {
   const uncertainSessionPage = await context.newPage();
   await uncertainSessionPage.goto(`${origin}/care/request/garage`);
   await uncertainSessionPage.getByLabel("Describe the damage or cleaning work").fill("Private uncertain request from the first account");
+  await uncertainSessionPage.getByLabel("Where will the work happen? Postcode").fill("5000");
   await uncertainSessionPage.getByRole("button", { name: "Submit for review" }).click();
   await uncertainSessionPage.getByRole("button", { name: "Check same request" }).waitFor();
   vehicleMode = "session";
@@ -298,6 +310,7 @@ try {
   const uncertainAccountPage = await context.newPage();
   await uncertainAccountPage.goto(`${origin}/care/request/garage`);
   await uncertainAccountPage.getByLabel("Describe the damage or cleaning work").fill("Private uncertain request before account switch");
+  await uncertainAccountPage.getByLabel("Where will the work happen? Postcode").fill("5000");
   await uncertainAccountPage.getByRole("button", { name: "Submit for review" }).click();
   await uncertainAccountPage.getByRole("button", { name: "Check same request" }).waitFor();
   vehicleMode = "other";
@@ -318,6 +331,7 @@ try {
   await sessionPage.goto(`${origin}/care/request/garage`);
   await sessionPage.getByLabel("Detail or clean my car").check();
   await sessionPage.getByLabel("Describe the damage or cleaning work").fill("Private draft from the first account");
+  await sessionPage.getByLabel("Where will the work happen? Postcode").fill("5000");
   await sessionPage.getByLabel("When would you prefer the work?").selectOption("seven_to_fourteen_days");
   vehicleMode = "session";
   await sessionPage.evaluate(() => window.dispatchEvent(new Event("focus")));

@@ -54,10 +54,10 @@ test('built writes accept the real page origin and reject origin/proxy spoofing 
     ['garage/vehicles', 'POST', { make: 'Synthetic', model: 'Car' }, 201],
     [`garage/vehicles/${vehicleId}`, 'PATCH', { make: 'Synthetic', model: 'Car', expected_revision: 1 }, 200],
     [`garage/vehicles/${vehicleId}/archive`, 'POST', { expected_revision: 1 }, 200],
-    ['care/requests', 'POST', { vehicle_id: vehicleId, service: 'repair', description: 'Synthetic scratch repair request', preferred_window: 'flexible' }, 201],
+    ['care/requests', 'POST', { vehicle_id: vehicleId, service: 'repair', description: 'Synthetic scratch repair request', preferred_window: 'flexible', postcode: '5000' }, 201],
     [`care/requests/${requestId}/retry`, 'POST', {}, 200],
     [`garage/vehicles/${vehicleId}/photo`, 'POST', jpeg, 201],
-    ['care/coverage', 'POST', { service: 'repair', postcode: '5000' }, 503],
+    ['care/coverage', 'POST', { service: 'repair', postcode: '5000' }, 200],
   ];
   try {
     for (const mode of ['local', 'proxy', 'unconfigured']) {
@@ -94,7 +94,7 @@ test('built writes accept the real page origin and reject origin/proxy spoofing 
             assert.equal(r.status, allowed ? expected : 403, `${mode} ${path} ${variant}: ${body.error?.code}`);
             if (!allowed) assert.equal(mutations, before, 'Rejected origin never reaches RPC/Storage');
             else if (path !== 'care/coverage') assert.ok(mutations > before, 'Authenticated operation reached synthetic persistence');
-            else assert.equal(body.error.code, 'COVERAGE_UNAVAILABLE');
+            else assert.deepEqual(body.data, { service: 'repair', postcode: '5000', coverage: 'available' });
           }
         }
         console.log(`PASS origin boundary: ${mode}, 7 operations × 6 origin cases`);

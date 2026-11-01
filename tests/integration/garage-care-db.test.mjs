@@ -19,6 +19,7 @@ import { verifySequenceGrantRevoke } from "./sequence-grant-revoke.acceptance.mj
 import { verifySupabaseAdminSequenceDefaultAcl } from "./supabase-admin-sequence-default-acl.acceptance.mjs";
 import { verifyRequestPhotos } from "./request-photos.acceptance.mjs";
 import { verifyRequestPhotoMarker } from "./request-photo-marker.acceptance.mjs";
+import { verifyCoverageEnforcement } from "./coverage-enforcement.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
@@ -61,6 +62,7 @@ function carePayload(vehicleId, service = 'repair') {
     service,
     description: service === 'repair' ? 'Scratch on rear bumper' : 'Interior cleaning request',
     preferred_window: 'flexible',
+    postcode: '5000',
   });
 }
 
@@ -124,6 +126,7 @@ before(() => {
     '20261101133000_revoke_public_sequence_grants.sql',
     '20261101140000_revoke_supabase_admin_sequence_default_acl.sql',
     '20261101150000_request_photo_marker_legacy_state_and_cleanup.sql',
+    '20261101160000_care_service_coverage_enforcement.sql',
   ], 'combined verification must include every public migration in filename order');
   for (const migration of migrations) file(`supabase/migrations/${migration}`);
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
@@ -305,6 +308,9 @@ test('Customer review and technician completion serialize on the same journey',a
 test('Fresh completion review rejects roles changed during the final journey lock wait',async()=>{await verifyCompletionLockReview({sql,quote,result});});
 test('Technician availability is private and does not take booking locks', async () => {
   await verifyTechnicianAvailability({ sql, quote, result, waitForQuery });
+});
+test('Server-side service-area enforcement rejects out-of-area requests for signed-in and guest bypass attempts', async () => {
+  await verifyCoverageEnforcement({ sql, auth, quote, garageCreate, result });
 });
 test('My Jobs exposes the caller journey state without private issue text', () => {
   verifyMyJobsJourneyState({ sql, auth, quote, garageCreate, carePayload });

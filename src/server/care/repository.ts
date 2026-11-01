@@ -6,7 +6,7 @@ import { createSupabaseServerClient } from "@/server/supabase/server";
 import { featureEnabled } from "@/server/env";
 import { careHandlers } from "@/server/care/http";
 
-const publicErrors = new Set(["UNAUTHENTICATED", "FORBIDDEN", "NOT_FOUND", "VALIDATION_FAILED", "IDEMPOTENCY_CONFLICT", "INVALID_TRANSITION", "POLICY_UNAVAILABLE"]);
+const publicErrors = new Set(["UNAUTHENTICATED", "FORBIDDEN", "NOT_FOUND", "VALIDATION_FAILED", "IDEMPOTENCY_CONFLICT", "INVALID_TRANSITION", "POLICY_UNAVAILABLE", "OUT_OF_AREA", "COVERAGE_UNAVAILABLE"]);
 
 export const careApi = careHandlers({
   enabled: () => featureEnabled("CARE"),

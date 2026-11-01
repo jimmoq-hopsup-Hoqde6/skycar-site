@@ -618,9 +618,13 @@ test('guest intake records the marker after storing, compares replays with the m
 
 test('the guest intake route records the marker through saveGuestIntakePhotos instead of storing blindly', async () => {
   const { readFileSync } = await import('node:fs');
-  const source = readFileSync('src/app/api/v1/care/guest-requests/route.ts', 'utf8');
-  assert.match(source, /saveGuestIntakePhotos\(/);
-  assert.equal(/storeGuestPhotos\(/.test(source), false);
+  // The route delegates to saveGuestIntake (service-area decision first); that module's default
+  // photo store is saveGuestIntakePhotos, so no path stores photos blindly.
+  const route = readFileSync('src/app/api/v1/care/guest-requests/route.ts', 'utf8');
+  const intake = readFileSync('src/server/care/guest-intake.mjs', 'utf8');
+  assert.match(route, /saveGuestIntake\(/);
+  assert.match(intake, /saveGuestIntakePhotos/);
+  for (const source of [route, intake]) assert.equal(/storeGuestPhotos\(/.test(source), false);
 });
 
 test('route sources never reference service keys and the signed-URL route is gone', async () => {

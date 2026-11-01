@@ -21,6 +21,8 @@ const errors: Record<string, { status: number; message: string; retryable: boole
   VALIDATION_FAILED: { status: 400, message: "Check the request details.", retryable: false },
   UNAUTHENTICATED: { status: 401, message: "Sign in to continue.", retryable: false },
   FORBIDDEN: { status: 403, message: "This action is not permitted.", retryable: false },
+  OUT_OF_AREA: { status: 422, message: "Skycar does not cover that postcode yet. Nothing was submitted.", retryable: false },
+  COVERAGE_UNAVAILABLE: { status: 503, message: "We can't check your service area right now. Nothing was submitted. Please try again in a moment.", retryable: false },
   CSRF_FAILED: { status: 403, message: "Submit this request from Skycar.", retryable: false },
   NOT_FOUND: { status: 404, message: "Request or vehicle not found.", retryable: false },
   IDEMPOTENCY_CONFLICT: { status: 409, message: "This request key was already used for different details.", retryable: false },

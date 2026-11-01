@@ -1,8 +1,7 @@
 import { guestCookie } from '@/server/care/journey/access.mjs';
 import { getPublicEnvironment } from '@/server/env';
 import { createHmac } from 'node:crypto';
-import { saveGuestIntakePhotos } from '@/server/care/journey/photo-service.mjs';
-import { guestReceipt } from '@/domain/care/guest.mjs';
+import { saveGuestIntake } from '@/server/care/guest-intake.mjs';
 import { guestHandler } from '@/server/care/guest-http.mjs';
 import { GuestError } from '@/domain/care/guest.mjs';
 import { createSupabaseTrustedServerClient } from '@/server/supabase/server';
@@ -25,16 +24,6 @@ export const POST = guestHandler({
     if (!address) throw new GuestError('UNAVAILABLE');
     const fingerprint = createHmac('sha256',secretKey).update(address).digest('hex');
     const client = createSupabaseTrustedServerClient();
-    const {data,error,status} = await client.rpc('care_submit_guest_request',{
-      p_key:key,p_payload:payload,p_fingerprint:fingerprint,
-    });
-    if (error) {
-      if(status===401 || status===403) throw new GuestError('CONFIGURATION_UNAVAILABLE');
-      if (error.code === 'P0001' && ['RATE_LIMITED','IDEMPOTENCY_CONFLICT','VALIDATION_FAILED'].includes(error.message)) throw new GuestError(error.message);
-      throw new GuestError('UNAVAILABLE');
-    }
-    const receipt = guestReceipt(data);
-    await saveGuestIntakePhotos({db:client,bucket:client.storage.from('private-media'),requestId:receipt.id,photos});
-    return receipt;
+    return saveGuestIntake({client,key,payload,fingerprint,photos});
   },
 });
