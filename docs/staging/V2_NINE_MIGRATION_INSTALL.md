@@ -1301,7 +1301,7 @@ After the ops script and the migration, the gate must print `GO`. Until then the
 
 ## 13. Restore test of the section 11.1 logical export (2 Nov 2026, docs only; no data in this note)
 
-Executed 2 Nov 2026 between about 01:20 and 01:35 ACDT (Australia/Adelaide, UTC+10:30) on the executor box. The export was restored into a throwaway local PostgreSQL 17.6 cluster (temporary directory, port 54329, bound to 127.0.0.1 only, trust auth, `fsync` off), from a fresh `initdb`. Staging was only read (SELECT) for comparison; nothing was written to it. The cluster and every file derived from the data were deleted afterwards (see 13.4).
+Executed 2 Nov 2026 between about 01:17 and 01:23 ACDT (Australia/Adelaide, UTC+10:30) on the executor box. The export was restored into a throwaway local PostgreSQL 17.6 cluster (temporary directory, port 54329, bound to 127.0.0.1 only, trust auth, `fsync` off), from a fresh `initdb`. Staging was only read (SELECT) for comparison; nothing was written to it. The cluster and every file derived from the data were deleted afterwards (see 13.4).
 
 ### 13.1 What was restored, and how
 
