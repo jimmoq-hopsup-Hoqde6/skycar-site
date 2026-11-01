@@ -1,5 +1,6 @@
 // Mocked browser/API acceptance. PostgreSQL acceptance separately proves authority and concurrency.
 import assert from 'node:assert/strict';
+import { guardSignedUrls } from './support/signed-url-guard.mjs';
 import {spawn} from 'node:child_process';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const origin='http://127.0.0.1:3203',id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -7,6 +8,7 @@ const server=spawn(process.execPath,['node_modules/next/dist/bin/next','start','
 try{
  let ready=false;for(let i=0;i<150;i++){try{if((await fetch(origin)).ok){ready=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,100));}assert.ok(ready,'server started');
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+ const signedUrlGuard = guardSignedUrls(browser);
  const page=await browser.newPage({viewport:{width:390,height:844}});page.setDefaultTimeout(10000);const errors=[];
  page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error'&&!/^Failed to load resource: (net::ERR_FAILED|the server responded with a status of (403|404))/.test(message.text()))errors.push(message.text());});
  const now=new Date().toISOString(),accountA=`guest:${id}`,accountB='guest:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -34,5 +36,5 @@ try{
  activeAccount=accountA;await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await issue.fill('Private concern removed after denied write');postDenial=403;await page.getByRole('button',{name:'Report completion issue'}).click();await page.getByRole('alert').filter({hasText:'Customer access denied'}).waitFor();assert.equal(await page.getByText('Private concern removed after denied write',{exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'Check same action'}).count(),0);
  postDenial=0;await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await page.getByRole('heading',{name:'How does the completed work look?'}).waitFor();await issue.fill('  Paint edge needs a closer manual inspection.  ');await page.getByRole('button',{name:'Report completion issue'}).click();await page.getByRole('heading',{name:'Skycar operations review requested'}).waitFor();await page.getByText('Paint edge needs a closer manual inspection.',{exact:true}).waitFor();assert.match(await page.locator('main').innerText(),/No refund or payment change was made automatically/);
  for(const width of [320,390,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);}
- assert.deepEqual(errors,[]);console.log('PASS: customer confirms completed evidence with exact retry, or reports a private issue; account changes and denied writes clear private drafts; no payment implication; responsive UI.');
+ assert.deepEqual(errors,[]);signedUrlGuard.assertNone();console.log('PASS: customer confirms completed evidence with exact retry, or reports a private issue; account changes and denied writes clear private drafts; no payment implication; responsive UI.');
 }finally{await browser?.close();server.kill('SIGTERM');}

@@ -1,5 +1,6 @@
 // Two sessions and shared mocked transport. Real authority/state/races run separately in PostgreSQL.
 import assert from 'node:assert/strict';
+import { guardSignedUrls } from './support/signed-url-guard.mjs';
 import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {mkdir} from 'node:fs/promises';
@@ -9,6 +10,7 @@ const server=spawn(process.execPath,['node_modules/next/dist/bin/next','start','
 try{
  let ready=false;for(let i=0;i<150;i++){try{if((await fetch(origin)).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(ready);
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+ const signedUrlGuard = guardSignedUrls(browser);
  const tech=await browser.newPage({viewport:{width:390,height:844}}),customer=await browser.newPage({viewport:{width:390,height:844}});const errors=[];for(const p of [tech,customer]){p.setDefaultTimeout(10000);p.on('pageerror',e=>errors.push(e.message));}
  let account=accountA,state='in_progress',saved=null,failUpload=true,failComplete=true,failPartialUpload=false,denial=0,changedWrite=false;const uploads=[],commands=[],stored=new Map();
  const now=new Date().toISOString(),start=new Date(Date.now()-3600000).toISOString(),end=new Date(Date.now()+3600000).toISOString(),expiry=new Date(Date.now()-7200000).toISOString();
@@ -47,5 +49,5 @@ try{
  await tech.getByRole('button',{name:'Save completion photos'}).click();await tech.getByRole('button',{name:'Retry same action'}).waitFor();await tech.reload();await tech.getByRole('heading',{name:'Completion evidence',exact:true}).waitFor();assert.equal(await tech.getByRole('button',{name:'Complete work',exact:true}).isDisabled(),true);await add();await tech.getByRole('button',{name:'Save completion photos'}).click();await tech.getByText('Completion photos are saved privately. Confirm completion when ready.').waitFor();assert.equal(uploads.length,beforeRecovery+2);assert.equal(uploads[beforeRecovery],uploads[beforeRecovery+1]);
  for(const problem of [401,403,404,'changed']){account=accountA;state='in_progress';saved=null;denial=0;changedWrite=false;await tech.reload();await add();if(problem==='changed')changedWrite=true;else denial=problem;await tech.getByRole('button',{name:'Save completion photos'}).click();await tech.getByRole('alert').filter({hasText:/Technician access denied|Your technician account changed/}).waitFor();assert.equal(await tech.getByText('Private repair work',{exact:true}).count(),0);assert.equal(await tech.getByRole('button',{name:'Remove photo 1'}).count(),0);assert.equal(await tech.getByRole('button',{name:'Retry same action'}).count(),0);}
  denial=0;changedWrite=false;saved=null;account=accountA;await tech.reload();await add();account=accountB;await tech.evaluate(()=>window.dispatchEvent(new Event('focus')));await tech.getByRole('heading',{name:'Other Scoped Expert'}).waitFor();assert.equal(await tech.getByRole('button',{name:'Remove photo 1'}).count(),0,'other account cannot inherit photo draft');assert.equal(await tech.getByRole('button',{name:'Save completion photos'}).isDisabled(),true);assert.deepEqual(errors,[]);
- console.log('PASS: technician private completion upload/exact byte retry → completion/exact command retry → shared customer completed state/evidence, uncommitted evidence hidden, partial-upload browser restart/reselection, denied writes/account-switch draft clearing and responsive UI (mock API).');
+ signedUrlGuard.assertNone();console.log('PASS: technician private completion upload/exact byte retry → completion/exact command retry → shared customer completed state/evidence, uncommitted evidence hidden, partial-upload browser restart/reselection, denied writes/account-switch draft clearing and responsive UI (mock API).');
 }finally{await browser?.close();server.kill('SIGTERM');}

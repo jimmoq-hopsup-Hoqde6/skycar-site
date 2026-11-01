@@ -1,5 +1,6 @@
 // Two isolated sessions with mocked transport; actual permission/state tests are SQL.
 import assert from 'node:assert/strict';
+import { guardSignedUrls } from './support/signed-url-guard.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir} from 'node:fs/promises';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
@@ -8,6 +9,7 @@ const server=spawn(process.execPath,['node_modules/next/dist/bin/next','start','
 try{
  let ready=false;for(let i=0;i<150;i++){try{if((await fetch(origin)).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(ready);
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+ const signedUrlGuard = guardSignedUrls(browser);
  const tech=await browser.newPage({viewport:{width:390,height:844},timezoneId:'Australia/Adelaide'}),customer=await browser.newPage({viewport:{width:390,height:844},timezoneId:'Australia/Adelaide'});
  const errors=[];for(const page of [tech,customer]){page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));}
  let account=accountA,state='review',invited=true,quotes=[],failAfterSave=false,denial=0,changedWrite=false,sequence=0;const commands=[],stored=new Map();
@@ -61,5 +63,5 @@ try{
  denial=0;changedWrite=false;account=accountA;await tech.reload();await fill();account=accountB;await tech.evaluate(()=>window.dispatchEvent(new Event('focus')));await tech.getByRole('heading',{name:'Other Scoped Expert'}).waitFor();assert.equal(await tech.getByLabel('Work and inspection scope').inputValue(),'','account switch drops private draft');
  for(const width of [320,390,1440]){await tech.setViewportSize({width,height:900});assert.equal(await tech.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);}
  await tech.setViewportSize({width:390,height:844});await mkdir('.garage-qa',{recursive:true});await tech.screenshot({path:'.garage-qa/technician-quote-mobile.png',fullPage:true});assert.deepEqual(errors,[]);
- console.log('PASS: technician quote/exact retry → same customer proposal/selection → shared requested/confirmed/in-progress state and exact start retry, decline withdrawal, denied writes/account-switch clearing, responsive forms (mock API).');
+ signedUrlGuard.assertNone();console.log('PASS: technician quote/exact retry → same customer proposal/selection → shared requested/confirmed/in-progress state and exact start retry, decline withdrawal, denied writes/account-switch clearing, responsive forms (mock API).');
 }finally{await browser?.close();server.kill('SIGTERM');}

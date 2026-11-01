@@ -1,5 +1,6 @@
 // Mocked browser handoff; database permissions are covered separately.
 import assert from 'node:assert/strict';
+import { guardSignedUrls } from './support/signed-url-guard.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir} from 'node:fs/promises';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
@@ -8,6 +9,7 @@ const server=spawn(process.execPath,['node_modules/next/dist/bin/next','start','
 try{
  let ready=false;for(let i=0;i<150;i++){try{if((await fetch(origin)).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(ready);
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+ const signedUrlGuard = guardSignedUrls(browser);
  const ops=await browser.newPage(),tech=await browser.newPage({viewport:{width:390,height:844}});const errors=[];for(const p of [ops,tech])p.on('pageerror',e=>errors.push(e.message));
  let linked=false,invited=false,denied=false,confirmed=false;const commands=[],photos=[];const now=new Date().toISOString();
  const profile={expert_id:expertId,business_name:'Synthetic Panel Care',description:'Private repair specialist',services:['repair'],postcodes:['5000'],insurance_valid_until:'2030-12-31'};
@@ -33,5 +35,5 @@ try{
  await mkdir('.garage-qa',{recursive:true});await tech.screenshot({path:'.garage-qa/technician-inbox.png',fullPage:true});
  confirmed=false;await ops.getByRole('button',{name:'Revoke review access'}).click();await tech.getByRole('button',{name:'Refresh jobs'}).click();await tech.getByRole('heading',{name:'Job unavailable'}).waitFor();assert.equal(await tech.getByText('Private bumper scratch',{exact:true}).count(),0);assert.equal(await tech.locator('.technician-photos img').count(),0);assert.equal(await tech.locator('address').count(),0);
  denied=true;await tech.goto(origin+'/technician/jobs');await tech.getByRole('heading',{name:'Technician access required'}).waitFor();assert.match(await tech.getByRole('link',{name:'Sign in as a technician'}).getAttribute('href'),/next=%2Ftechnician%2Fjobs/);assert.deepEqual(commands.map(c=>c.action),['bind_technician','invite_technician','revoke_technician_invitation']);assert.deepEqual(errors,[]);
- console.log('PASS: operations link/invite/revoke, isolated technician session, private photos/contact, denied access clearing, responsive inbox (mock API).');
+ signedUrlGuard.assertNone();console.log('PASS: operations link/invite/revoke, isolated technician session, private photos/contact, denied access clearing, responsive inbox (mock API).');
 }finally{await browser?.close();server.kill('SIGTERM');}
