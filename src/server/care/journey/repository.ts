@@ -6,6 +6,7 @@ import { verifyGuestCookie } from './access.mjs';
 import { JourneyError,identifier } from './http';
 import {verifyCompletionEvidence} from '@/server/care/completion-evidence.mjs';
 import { storeCarePhotos } from '@/server/care/guest-photos.mjs';
+import { PhotoError,consumePhotoQuota,recordRequestPhotos,signedPhotoUrl,SIGNED_URL_TTL_SECONDS } from './photo-service.mjs';
 
 type Photo = {bytes:Buffer;mimeType:string;hash:string};
 type ManifestEntry = {slot:number;mime_type:string;size_bytes:number;sha256:string};
@@ -71,8 +72,18 @@ export async function saveJourneyPhotos(access:JourneyAccess,photos:Photo[],comp
  if(journey.error)throw new JourneyError('UNAVAILABLE');
  if(completion){if(!access.admin)throw new JourneyError('FORBIDDEN');if(journey.data?.state!=='in_progress')throw new JourneyError('INVALID_TRANSITION');}
  else if(journey.data && !['review','quotes_ready'].includes(journey.data.state))throw new JourneyError('INVALID_TRANSITION');
- try{await storeCarePhotos(access.db.storage.from('private-media'),photoPrefix(access,completion),photos);}catch(error){throw new JourneyError(error instanceof Error && 'code' in error ? String(error.code) : 'UNAVAILABLE');}
+ let stored;
+ try{stored=await storeCarePhotos(access.db.storage.from('private-media'),photoPrefix(access,completion),photos);}catch(error){throw new JourneyError(error instanceof Error && 'code' in error ? String(error.code) : 'UNAVAILABLE');}
+ // Trusted-route-only marker for the My Jobs photo hint. Storage stays the source of truth;
+ // a failure here is reported as retryable and the identical retry re-records it idempotently.
+ if(!completion && access.kind==='account' && stored)await recordRequestPhotos(access.db,access.id,stored);
 }
+export async function consumeJourneyPhotoQuota(access:JourneyAccess){return consumePhotoQuota(access.db,access);}
+export async function journeyPhotoSignedUrl(access:MediaAccess,slot:number,completion=false){
+ const manifest=await photoManifest(access,completion);
+ return signedPhotoUrl({storage:access.db.storage.from('private-media'),prefix:photoPrefix(access,completion),manifest,slot,ttl:SIGNED_URL_TTL_SECONDS});
+}
+export {PhotoError};
 export async function journeySnapshot(access:JourneyAccess) {
  const results=await Promise.all([
   access.db.from('care_journeys').select('state,customer_details,selected_quote_id,starts_at,ends_at,completion_review_state,completion_issue_details,revision,updated_at').eq('id',access.id).maybeSingle(),

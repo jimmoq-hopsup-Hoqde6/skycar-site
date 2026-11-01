@@ -26,13 +26,14 @@ async function immutableUpload(bucket, path, photo) {
   if (hash !== photo.hash) throw new GuestError('IDEMPOTENCY_CONFLICT');
 }
 export async function storeCarePhotos(bucket, prefix, photos) {
-  if (!photos.length) return;
+  if (!photos.length) return null;
   const bytes = Buffer.from(JSON.stringify(photos.map((photo,index) => ({slot:index+1,mime_type:photo.mimeType,size_bytes:photo.bytes.length,sha256:photo.hash}))));
   // Write-once manifest binds order, count and content across partial retries.
   await immutableUpload(bucket,`${prefix}/manifest.json`,{bytes,mimeType:'application/json',hash:createHash('sha256').update(bytes).digest('hex')});
   for (const [index, photo] of photos.entries()) {
     await immutableUpload(bucket,`${prefix}/photo-${index + 1}`,photo);
   }
+  return {count:photos.length,manifestSha256:createHash('sha256').update(bytes).digest('hex')};
 }
 
 export async function storeGuestPhotos(bucket,requestId,photos) {return storeCarePhotos(bucket,`guest-requests/${requestId}`,photos);}
