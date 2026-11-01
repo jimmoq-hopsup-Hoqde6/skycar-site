@@ -6,7 +6,7 @@ import {randomUUID} from 'node:crypto';
 export async function verifyCompletionLockReview({sql,quote,result}) {
  const actor=randomUUID(),id=randomUUID(),vehicle=randomUUID(),key=randomUUID();
  sql(`insert into auth.users(id) values(${quote(actor)});
-  insert into public.user_roles(user_id,role) values(${quote(actor)},'customer');
+  insert into public.user_roles(user_id,role) values(${quote(actor)},'customer') on conflict do nothing;
   insert into public.vehicles(id,owner_id,make,model,year) values(${quote(vehicle)},${quote(actor)},'Toyota','Lock review',2020);
   insert into public.care_requests(id,customer_id,vehicle_id,service,description,preferred_window,next_update_at,escalation_minutes,fulfilment_state)
    values(${quote(id)},${quote(actor)},${quote(vehicle)},'repair','Synthetic lock review','flexible',clock_timestamp()+interval '1 hour',30,'completed');
