@@ -9,6 +9,8 @@ const spoken: Record<JourneyStepStatus, string> = {
 const visible: Partial<Record<JourneyStepStatus, string>> = { current: "Current step" };
 
 // Presentational only: renders the existing connected stage as an ordered list.
+// STUB: reviewState is intentionally optional. My Jobs does not pass it, so "Awaiting review" shows
+// "unknown" until care_list_requests returns completion_review_state (Backend, planned Week 2).
 export function JourneyTimeline({ progress, reviewState }: {
   progress: Pick<CareRequestSummary, "quote_state" | "assignment_state" | "fulfilment_state">;
   reviewState?: CompletionReviewState | null;

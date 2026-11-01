@@ -49,3 +49,15 @@ test("at most one step is current for every database state combination", () => {
     assert.ok(statuses({ quote_state, assignment_state, fulfilment_state }).filter(status => status === "current").length <= 1);
   }
 });
+
+test("awaiting review stub: My Jobs passes no reviewState, so the step stays unknown", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../../src/features/care/my-jobs.tsx", import.meta.url), "utf8");
+  const uses = source.match(/<JourneyTimeline\b[^>]*>/g) ?? [];
+  assert.equal(uses.length, 1);
+  assert.doesNotMatch(uses[0], /reviewState/);
+  const completed = { quote_state: "accepted", assignment_state: "accepted", fulfilment_state: "completed" };
+  const last = journeySteps(completed).at(-1);
+  assert.equal(last.status, "unknown");
+  assert.match(last.note, /service journey/);
+});
