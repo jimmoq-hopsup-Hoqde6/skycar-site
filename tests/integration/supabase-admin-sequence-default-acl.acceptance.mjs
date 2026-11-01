@@ -251,13 +251,16 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
     scratchSql(`set role sa_runner; alter default privileges in schema public grant all on sequences to anon, authenticated, service_role; reset role`);
     simulateHosted(scratchSql);
     const chain = readdirSync('supabase/migrations').filter(name => name.endsWith('.sql')).sort();
-    ok(chain.at(-1) === '20261101140000_revoke_supabase_admin_sequence_default_acl.sql', 'the migration is the last in the chain');
-    let last;
+    const aclMigration = '20261101140000_revoke_supabase_admin_sequence_default_acl.sql';
+    // Later migrations (photo marker, coverage enforcement) may follow it; each must also apply as the runner.
+    ok(chain.includes(aclMigration) && chain.at(-1) >= aclMigration, 'the migration is in the chain, with only later migrations after it');
+    let last, aclOutput;
     for (const name of chain) {
       last = apply(`supabase/migrations/${name}`, 'sa_runner', scratchUrl);
       equal(last.status, 0, `chain: ${name} applies as a non-superuser, non-member runner: ${last.output}`);
+      if (name === aclMigration) aclOutput = last.output;
     }
-    ok(hasWarning(last.output, 'creator=supabase_admin scope=public grantee=anon privilege=USAGE') && hasWarning(last.output, 'creator=supabase_admin scope=GLOBAL(all schemas) grantee=anon privilege=USAGE'), 'the chain reports the supabase_admin defaults it cannot change');
+    ok(hasWarning(aclOutput, 'creator=supabase_admin scope=public grantee=anon privilege=USAGE') && hasWarning(aclOutput, 'creator=supabase_admin scope=GLOBAL(all schemas) grantee=anon privilege=USAGE'), 'the chain reports the supabase_admin defaults it cannot change');
     equal(scratchSql(`select count(*) from pg_class where relnamespace='public'::regnamespace and relname in ('care_requests','care_journeys','care_journey_events')`), '3', 'the full chain created its tables');
     equal(browserDefaults('sa_runner', scratchSql), 'none', 'the runner\'s own defaults are clean after the chain');
     const chainGate = apply(gateFile, null, scratchUrl);
