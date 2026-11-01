@@ -6,7 +6,7 @@ import { verifyGuestCookie } from './access.mjs';
 import { JourneyError,identifier } from './http';
 import {verifyCompletionEvidence} from '@/server/care/completion-evidence.mjs';
 import { storeCarePhotos } from '@/server/care/guest-photos.mjs';
-import { PhotoError,consumePhotoQuota,recordRequestPhotos,signedPhotoUrl,SIGNED_URL_TTL_SECONDS } from './photo-service.mjs';
+import { PhotoError,reservePhotoSlot,releasePhotoSlot,hasRecordedPhotos,recordRequestPhotos,signedPhotoUrl,SIGNED_URL_TTL_SECONDS } from './photo-service.mjs';
 
 type Photo = {bytes:Buffer;mimeType:string;hash:string};
 type ManifestEntry = {slot:number;mime_type:string;size_bytes:number;sha256:string};
@@ -76,9 +76,12 @@ export async function saveJourneyPhotos(access:JourneyAccess,photos:Photo[],comp
  try{stored=await storeCarePhotos(access.db.storage.from('private-media'),photoPrefix(access,completion),photos);}catch(error){throw new JourneyError(error instanceof Error && 'code' in error ? String(error.code) : 'UNAVAILABLE');}
  // Trusted-route-only marker for the My Jobs photo hint. Storage stays the source of truth;
  // a failure here is reported as retryable and the identical retry re-records it idempotently.
- if(!completion && access.kind==='account' && stored)await recordRequestPhotos(access.db,access.id,stored);
+ if(!completion && access.kind==='account' && stored)return {recorded:await recordRequestPhotos(access.db,access.id,stored)};
+ return null;
 }
-export async function consumeJourneyPhotoQuota(access:JourneyAccess){return consumePhotoQuota(access.db,access);}
+export async function reserveJourneyPhotoSlot(access:JourneyAccess){return reservePhotoSlot(access.db,access);}
+export async function releaseJourneyPhotoSlot(access:JourneyAccess,reservation:{subject:string;windowStart:string}){return releasePhotoSlot(access.db,reservation);}
+export async function journeyHasRecordedPhotos(access:JourneyAccess){return hasRecordedPhotos(access.db,access.id);}
 export async function journeyPhotoSignedUrl(access:MediaAccess,slot:number,completion=false){
  const manifest=await photoManifest(access,completion);
  return signedPhotoUrl({storage:access.db.storage.from('private-media'),prefix:photoPrefix(access,completion),manifest,slot,ttl:SIGNED_URL_TTL_SECONDS});

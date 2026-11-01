@@ -19,12 +19,35 @@ export function quotaSubject(access) {
   return `journey-photos:${access.account}`.slice(0, 80);
 }
 
-export async function consumePhotoQuota(db, access, { limit = PHOTO_UPLOAD_LIMIT, windowSeconds = PHOTO_UPLOAD_WINDOW_SECONDS } = {}) {
-  const { data, error } = await db.rpc('care_consume_photo_upload_quota', { p_subject: quotaSubject(access), p_limit: limit, p_window_seconds: windowSeconds });
+// Reserve-before-store: the slot is taken atomically in the database before any
+// body is read, so concurrent uploads can never exceed the limit. The caller
+// must release it on every path except a call that created the photo marker.
+export async function reservePhotoSlot(db, access, { limit = PHOTO_UPLOAD_LIMIT, windowSeconds = PHOTO_UPLOAD_WINDOW_SECONDS } = {}) {
+  const subject = quotaSubject(access);
+  const { data, error } = await db.rpc('care_reserve_photo_upload_slot', { p_subject: subject, p_limit: limit, p_window_seconds: windowSeconds });
   // Fail closed: if the counter cannot be read the upload is not accepted.
   if (error || !data || typeof data.allowed !== 'boolean') throw new PhotoError('UNAVAILABLE');
   if (!data.allowed) throw new PhotoError('RATE_LIMITED', Math.max(1, Math.min(windowSeconds, Number(data.retry_after_seconds) || windowSeconds)));
-  return data;
+  if (typeof data.window_start !== 'string') throw new PhotoError('UNAVAILABLE');
+  return { subject, windowStart: data.window_start };
+}
+
+// Best effort and never throws: a failed release leaves the slot held until the
+// window ends (conservative) and must not hide the error that caused the release.
+export async function releasePhotoSlot(db, reservation) {
+  try {
+    const { error } = await db.rpc('care_release_photo_upload_slot', { p_subject: reservation.subject, p_window_start: reservation.windowStart });
+    return !error;
+  } catch { return false; }
+}
+
+// A request whose photo set is already recorded can store nothing new (the
+// manifest is write-once), so uploads to it are free. Unknown means "not recorded".
+export async function hasRecordedPhotos(db, requestId) {
+  try {
+    const { data, error } = await db.from('care_request_photo_sets').select('request_id').eq('request_id', requestId).maybeSingle();
+    return !error && Boolean(data);
+  } catch { return false; }
 }
 
 export async function recordRequestPhotos(db, requestId, { count, manifestSha256 }) {
@@ -51,24 +74,36 @@ export async function signedPhotoUrl({ storage, prefix, manifest, slot, ttl = SI
 }
 
 // POST /api/v1/care/journey/:id/photos. Order: ownership -> content type ->
-// CSRF -> upload quota -> bounded body -> validation -> storage -> DB marker.
+// CSRF -> quota reservation (account uploads without a recorded set) -> bounded
+// body -> validation -> storage -> DB marker. Quota policy: a slot is kept only
+// by the call that creates the marker (save returns {recorded:{replayed:false}}).
+// Invalid or rejected bodies, any failure/503, and replays release the slot.
+// Guest and admin-completion uploads are not account uploads and are not limited
+// (their sets are write-once; guests are limited by intake).
 export async function handlePhotoUpload(request, id, deps) {
   const completion = new URL(request.url).searchParams.get('kind') === 'completion';
   const access = await deps.access(request, id, completion);
   if (request.headers.get('content-type')?.split(';')[0].trim() !== 'multipart/form-data') throw new PhotoError('VALIDATION_FAILED');
   if (!deps.isTrustedWrite(request)) throw new PhotoError('CSRF_FAILED');
-  // Administrator completion evidence is a separate trusted workflow, not a customer upload.
-  if (!completion) await deps.consumeQuota(access);
-  const bytes = await deps.readBody(request, 2_800_000);
-  let photos;
+  const limited = !completion && access.kind === 'account';
+  let reservation = null;
+  if (limited && !(await deps.hasRecordedPhotos(access))) reservation = await deps.reserveQuota(access);
+  let keep = false;
   try {
-    const data = await new Response(bytes, { headers: { 'Content-Type': request.headers.get('content-type') } }).formData();
-    if ([...data.keys()].some(key => key !== 'photos')) throw new Error();
-    photos = await deps.readPhotos(data.getAll('photos'));
-    if (!photos.length) throw new Error();
-  } catch { throw new PhotoError('VALIDATION_FAILED'); }
-  await deps.save(access, photos, completion);
-  return { status: 201, data: { stored: photos.length }, account: access.account };
+    const bytes = await deps.readBody(request, 2_800_000);
+    let photos;
+    try {
+      const data = await new Response(bytes, { headers: { 'Content-Type': request.headers.get('content-type') } }).formData();
+      if ([...data.keys()].some(key => key !== 'photos')) throw new Error();
+      photos = await deps.readPhotos(data.getAll('photos'));
+      if (!photos.length) throw new Error();
+    } catch { throw new PhotoError('VALIDATION_FAILED'); }
+    const outcome = await deps.save(access, photos, completion);
+    keep = reservation !== null && outcome?.recorded?.replayed === false;
+    return { status: 201, data: { stored: photos.length }, account: access.account };
+  } finally {
+    if (reservation && !keep) await deps.releaseQuota(access, reservation);
+  }
 }
 
 // GET /api/v1/care/journey/:id/photos/:slot/url
