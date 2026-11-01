@@ -98,3 +98,47 @@ test('through the existing route handler: 200 available, 200 unavailable, 400 in
   assert.equal(response.status, 503);
   assert.equal((await response.json()).error.code, 'COVERAGE_UNAVAILABLE');
 });
+
+test('threshold boundary: exactly 0.5 is included, just below is excluded (Greater Adelaide and combined Hills shares)', async () => {
+  const ask5235 = async (patch, service = 'repair') => {
+    const copy = clone();
+    const item = row(copy, '5235');
+    Object.assign(item, { gccsa_greater_adelaide: 0, lga_adelaide_hills: 0, lga_mount_barker: 0 }, patch);
+    const t = copy.rule.threshold;
+    item.included = item.gccsa_greater_adelaide >= t || item.lga_adelaide_hills + item.lga_mount_barker >= t;
+    return createCoverageResolver(copy)({ service, postcode: '5235' });
+  };
+  assert.equal(data.rule.threshold, 0.5);
+  // Greater Adelaide share
+  assert.equal(await ask5235({ gccsa_greater_adelaide: 0.5 }), 'available', 'GA exactly 0.5');
+  assert.equal(await ask5235({ gccsa_greater_adelaide: 0.5 }, 'cleaning'), 'available', 'GA exactly 0.5 (cleaning)');
+  assert.equal(await ask5235({ gccsa_greater_adelaide: 0.4999999 }), 'unavailable', 'GA just below 0.5');
+  assert.equal(await ask5235({ gccsa_greater_adelaide: 0.5000001 }), 'available', 'GA just above 0.5');
+  // Combined Adelaide Hills + Mount Barker share
+  assert.equal(await ask5235({ lga_adelaide_hills: 0.25, lga_mount_barker: 0.25 }), 'available', 'Hills sum exactly 0.5');
+  assert.equal(await ask5235({ lga_adelaide_hills: 0.5, lga_mount_barker: 0 }), 'available', 'Adelaide Hills alone exactly 0.5');
+  assert.equal(await ask5235({ lga_adelaide_hills: 0, lga_mount_barker: 0.5 }), 'available', 'Mount Barker alone exactly 0.5');
+  assert.equal(await ask5235({ lga_adelaide_hills: 0.25, lga_mount_barker: 0.2499999 }), 'unavailable', 'Hills sum just below 0.5');
+  assert.equal(await ask5235({ lga_adelaide_hills: 0.4999999, lga_mount_barker: 0 }), 'unavailable', 'Adelaide Hills alone just below 0.5');
+  assert.equal(await ask5235({ gccsa_greater_adelaide: 0.4999999, lga_adelaide_hills: 0.1, lga_mount_barker: 0.1 }), 'unavailable', 'shares are not added across GCCSA and LGAs');
+});
+
+test('threshold boundary: the stored flag must agree exactly at and just below the threshold, else fail closed', async () => {
+  for (const [ga, flag, ok] of [[0.5, true, true], [0.5, false, false], [0.4999999, false, true], [0.4999999, true, false]]) {
+    const copy = clone();
+    Object.assign(row(copy, '5235'), { gccsa_greater_adelaide: ga, lga_adelaide_hills: 0, lga_mount_barker: 0, included: flag });
+    const run = createCoverageResolver(copy)({ service: 'repair', postcode: '5000' });
+    if (ok) assert.equal(await run, 'available', `${ga} ${flag}`); else await assert.rejects(run, { code: 'COVERAGE_UNAVAILABLE' }, `${ga} ${flag}`);
+  }
+  // The threshold itself is data: moving it moves the boundary for the same ratios.
+  const strict = clone(); strict.rule.threshold = 0.8;
+  for (const item of strict.candidates) item.included = item.gccsa_greater_adelaide >= 0.8 || item.lga_adelaide_hills + item.lga_mount_barker >= 0.8;
+  assert.equal(await createCoverageResolver(strict)({ service: 'repair', postcode: '5371' }), 'unavailable', '5371 (GA 0.785) is out at a 0.8 threshold');
+});
+
+test('real data: no reviewed postcode sits within 0.01 of the threshold (the list does not depend on rounding)', () => {
+  const t = data.rule.threshold;
+  for (const item of data.candidates) {
+    for (const share of [item.gccsa_greater_adelaide, item.lga_adelaide_hills + item.lga_mount_barker]) assert.ok(Math.abs(share - t) >= 0.01, `${item.postcode} share ${share}`);
+  }
+});
