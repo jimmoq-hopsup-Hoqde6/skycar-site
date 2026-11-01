@@ -2,10 +2,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createHmac } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
+import { startNext } from './support/next-server.mjs';
 
 test('built sign-in replaces accounts, refreshes cookies and signs out privately', { timeout: 30000 }, async () => {
   const ids = { 'a@example.test': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'b@example.test': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' };
@@ -34,12 +33,9 @@ test('built sign-in replaces accounts, refreshes cookies and signs out privately
     res.statusCode = 500; res.end('{"error":"Unexpected synthetic endpoint"}');
   });
   stub.listen(0, '127.0.0.1'); await once(stub, 'listening');
-  const base = 'http://127.0.0.1:3441';
   const origin = 'https://phone.skycar.test';
-  const server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', '3441'], {
-    env: { ...process.env, SKYCAR_ENV: 'staging', SKYCAR_APP_ORIGIN: origin, NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${stub.address().port}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'synthetic-only' }, stdio: 'ignore',
-  });
-  const exited = once(server, 'exit');
+  const app = await startNext({ ...process.env, SKYCAR_ENV: 'staging', SKYCAR_APP_ORIGIN: origin, NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${stub.address().port}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'synthetic-only' });
+  const base = app.base;
   const jar = new Map();
   const capture = response => {
     assert.match(response.headers.get('cache-control'), /private.*no-store/);
@@ -52,9 +48,6 @@ test('built sign-in replaces accounts, refreshes cookies and signs out privately
   const cookie = () => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
   const post = (path, data, from = origin) => fetch(base + path, { method: 'POST', headers: { origin: from, cookie: cookie(), 'content-type': 'application/json' }, body: JSON.stringify(data) });
   try {
-    let ready = false;
-    for (let i = 0; i < 75; i++) { try { await fetch(base + '/api/v1/health'); ready = true; break; } catch { await delay(100); } }
-    assert.ok(ready);
     const rejected = await post('/api/v1/auth/sign-in', { email: 'a@example.test', password: 'wrong' });
     assert.equal(rejected.status, 401); assert.doesNotMatch(await rejected.text(), /private provider/);
     assert.equal((await post('/api/v1/auth/sign-in', {}, 'https://attacker.test')).status, 403);
@@ -71,5 +64,5 @@ test('built sign-in replaces accounts, refreshes cookies and signs out privately
     const signedOut = await post('/api/v1/auth/sign-out', {});
     assert.equal(signedOut.status, 200); capture(signedOut); assert.equal(jar.size, 0);
     console.log('PASS: secure HTTP-only cookies, A → B replacement, expiry refresh, local sign-out, private responses');
-  } finally { server.kill('SIGTERM'); await exited; await new Promise(resolve => stub.close(resolve)); }
+  } finally { await app.stop(); await new Promise(resolve => stub.close(resolve)); }
 });

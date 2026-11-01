@@ -6,11 +6,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CareInput } from "@/domain/care/request";
 import { readCareSubmission } from "@/domain/care/submission";
 import { unreadableResponseIsUncertain } from "@/domain/care/submission-recovery";
+import { PhotoUploadError, formatCountdown, uploadRequestPhotos } from "@/domain/care/request-photos";
 import { ApiError, garageApi, type Page, type Vehicle } from "@/features/garage/types";
+import { DamagePhotos } from "./damage-photos";
 import "./request-form.css";
+import "./guest-request-form.css";
 
 type AccessState = "ready" | "session" | "access" | "vehicle" | "conflict" | "error";
-type Pending = { key: string; body: string };
+// photos are the exact prepared files, retained so a retry resends identical bytes.
+type Pending = { key: string; body: string; photos: File[]; requestId?: string };
 type ValidationOutcome = "verified" | "failed" | "superseded";
 type ValidationRun = {
   status: "pending" | ValidationOutcome;
@@ -19,7 +23,7 @@ type ValidationRun = {
 };
 
 class SubmitError extends Error {
-  constructor(public code: string, message: string, public status: number, public retryable: boolean) { super(message); }
+  constructor(public code: string, message: string, public status: number, public retryable: boolean, public retryAfter?: number) { super(message); }
 }
 
 function vehicleName(vehicle: Vehicle) {
@@ -100,6 +104,15 @@ export function CareRequestForm() {
   const [access, setAccess] = useState<AccessState>("ready");
   const [error, setError] = useState<SubmitError | null>(null);
   const [uncertain, setUncertain] = useState(false);
+  const [photos, setPhotos] = useState<File[]>([]);
+  const [preparing, setPreparing] = useState(false);
+  const [savedId, setSavedId] = useState<string | null>(null);
+  // After a refused (400/413) photo upload nothing was stored, so the same saved request may take different photos.
+  const [replacing, setReplacing] = useState(false);
+  // Epoch ms until which the server asked us to wait (429 Retry-After); null when not limited.
+  const [retryUntil, setRetryUntil] = useState<number | null>(null);
+  const [waitLeft, setWaitLeft] = useState(0);
+  const [waitedFor, setWaitedFor] = useState<number | null>(null);
   const selectedVehicle = useRef("");
   const pending = useRef<Pending | null>(null);
   const controller = useRef<AbortController | null>(null);
@@ -114,6 +127,7 @@ export function CareRequestForm() {
   const clearAccountState = useCallback(() => {
     accountEpoch.current += 1;
     pending.current = null;
+    setReplacing(false);
     setSaving(false);
     setVehicles([]);
     selectVehicle("");
@@ -122,6 +136,10 @@ export function CareRequestForm() {
     setPreferredWindow("flexible");
     setError(null);
     setUncertain(false);
+    setPhotos([]);
+    setPreparing(false);
+    setSavedId(null);
+    setRetryUntil(null);
   }, [selectVehicle]);
 
   const loadVehicles = useCallback(async () => {
@@ -195,31 +213,69 @@ export function CareRequestForm() {
     };
   }, [loadVehicles]);
 
+  useEffect(() => {
+    if (retryUntil === null) return;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((retryUntil - Date.now()) / 1000));
+      setWaitLeft(left);
+      if (left === 0) setWaitedFor(retryUntil);
+    };
+    const timer = setInterval(tick, 1000);
+    queueMicrotask(tick);
+    return () => clearInterval(timer);
+  }, [retryUntil]);
+  const waiting = retryUntil !== null && waitedFor !== retryUntil;
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (saving || !vehicleId) return;
+    if (saving || preparing || waiting || !vehicleId) return;
+    if (replacing) {
+      // Same saved request and idempotency key: only the photos are replaced, so no second request can be created.
+      if (!pending.current?.requestId || !photos.length) return;
+      pending.current.photos = [...photos];
+    }
     if (!pending.current) {
       const input: CareInput = { vehicle_id: vehicleId, service, description: description.trim(), preferred_window: preferredWindow };
-      pending.current = { key: crypto.randomUUID(), body: JSON.stringify(input) };
+      pending.current = { key: crypto.randomUUID(), body: JSON.stringify(input), photos: [...photos] };
     }
     const attempt = pending.current;
     const epoch = accountEpoch.current;
-    setSaving(true); setError(null);
+    setSaving(true); setError(null); setRetryUntil(null); setReplacing(false);
     try {
-      const result = await submitCare(attempt.body, attempt.key);
-      if (!(await latestValidationAllows(epoch))) {
-        retainUncertainAttempt(epoch, attempt);
-        return;
+      let requestId = attempt.requestId;
+      if (!requestId) {
+        const result = await submitCare(attempt.body, attempt.key);
+        if (!(await latestValidationAllows(epoch))) {
+          retainUncertainAttempt(epoch, attempt);
+          return;
+        }
+        requestId = result.request.id;
+        if (epoch === accountEpoch.current && pending.current === attempt) { attempt.requestId = requestId; setSavedId(requestId); }
+      }
+      if (attempt.photos.length) {
+        // Two-call flow: the signed-in create route is JSON-only. Photos go to the existing
+        // owner route after the request exists. A single atomic call needs a backend change
+        // (see docs/contracts/request-photos.md, N1).
+        try { await uploadRequestPhotos(requestId, attempt.photos); }
+        catch (failure) {
+          if (!(failure instanceof PhotoUploadError)) throw failure;
+          throw new SubmitError("PHOTO_UPLOAD_FAILED", `Your request was saved, but its photos were not. ${failure.message}`, [400, 401, 403, 413, 429].includes(failure.status) ? failure.status : 0, failure.retryable, failure.retryAfter);
+        }
+        if (!(await latestValidationAllows(epoch))) {
+          retainUncertainAttempt(epoch, attempt);
+          return;
+        }
       }
       pending.current = null; setUncertain(false);
-      router.push(`/care/requests/${encodeURIComponent(result.request.id)}`);
+      router.push(`/care/requests/${encodeURIComponent(requestId)}`);
     } catch (caught) {
       if (!(await latestValidationAllows(epoch))) {
         retainUncertainAttempt(epoch, attempt);
         return;
       }
       const next = caught instanceof SubmitError ? caught : new SubmitError("INTERNAL_ERROR", "We could not save your request.", 0, true);
-      if (!next.retryable) pending.current = null;
+      // A refused photo upload keeps the saved request so the user can continue or choose different photos.
+      if (!next.retryable && !(next.code === "PHOTO_UPLOAD_FAILED" && attempt.requestId)) pending.current = null;
       setUncertain(next.retryable && !!pending.current);
       if ([401, 403].includes(next.status)) {
         clearAccountState();
@@ -228,6 +284,8 @@ export function CareRequestForm() {
       }
       if (next.status === 404) { clearAccountState(); setAccess("vehicle"); return; }
       if (next.status === 409) setAccess("conflict");
+      setRetryUntil(next.retryAfter ? Date.now() + next.retryAfter * 1000 : null);
+      setWaitLeft(next.retryAfter ?? 0);
       setError(next);
     } finally {
       // Account revalidation may have replaced this submission with a fresh
@@ -236,7 +294,8 @@ export function CareRequestForm() {
     }
   }
 
-  const disabled = saving || uncertain;
+  const disabled = saving || uncertain || !!savedId;
+  const photoFix = !!error && error.code === "PHOTO_UPLOAD_FAILED" && !uncertain && !!savedId && [400, 413].includes(error.status);
   return <main className="care-entry-shell" aria-busy={loading || saving}>
     <nav className="care-entry-nav" aria-label="Main navigation"><Link className="care-entry-wordmark" href="/">skycar<span>●</span></Link><div><Link href="/garage">Garage</Link><Link href="/garage/jobs">My Jobs</Link><span aria-current="page">Request care</span></div></nav>
     <header className="care-entry-header"><p className="eyebrow">REPAIR &amp; CLEANING</p><h1>What does your car<br /><span>need today?</span></h1><p>Start with the outcome you need. Skycar records your request for review—this is not an instant quote or confirmed booking.</p></header>
@@ -257,8 +316,9 @@ export function CareRequestForm() {
       <fieldset disabled={disabled}><legend>2. Select your vehicle</legend><label className="care-field" htmlFor="care-vehicle">Active Garage vehicle<select id="care-vehicle" required value={vehicleId} onChange={event => selectVehicle(event.target.value)}>{vehicles.map(vehicle => <option value={vehicle.id} key={vehicle.id}>{vehicleName(vehicle)}</option>)}</select></label><p className="care-help">Archived vehicles are history-only and cannot receive a new request.</p></fieldset>
       <fieldset disabled={disabled}><legend>3. Tell us what you need</legend><label className="care-field" htmlFor="care-description">Describe the damage or cleaning work<textarea id="care-description" required minLength={10} maxLength={2000} rows={6} value={description} onChange={event => setDescription(event.target.value)} placeholder={service === "repair" ? "Example: Scratch on the left rear door and a small dent near the handle." : "Example: Full interior detail with attention to the rear seats."} /></label><span className="care-count">{[...description].length} / 2000</span></fieldset>
       <fieldset disabled={disabled}><legend>4. Preferred timing</legend><label className="care-field" htmlFor="care-window">When would you prefer the work?<select id="care-window" value={preferredWindow} onChange={event => setPreferredWindow(event.target.value as CareInput["preferred_window"])}><option value="one_to_two_business_days">Within 1–2 business days</option><option value="seven_to_fourteen_days">Within 7–14 days</option><option value="flexible">I’m flexible</option></select></label><p className="care-help">This is a preference only, reviewed in Australia/Adelaide. It does not reserve a technician or a time.</p></fieldset>
-      {error && <div className="care-entry-warning" role="alert"><strong>{uncertain ? "Submission not confirmed" : "Request not submitted"}</strong><p>{error.message}</p>{uncertain && <p>Use “Check same request” to safely repeat the exact attempt. Do not change the details yet.</p>}{error.status === 404 && <button type="button" onClick={() => void loadVehicles()}>Reload active vehicles</button>}</div>}
-      <div className="care-entry-actions"><button className="care-entry-button" type="submit" disabled={saving}>{saving ? "Submitting…" : uncertain ? "Check same request" : "Submit for review"}</button><Link href="/garage">Back to Garage</Link></div>
+      <fieldset disabled={saving || (disabled && !replacing)}><legend>5. Add photos (optional)</legend><DamagePhotos files={photos} disabled={saving || (disabled && !replacing)} onChange={setPhotos} onProcessing={setPreparing} /></fieldset>
+      {error && <div className="care-entry-warning" role="alert"><strong>{error.code === "PHOTO_UPLOAD_FAILED" ? (retryUntil !== null || error.status === 429 ? "Photo upload limit reached" : uncertain ? "Photo upload not confirmed" : photoFix ? "Photos not accepted" : "Request saved without photos") : uncertain ? "Submission not confirmed" : "Request not submitted"}</strong><p>{error.message}</p>{uncertain && <p>{error.code === "PHOTO_UPLOAD_FAILED" ? (waiting ? "Your request is saved. The retry button unlocks when its countdown ends, and sends the same photos." : "Use “Retry photo upload” to send the same photos again. Your request is already saved.") : "Use “Check same request” to safely repeat the exact attempt. Do not change the details yet."}</p>}<span className="care-entry-sr" role="status">{retryUntil !== null && !waiting ? "You can retry the photo upload now." : ""}</span>{error.code === "PHOTO_UPLOAD_FAILED" && savedId && <div className="care-entry-recovery"><Link className="care-entry-button" href={`/care/requests/${encodeURIComponent(savedId)}`}>Continue without photos</Link>{photoFix && !replacing && <button type="button" className="care-entry-secondary" onClick={() => { setPhotos([]); setReplacing(true); }}>Choose different photos</button>}</div>}{error.status === 404 && <button type="button" onClick={() => void loadVehicles()}>Reload active vehicles</button>}</div>}
+      <div className="care-entry-actions"><button className="care-entry-button" type="submit" disabled={saving || preparing || waiting || (!!savedId && !uncertain && !replacing) || (replacing && !photos.length)}>{saving ? "Submitting…" : replacing ? "Upload these photos" : waiting ? `Retry in ${formatCountdown(waitLeft)}` : savedId && uncertain ? "Retry photo upload" : uncertain ? "Check same request" : "Submit for review"}</button><Link href="/garage">Back to Garage</Link></div>
       <p className="care-entry-boundary">Submission records a request and next-update deadline. It does not confirm coverage, a price, technician, appointment or payment.<br /><Link href="/auth/sign-out">Sign out on this device</Link></p>
     </form>}
   </main>;
