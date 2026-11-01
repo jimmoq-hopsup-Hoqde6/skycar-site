@@ -14,6 +14,7 @@ import { verifyTechnicianWorkStart } from "./technician-work-start.acceptance.mj
 import { verifyTechnicianQuotes } from "./technician-quotes.acceptance.mjs";
 import { verifyTechnicianInbox } from "./technician-inbox.acceptance.mjs";
 import { verifyTechnicianAvailability } from "./technician-availability.acceptance.mjs";
+import { verifyTechnicianAvailabilityDelta } from "./technician-availability-delta.acceptance.mjs";
 import { verifyMyJobsJourneyState } from "./my-jobs-journey-state.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
@@ -116,6 +117,7 @@ before(() => {
     '20261101024732_completion_review_final_lock_authority.sql',
     '20261101062300_technician_availability.sql',
     '20261101062400_my_jobs_journey_status.sql',
+    '20261101063000_technician_availability_enforcement_delta.sql',
   ], 'combined verification must include every public migration in filename order');
   for (const migration of migrations) file(`supabase/migrations/${migration}`);
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
@@ -301,4 +303,6 @@ test('Technician availability is private and does not take booking locks', async
 test('My Jobs exposes the caller journey state without private issue text', () => {
   verifyMyJobsJourneyState({ sql, auth, quote, garageCreate, carePayload });
 });
-
+test('Technician availability delta rejects overlaps and provides a DST-aware, lock-free enforcement check', async () => {
+  await verifyTechnicianAvailabilityDelta({ sql, quote, result, waitForQuery });
+});
