@@ -47,7 +47,7 @@ export async function verifyRequestPhotos({ sql, auth, quote, run, carePayload, 
   equal(sql(`select has_function_privilege('authenticated','public.care_list_requests(integer,uuid,timestamptz,uuid)','execute')::text || has_function_privilege('anon','public.care_list_requests(integer,uuid,timestamptz,uuid)','execute')::text || has_function_privilege('service_role','public.care_list_requests(integer,uuid,timestamptz,uuid)','execute')::text`), 'truefalsefalse');
 
   // Browser roles cannot set, read or reach the marker or quota objects.
-  const recordCall = (id, count, hash) => `select public.care_record_request_photos(${quote(id)}::uuid, ${count}, ${quote(hash)})`;
+  const recordCall = (id, count, hash, kind) => `select public.care_record_request_photos(${quote(id)}::uuid, ${count}, ${quote(hash)}${kind ? `, ${quote(kind)}` : ''})`;
   const manifest = sha('manifest-bytes');
   denies(auth(owner, recordCall(withPhotos, 2, manifest)), 'permission denied', 'authenticated cannot call record RPC');
   denies(anon(recordCall(withPhotos, 2, manifest)), 'permission denied', 'anon cannot call record RPC');
@@ -72,6 +72,23 @@ export async function verifyRequestPhotos({ sql, auth, quote, run, carePayload, 
   denies(service(`update public.care_request_photo_sets set photo_count=1 where request_id=${quote(withPhotos)}::uuid`), 'permission denied', 'marker is write-once');
   denies(service(`delete from public.care_request_photo_sets where request_id=${quote(withPhotos)}::uuid`), 'permission denied', 'marker cannot be deleted');
   equal(sql(`select photo_count::text from public.care_request_photo_sets where request_id=${quote(withPhotos)}::uuid`), '2');
+
+  // The marker stores the manifest hash the server compares against before any Storage call.
+  equal(sql(`select manifest_sha256 || ':' || request_kind from public.care_request_photo_sets where request_id=${quote(withPhotos)}::uuid`), `${manifest}:account`);
+  denies(service(recordCall(withPhotos, 2, manifest, 'guest')), 'NOT_FOUND', 'an account request id is not a guest request, so no second row can exist');
+  denies(service(recordCall(withPhotos, 2, manifest, 'other')), 'VALIDATION_FAILED');
+  denies(service(recordCall(withPhotos, 2, manifest, 'guest').replace(quote('guest'), 'null')), 'VALIDATION_FAILED');
+  // Guest requests are covered by the same marker (kind 'guest'), existence-checked against care_guest_requests.
+  const guest = randomUUID(); const guestHash = sha('guest-manifest');
+  denies(service(recordCall(guest, 1, guestHash, 'guest')), 'NOT_FOUND', 'unknown guest request');
+  denies(service(recordCall(guest, 1, guestHash)), 'NOT_FOUND', 'a guest id is not an account request');
+  sql(`insert into public.care_guest_requests(id, idempotency_key, fingerprint, payload) values (${quote(guest)}::uuid, gen_random_uuid(), ${quote(sha('fp'))}, '{}'::jsonb)`);
+  denies(service(recordCall(guest, 1, guestHash)), 'NOT_FOUND', 'account kind does not match a guest id');
+  equal(json(sql(service(recordCall(guest, 1, guestHash, 'guest')))), { request_id: guest, photo_count: 1, replayed: false });
+  equal(json(sql(service(recordCall(guest, 1, guestHash, 'guest')))), { request_id: guest, photo_count: 1, replayed: true });
+  denies(service(recordCall(guest, 1, sha('different'), 'guest')), 'IDEMPOTENCY_CONFLICT');
+  equal(sql(service(`select request_kind || ':' || manifest_sha256 from public.care_request_photo_sets where request_id=${quote(guest)}::uuid`)).split('\n')[0], `guest:${guestHash}`);
+  equal(list(owner).items.some(entry => entry.id === guest), false, 'guest markers never surface in account lists');
 
   // Projection: only the owner's marked request carries a count; no cross-account leakage.
   equal([item(owner, withPhotos).photo_count, item(owner, withPhotos).has_photos], [2, true]);
