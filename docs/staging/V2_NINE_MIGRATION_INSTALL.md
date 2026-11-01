@@ -1,6 +1,6 @@
 # V2 nine-migration install: manifest, pre-migration checklist, post-migration verification, backup gap review
 
-> **Revision 4 (adds section 10: live staging inventory of 1 Nov 2026, the sequence-revoke migration `20261101133000` in the install set, and checklist items 14-15 with query P8). Revision 3 added section 9: pre-launch ops for request-photo uploads. Revision 2 added sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed.**
+> **Revision 5 (adds section 11: install results of 1 Nov 2026). Revision 4 (adds section 10: live staging inventory of 1 Nov 2026, the sequence-revoke migration `20261101133000` in the install set, and checklist items 14-15 with query P8). Revision 3 added section 9: pre-launch ops for request-photo uploads. Revision 2 added sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed.**
 >
 > **Status: documentation only. Nothing in this document has been executed against any hosted
 > database.** No migration has been applied, no workflow has been dispatched, and no secret or
@@ -1147,3 +1147,90 @@ Hosted migration versions (name; the repo file it corresponds to):
 2. `anon` holds SELECT, UPDATE and USAGE on `audit_events_id_seq` (migration `20261101133000` is now in the install set to revoke this; see the install set update at the top and checklist items 14-15). This is likely a Supabase default privilege rather than a migration grant, but the cause is UNVERIFIED. Review it in the access-hardening follow-up. It is already present before any of the nine files is applied.
 3. The existing data is small (1 auth user, 3 storage objects) but real. No backup route is available on the free plan, so run section 7 before applying anything.
 4. Re-run section 3 and 9.4 SQL after any install; the hosted version numbers differ from the repo filenames, so match by name, as the sections do.
+
+## 11. Install results 2026-11-01 (staging project `oelorquxkddvilopmibh` only)
+
+Executed 1 Nov 2026 from 20:39 to 20:44 ACDT (Australia/Adelaide, UTC+10:30) by the Grok Bot executor, under the founder's approval (owner messages t15s1, answered 20:36 ACDT, and t11u). Org `srsguzzcfunwmedokszi` was on the **pro** plan (verified with `get_organization`). Nothing outside staging was touched: no production, no Vercel, no workflow dispatch, no PR, no merge, no rollback, no ad-hoc fix. No keys, connection strings or backup contents appear here.
+
+### 11.1 Backup (logical export, taken before any change)
+
+The direct and pooler Postgres endpoints were unreachable from the executor box (only HTTP and HTTPS egress), so `pg_dump` was not possible. The founder approved a logical export through the Supabase connector (`execute_sql`, read-only SELECTs) instead.
+
+| Item | Value |
+| --- | --- |
+| Location (executor box only, not committed) | `/workspace/backups/staging-oelorquxkddvilopmibh-20261101T203900+1030/`, directory mode 700, files mode 600 |
+| Manifest | `MANIFEST.json`, sha256 `925e98210d611c528505600738b8192f978847fd07a1dbb1fc91431b583dd8a8`; lists sha256 and size for 31 files |
+| Size | 31 files totalling 300,547 bytes, plus the manifest itself |
+| Contents | row data (JSON) for 16 public tables, `auth.users`, `storage.buckets`, `storage.objects` (metadata), `supabase_migrations.schema_migrations`; catalog JSON for relations and columns, constraints, indexes, triggers, policies, types, sequences with values, schemas and ACLs, default ACLs, extensions, role names; `schema.sql` (catalog-derived reference) and `functions.sql` (`pg_get_functiondef`) |
+| Not included | storage object **bytes** (3 objects; the connector has no storage download and the storage API needs a service key), role passwords, other `auth` tables; this is not a `pg_dump` and not a restore-tested artefact |
+
+Verification, all against independent live queries (VERIFIED, 20:39 to 20:40 ACDT):
+
+| Check | Result |
+| --- | --- |
+| Exported row count equals live `count(*)` for every one of 20 tables | all 20 match (public: `audit_events` 3, `care_guest_requests` 4, `care_notification_outbox` 1, `care_offer_commands` 0, `care_offer_slots` 0, `care_offers` 0, `care_request_commands` 1, `care_request_events` 1, `care_requests` 1, `care_response_policy` 1, `garage_mutations` 1, `media_assets` 1, `profiles` 1, `user_roles` 1, `vehicle_history` 2, `vehicles` 1; `auth.users` 1, `storage.buckets` 1, `storage.objects` 3, `schema_migrations` 8) |
+| Every live table, function (17), policy (15), trigger (9), index (61), constraint (89, by count) and sequence appears in the export | all match |
+| Sequence values, bucket ids, object names, user ids | match (`audit_events_id_seq` last_value 3) |
+| Restore test | **not performed** (UNVERIFIED) |
+
+### 11.2 Pre-checks (VERIFIED, 20:40 ACDT)
+
+| Check | Result |
+| --- | --- |
+| Blob SHAs re-read from git | all 10 match, bytes equal: nine at `18240dc137a66660ef9251101df906159ffae9a4` (`de4b31ad`, `55d44862`, `67734980`, `1e8a70c8`, `0d4bb716`, `37bd21c7`, `b8476976`, `9da56890`, `52f11c3e`) and `20261101133000_revoke_public_sequence_grants.sql` blob `fcdfe66f90d54d8130d07c8ce3cd3b2afcaa5097` at `39a2f89a4fe04cb5c02c863742ccbe075158827c` |
+| P1 | database `postgres`, role `postgres`, PostgreSQL 17.6, pg17 true |
+| P2 | the 8 baseline names; versions `20260928230146` to `20261001023756` |
+| P3, P4 | 0 rows (none of the nine installed, no created object present) |
+| P5 | 9 of 9 prerequisites exist |
+| P6, P7 | 0 tables without RLS; one bucket `private-media`, `public = false` |
+| P8 | `postgres` default ACL for public sequences granted `anon` and `authenticated` SELECT, UPDATE, USAGE; **`supabase_admin` also has default ACLs on public sequences granting `anon` and `authenticated` the same** |
+| P8b | one sequence, `audit_events_id_seq`, owner `postgres`, ACL included `anon` and `authenticated` |
+| `20261101130000` (photos) | skipped as instructed |
+
+### 11.3 Apply (each file applied through the connector `apply_migration`, one call per file, exact file bytes, each file carries its own `begin; … commit;`)
+
+`apply_migration` assigns versions at call time, so hosted versions differ from repository filenames (as for the baseline). All ten returned `{"success":true}` and are recorded in `supabase_migrations.schema_migrations` (re-read with `list_migrations`). Times are ACDT (version timestamps are UTC, +10:30).
+
+| # | Name | Repo file | Hosted version (UTC) | Applied (ACDT) | Bytes sent | Outcome |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `care_connected_journey` | `20261003064126_…` | `20261101101109` | 20:41:09 | 28842 | success |
+| 2 | `technician_inbox` | `20261004090000_…` | `20261101101123` | 20:41:23 | 11644 | success |
+| 3 | `technician_quotes` | `20261004124000_…` | `20261101101132` | 20:41:32 | 10565 | success |
+| 4 | `technician_work_start` | `20261004133000_…` | `20261101101140` | 20:41:40 | 4223 | success |
+| 5 | `technician_completion` | `20261004140000_…` | `20261101101148` | 20:41:48 | 7984 | success |
+| 6 | `customer_completion_review` | `20261004150000_…` | `20261101101156` | 20:41:56 | 6943 | success |
+| 7 | `completion_review_security_fix` | `20261020183000_…` | `20261101101204` | 20:42:04 | 5903 | success |
+| 8 | `completion_review_replay_authority` | `20261020183001_…` | `20261101101212` | 20:42:12 | 6355 | success |
+| 9 | `completion_review_final_lock_authority` | `20261101024732_…` | `20261101101220` | 20:42:20 | 6365 | success |
+| 10 | `revoke_public_sequence_grants` | `20261101133000_…` | `20261101101228` | 20:42:28 | 2570 | success |
+
+### 11.4 Post-checks (VERIFIED, about 20:43 ACDT)
+
+| Check | Result |
+| --- | --- |
+| A1n | 9 of 9 PASS, one row per name, hosted versions as in 11.3 |
+| A1n-order | 0 rows (applied in manifest order, after the baseline) |
+| A1, A2, A3 (version-based) | **Expected FAIL on versions only**: hosted versions are generated (section 3.1 caveat). Totals: 18 rows = 8 baseline + 10 installed; max version `20261101101228` |
+| A4 (by name) | the 8 baseline statement md5s are identical to the pre-install P2 output |
+| B1 to B5 | B1 8 of 8 PASS (RLS enabled, not forced); B2 0 rows; B3 0 rows; B4 19 of 19 present or enabled; B5 true |
+| C1 to C4 | C1 10 of 10 PASS (SECURITY INVOKER, empty `search_path`, body matches); C2 final-lock order true; C3 one overload each; C4 10 of 10 PASS (`service_role` only; no `anon`, `authenticated` or PUBLIC execute) |
+| D1, D2 | 0 rows; D3 `service_role` privileges on 8 new tables; D6, D7 0 rows |
+| D4 (`care_journey_events_id_seq`) | `anon_any` false, `authenticated_any` false, `service_role` USAGE and SELECT true |
+| E1 | 0 rows; E2 `private-media`, public false; E3 policy `private_media_read_own`; E4 0; E5 all eight new tables 0 rows |
+| Sequence grants (public) | P8b: `audit_events_id_seq` and `care_journey_events_id_seq`, owner `postgres`, ACL `postgres` and `service_role` only (the `anon` and `authenticated` grants seen before are gone) |
+| P8 after | `postgres` default ACL for public sequences: `postgres`, `service_role` only. **`supabase_admin` default ACLs for public sequences still grant `anon` and `authenticated`**; the migration cannot change them (finding, below) |
+| Table, function and sequence grants to `anon`, `authenticated`, PUBLIC (public schema) | none for `anon` or PUBLIC; `authenticated` has SELECT only on `care_request_events`, `care_requests`, `profiles`, `user_roles`, `vehicle_history`, `vehicles` and EXECUTE only on `care_get_offers`, `care_get_request`, `care_list_requests`, `care_retry_request`, `care_submit_request`, `garage_mutate_vehicle`; no sequence grants |
+| Row counts | all 20 pre-existing tables unchanged against the backup counts; only `schema_migrations` changed (8 to 18); the 8 new tables hold 0 rows |
+| Q6 (`20261101130000`) | `ABSENT` |
+| RLS | all 24 public tables RLS enabled, none forced |
+
+Advisors (`get_advisors`, about 20:43 ACDT):
+- Security: INFO `rls_enabled_no_policy` x17 (the 9 seen earlier plus `care_experts`, `care_journey_commands`, `care_journey_events`, `care_journeys`, `care_reviewed_quotes`, `care_technician_accounts`, `care_technician_commands`, `care_technician_invitations`; by design, access is `service_role` only); WARN `authenticated_security_definer_function_executable` x6 (the same six baseline functions, unchanged); WARN `auth_leaked_password_protection` disabled (unchanged). No new WARN or ERROR from the install.
+- Performance: WARN `auth_rls_initplan` x13 (baseline policies on `profiles`, `user_roles`, `vehicles`, `vehicle_history`, `media_assets`, `care_requests`); INFO `unindexed_foreign_keys` x10, INFO `unused_index` x16, INFO `auth_db_connections_absolute` x1.
+
+### 11.5 Findings and surprises
+
+1. **`pg_dump` was impossible from the executor box** (only HTTP and HTTPS egress); the logical export has no restore test and no storage object bytes. Take a platform backup or a `pg_dump` from a networked machine if a restorable copy is required.
+2. **`supabase_admin` default ACLs** on public sequences still grant `anon` and `authenticated` SELECT, UPDATE and USAGE. Sequences created by `supabase_admin` in `public` in future would be exposed again. No such sequence exists now (both are owned by `postgres`). Needs an explicit decision (a separate `alter default privileges for role supabase_admin`, which `postgres` may not be allowed to run).
+3. **Hosted versions are generated** (`20261101101109` to `20261101101228`), not the repository filenames, so A1, A2 and A3 fail by design; A1n and A4 by name are the valid checks.
+4. Not verified: the QA record for `39a2f89`, an application-level test against the installed schema, edge or rate-limit behaviour, and any restore of the logical export.
