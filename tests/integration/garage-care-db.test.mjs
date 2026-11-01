@@ -9,9 +9,12 @@ import { verifyTechnicianCompletion } from "./technician-completion.acceptance.m
 import { verifyCustomerCompletionReview } from "./customer-completion-review.acceptance.mjs";
 import { verifyCompletionLockReview } from "./completion-lock-review.acceptance.mjs";
 import { verifyCompletionLockOrder } from "./completion-lock-order.acceptance.mjs";
+import { verifyCustomerTechnicianRace } from "./customer-technician-race.acceptance.mjs";
 import { verifyTechnicianWorkStart } from "./technician-work-start.acceptance.mjs";
 import { verifyTechnicianQuotes } from "./technician-quotes.acceptance.mjs";
 import { verifyTechnicianInbox } from "./technician-inbox.acceptance.mjs";
+import { verifyTechnicianAvailability } from "./technician-availability.acceptance.mjs";
+import { verifyMyJobsJourneyState } from "./my-jobs-journey-state.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
@@ -110,6 +113,9 @@ before(() => {
     '20261004150000_customer_completion_review.sql',
     '20261020183000_completion_review_security_fix.sql',
     '20261020183001_completion_review_replay_authority.sql',
+    '20261101024732_completion_review_final_lock_authority.sql',
+    '20261101062300_technician_availability.sql',
+    '20261101062400_my_jobs_journey_status.sql',
   ], 'combined verification must include every public migration in filename order');
   for (const migration of migrations) file(`supabase/migrations/${migration}`);
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
@@ -287,5 +293,12 @@ test('Selected technicians start confirmed work on the shared journey',async()=>
 test('Technician completion shares evidence and writes account history atomically',async()=>{await verifyTechnicianCompletion({sql,auth,quote,result,waitForQuery});});
 test('Customers review completed work without changing fulfilment or money',async()=>{await verifyCustomerCompletionReview({sql,auth,quote,result,waitForQuery});});
 test('Completion review uses a deadlock-safe intermediate lock order',async()=>{await verifyCompletionLockOrder({sql,quote,result});});
+test('Customer review and technician completion serialize on the same journey',async()=>{await verifyCustomerTechnicianRace({sql,quote,result});});
 test('Fresh completion review rejects roles changed during the final journey lock wait',async()=>{await verifyCompletionLockReview({sql,quote,result});});
+test('Technician availability is private and does not take booking locks', async () => {
+  await verifyTechnicianAvailability({ sql, quote, result, waitForQuery });
+});
+test('My Jobs exposes the caller journey state without private issue text', () => {
+  verifyMyJobsJourneyState({ sql, auth, quote, garageCreate, carePayload });
+});
 
