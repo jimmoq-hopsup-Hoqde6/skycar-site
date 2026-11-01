@@ -18,7 +18,7 @@ Status: proposal for review. Frontend-authored; grounded in `5374cea`. Nothing h
 
 **Known limits of the existing route**
 - One batch only: after a manifest exists, no photo can be added, replaced or removed (no route for it).
-- Account uploads have no per-account rate limit (guests are limited inside the intake RPC).
+- Signed-in account uploads were not rate limited in `5374cea`. The backend draft branch adds a limit of 10 successfully recorded sets per hour (section 5, N6). Guests are limited inside the intake RPC.
 
 ## 2. HEIC
 
@@ -68,17 +68,17 @@ Status: proposal for review. Frontend-authored; grounded in `5374cea`. Nothing h
 - Garage: no request photos now. If wanted, per-vehicle request history needs N3. Completion evidence already reaches Garage history as events.
 - Signed URLs: not recommended. The proxy keeps the account-binding header and `no-store`. A signed URL would be a bearer link to private images and needs a new route (N4).
 
-**Status on the backend draft branch `feature/request-photos-backend` (5ac91d7, not merged).** Verified against that branch's code; everything below is draft until merged.
+**Status on the backend draft branch `feature/request-photos-backend` (`9d3baac`, not merged).** Verified against that branch's code; everything below is draft until merged.
 
-**Upload limit (N6).** `POST /api/v1/care/journey/:id/photos` allows **10 uploads per hour** per account (key `journey-photos:{account}`) or per guest request (`guest:{id}`). The window is fixed at 3600s, so a wait can be up to an hour. The quota is consumed before the body is validated, so a rejected body also uses one unit. Denied attempts are not counted, and admin completion uploads are exempt. If the quota check fails, the route fails closed with 503. When limited, the response is `429 {"error":{"code":"RATE_LIMITED","message":"...","retryable":true}}` with `Retry-After: <integer seconds>`. The frontend (#79) shows the server message, disables retry with a countdown from `Retry-After`, and resends the same files. A resend of the same photos is idempotent for Storage, but it uses another quota unit. Success is unchanged (201 `{data:{stored:n}}`).
+**Upload limit (N6).** `POST /api/v1/care/journey/:id/photos` allows **10 successfully recorded photo sets per hour** per signed-in account (fixed window of 3600s, atomic database counter). A slot is **reserved before anything is stored** and **released on any failure**: invalid, oversized or CSRF-rejected bodies, storage or marker 503s, conflicts and replays. Only the call that records the request's photo marker keeps its slot. So an identical retry after a 503 counts **once**, and **re-sending an already recorded set is free**, even at the limit (such a call never reserves). **Guest uploads and admin completion uploads (`?kind=completion`) take no quota**; their sets are write-once, and guests are limited by intake. If the counter cannot be read, the route fails closed with 503. The eleventh new set in a window returns `429 {"error":{"code":"RATE_LIMITED","message":"...","retryable":true}}` with `Retry-After: <integer seconds>`, and nothing is stored. The wait is the rest of the fixed window, so it **can still be up to 3600s**. A crash between reserve and release holds the slot until the window ends. The limit bounds stored sets, not request volume: rejected bodies are bounded by the 2.8 MB body cap and platform throttling. The frontend (#79) shows the server message, disables retry with a countdown from `Retry-After`, and resends the same files. Success is unchanged (201 `{data:{stored:n}}`). Verified against `feature/request-photos-backend` at `9d3baac`.
 
-**Photo marker behind `photo_count` / `has_photos` (N2).** The write-once table `care_request_photo_sets` is set by the trusted route only, for non-completion **account** uploads, after Storage confirms the manifest, through the service-role RPC `care_record_request_photos`. It is idempotent, and a different count or hash returns `IDEMPOTENCY_CONFLICT`. `care_list_requests` returns `photo_count` (0-3, coalesced to 0) and `has_photos` on each item. There is **no backfill**: old requests, guest requests and requests without a marker report 0, so the UI must never claim "no photos" from a zero. If recording the marker fails, the route returns a **retryable 503** (`retryable:true`). Re-sending the same photos fixes it, because Storage and the marker are both idempotent for an identical resend (it uses one more quota unit).
+**Photo marker behind `photo_count` / `has_photos` (N2).** The write-once table `care_request_photo_sets` is set by the trusted route only, for non-completion **account** uploads, after Storage confirms the manifest, through the service-role RPC `care_record_request_photos`. It is idempotent, and a different count or hash returns `IDEMPOTENCY_CONFLICT`. `care_list_requests` returns `photo_count` (0-3, coalesced to 0) and `has_photos` on each item. There is **no backfill**: old requests, guest requests and requests without a marker report 0, so the UI must never claim "no photos" from a zero. Requests photographed before the backend migration have no marker until the identical photos are re-sent. If recording the marker fails, the route returns a **retryable 503** (`retryable:true`) and releases the quota slot. Re-sending the same photos fixes it, because Storage and the marker are both idempotent for an identical resend, and that retry counts once.
 
 **Open question: signed URLs (N4) vs the proxy route.** The backend branch adds `GET /api/v1/care/journey/:id/photos/:slot/url` (`?kind=completion`), returning a bearer URL with a fixed 120s TTL (404 for a missing slot, 503 on storage failure). The proxy route keeps the `X-Skycar-Account` binding and `no-store`. QA has not yet ruled. Until it does, **the frontend uses the proxy route only** and does not call the signed-URL route. This section will be updated with QA's verdict.
 
 ## 6. Backend needs
 
-Tag: **EXISTING** = in `5374cea`, no change; **NEW** = needs backend work. N2, N4 and N6 are now **PRESENT (draft)** on `feature/request-photos-backend` (5ac91d7), pending review and merge.
+Tag: **EXISTING** = in `5374cea`, no change; **NEW** = needs backend work. N2, N4 and N6 are now **PRESENT (draft)** on `feature/request-photos-backend` (`9d3baac`), pending review and merge.
 
 | # | Item | Tag | Needed for |
 |---|---|---|---|
@@ -94,7 +94,7 @@ Tag: **EXISTING** = in `5374cea`, no change; **NEW** = needs backend work. N2, N
 | N3 | Optional: per-vehicle request photo/history read for Garage | NEW route (maybe RPC) | Garage display |
 | N4 | Optional: signed-URL route (short TTL, after `journeyAccess`) | **PRESENT (draft)**; **not used by the UI**, QA ruling pending (see section 5) | only if bearer links are wanted |
 | N5 | Optional: replace/remove or add-more photo route (today write-once, one batch) | NEW route + manifest rules | edit after submit |
-| N6 | Optional: per-account upload rate limit on the photo route | **PRESENT (draft)**: 10/hour, 429 `RATE_LIMITED` + `Retry-After` | abuse control |
+| N6 | Optional: per-account upload rate limit on the photo route | **PRESENT (draft)**: 10 recorded sets/hour per signed-in account, 429 `RATE_LIMITED` + `Retry-After` | abuse control |
 | N7 | Only if option B for HEIC is chosen: server decoder and new validation/caps | NEW | not recommended |
 
 Nothing is required from the backend for the minimum flow (sections 1-3 with E1-E6). This document adds no migrations, RLS, RPCs or storage policies.
