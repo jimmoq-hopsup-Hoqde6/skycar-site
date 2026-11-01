@@ -308,6 +308,6 @@ test('My Jobs exposes the caller journey state without private issue text', () =
 test('Public sequences grant nothing to browser roles and service_role identity inserts still work', () => {
   verifySequenceGrantRevoke({ sql, quote });
 });
-test('supabase_admin default privileges on public sequences are revoked loudly and verifiably', () => {
+test('Sequence default privileges: migration is safe for any runner, supabase_admin ops script and gate behave', () => {
   verifySupabaseAdminSequenceDefaultAcl({ sql, quote });
 });
