@@ -1,0 +1,15 @@
+.journey-timeline{list-style:none;margin:20px 0 0;padding:0;display:grid;gap:0}
+.journey-step{position:relative;display:flex;gap:14px;align-items:flex-start;min-height:44px;padding-bottom:6px}
+.journey-step:not(:last-child):before{content:"";position:absolute;left:15px;top:32px;bottom:-2px;width:2px;background:var(--line)}
+.journey-step-done:not(:last-child):before{background:var(--accent)}
+.journey-marker{flex:none;display:grid;place-items:center;width:32px;height:32px;border-radius:50%;border:2px solid var(--line);background:var(--bg);color:var(--muted);font-size:14px;font-weight:700;line-height:1}
+.journey-step-done .journey-marker{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+.journey-step-current .journey-marker{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 4px rgba(116,227,236,.22)}
+.journey-step-unknown .journey-marker{border-style:dashed;color:var(--text)}
+.journey-step-closed .journey-marker{border-style:dotted}
+.journey-text{display:grid;gap:2px;min-width:0;padding-top:4px}
+.journey-label{font-size:15px;line-height:1.35;color:var(--muted);overflow-wrap:anywhere}
+.journey-step-done .journey-label{color:var(--text)}
+.journey-step-current .journey-label{color:var(--text);font-weight:700}
+.journey-note{font-size:14px;line-height:1.4;color:var(--muted);overflow-wrap:anywhere}
+.journey-step-current .journey-note{color:var(--accent)}
