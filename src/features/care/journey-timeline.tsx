@@ -1,4 +1,4 @@
-import { journeySteps, type CompletionReviewState, type JourneyStepStatus } from "@/domain/care/journey-steps";
+import { journeySteps, type JourneyStepStatus } from "@/domain/care/journey-steps";
 import type { CareRequestSummary } from "@/domain/care/list";
 import "./journey-timeline.css";
 
@@ -8,14 +8,12 @@ const spoken: Record<JourneyStepStatus, string> = {
 };
 const visible: Partial<Record<JourneyStepStatus, string>> = { current: "Current step" };
 
-// Presentational only: renders the existing connected stage as an ordered list.
-// STUB: reviewState is intentionally optional. My Jobs does not pass it, so "Awaiting review" shows
-// "unknown" until care_list_requests returns completion_review_state (Backend, planned Week 2).
-export function JourneyTimeline({ progress, reviewState }: {
-  progress: Pick<CareRequestSummary, "quote_state" | "assignment_state" | "fulfilment_state">;
-  reviewState?: CompletionReviewState | null;
+// Presentational only: renders the backend journey_state / completion_review_state (falling back to
+// the connected stage) as an ordered list. All values come from the My Jobs list item.
+export function JourneyTimeline({ progress }: {
+  progress: Pick<CareRequestSummary, "quote_state" | "assignment_state" | "fulfilment_state" | "journey_state" | "completion_review_state">;
 }) {
-  const steps = journeySteps(progress, reviewState);
+  const steps = journeySteps(progress);
   const current = steps.find(step => step.status === "current");
   return <ol className="journey-timeline" aria-label={current ? `Service journey progress. Current step: ${current.label}` : "Service journey progress"}>
     {steps.map((step, index) => {

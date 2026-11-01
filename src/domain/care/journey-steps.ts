@@ -1,15 +1,17 @@
-import type { CareReceipt } from "./request.ts";
+import type { CareRequestSummary } from "./list.ts";
 import { connectedCareStage } from "./presentation.ts";
 
-// Presentation-only projection of the existing connectedCareStage() derivation.
-// It adds no backend logic: every step is backed by care_requests columns that
-// care_list_requests already returns, except "awaiting review" (see below).
-type Progress = Pick<CareReceipt, "quote_state" | "assignment_state" | "fulfilment_state">;
+// Presentation-only mapping of values the backend already returns for each My Jobs item
+// (care_list_requests: journey_state, completion_review_state, plus the quote, assignment and
+// fulfilment states behind connectedCareStage()). It adds no backend logic and derives no status.
+// journey_state wins when present, exactly as careJobSummary() does; otherwise the existing
+// connectedCareStage() mapping is used.
+type Progress = Pick<CareRequestSummary, "quote_state" | "assignment_state" | "fulfilment_state">
+  & Partial<Pick<CareRequestSummary, "journey_state" | "completion_review_state">>;
 
-export type CompletionReviewState = "awaiting_review" | "confirmed" | "issue_reported";
 export type JourneyStepId = "received" | "offers" | "selected" | "confirmed" | "in_progress" | "completed" | "awaiting_review";
 // done: reached; current: where the journey is now; upcoming: not reached yet;
-// unknown: no backing field is available to this surface; closed: journey was cancelled.
+// unknown: the backend has not recorded a value for this step; closed: journey was cancelled.
 export type JourneyStepStatus = "done" | "current" | "upcoming" | "unknown" | "closed";
 export type JourneyStep = { id: JourneyStepId; label: string; status: JourneyStepStatus; note: string | null };
 
@@ -23,32 +25,47 @@ const order: { id: JourneyStepId; label: string }[] = [
   { id: "awaiting_review", label: "Awaiting review" },
 ];
 
-// Index of the current step for each connected stage. null (no connected stage yet) keeps the request at "received".
+// Index of the current step for each backend journey_state. "cancelled" and "cancellation_requested" are handled separately.
+const journeyIndex = { review: 0, quotes_ready: 1, booking_requested: 2, scheduled: 3, in_progress: 4, completed: 5 } as const;
+// Same positions for the older connected stage, used when the list item carries no journey_state.
 const stageIndex = { quote_ready: 1, appointment_requested: 2, appointment_confirmed: 3, in_progress: 4, completed: 5 } as const;
 
-/**
- * reviewState: care_journeys.completion_review_state, which only the journey API
- * (Journey.completion_review.state) exposes. The My Jobs list does not return it, so
- * callers without the journey must leave it undefined and the final step stays "unknown".
- */
-export function journeySteps(progress: Progress, reviewState?: CompletionReviewState | null): JourneyStep[] {
+function closedSteps(): JourneyStep[] {
+  return order.map(({ id, label }, index) => ({
+    id, label, status: index === 0 ? "done" : "closed", note: index === 1 ? "Request cancelled" : null,
+  }));
+}
+
+export function journeySteps(progress: Progress): JourneyStep[] {
+  const journey = progress.journey_state ?? null;
   const stage = connectedCareStage(progress);
-  if (stage === "cancelled") {
-    return order.map(({ id, label }, index) => ({
-      id, label, status: index === 0 ? "done" : "closed", note: index === 1 ? "Request cancelled" : null,
-    }));
+  if (journey === "cancelled" || (journey === null && stage === "cancelled")) return closedSteps();
+
+  let current: number;
+  let completed: boolean;
+  if (journey === "cancellation_requested") {
+    // The journey stays where it was until Skycar confirms the cancellation; the position comes from the existing stage.
+    current = stage === null || stage === "cancelled" ? 0 : stageIndex[stage];
+    completed = stage === "completed";
+  } else if (journey !== null) {
+    current = journeyIndex[journey];
+    completed = journey === "completed";
+  } else {
+    current = stage === null ? 0 : stageIndex[stage as keyof typeof stageIndex];
+    completed = stage === "completed";
   }
-  const current = stage === null ? 0 : stageIndex[stage];
+  const review = progress.completion_review_state ?? null;
   return order.map(({ id, label }, index) => {
     if (id === "awaiting_review") {
-      if (stage !== "completed") return { id, label, status: "upcoming", note: null };
-      if (reviewState === "awaiting_review") return { id, label, status: "current", note: null };
-      if (reviewState === "confirmed") return { id, label, status: "done", note: "Confirmed by you" };
-      if (reviewState === "issue_reported") return { id, label, status: "done", note: "Issue reported" };
-      return { id, label, status: "unknown", note: "Review status is shown in your service journey" };
+      if (!completed) return { id, label, status: "upcoming", note: null };
+      if (review === "awaiting_review") return { id, label, status: "current", note: null };
+      if (review === "confirmed") return { id, label, status: "done", note: "Confirmed by you" };
+      if (review === "issue_reported") return { id, label, status: "done", note: "Issue reported" };
+      return { id, label, status: "unknown", note: "Review status not recorded yet" };
     }
-    // Completed is the last backed step: it is reached, not "in progress".
-    if (index < current || (id === "completed" && stage === "completed")) return { id, label, status: "done", note: null };
-    return { id, label, status: index === current ? "current" : "upcoming", note: null };
+    // Completed is a reached state, not "in progress".
+    if (index < current || (id === "completed" && completed)) return { id, label, status: "done", note: null };
+    if (index === current) return { id, label, status: "current", note: journey === "cancellation_requested" ? "Cancellation requested" : null };
+    return { id, label, status: "upcoming", note: null };
   });
 }
