@@ -2,7 +2,10 @@
 
 import Link from 'next/link';
 import { useRef, useState } from 'react';
+import { checkCoverage, isPostcodeShape, normalisePostcode, type CoverageOutcome } from '@/domain/care/coverage';
 import { guestReceipt } from '@/domain/care/guest.mjs';
+import type { SupportContact } from '@/domain/care/support-contact';
+import { CoverageConfirmed, CoverageNotice, CoveragePostcodeError } from './coverage-notice';
 import { DamagePhotos } from './damage-photos';
 import { AppIcon } from '@/components/app-icon';
 import './request-form.css';
@@ -15,7 +18,7 @@ const windowLabels: Record<string, string> = {
   one_to_two_business_days: 'Within 1–2 business days',
   seven_to_fourteen_days: 'Within 7–14 days',
 };
-export function GuestRequestForm({ initialService = 'repair' }: { initialService?: 'repair' | 'cleaning' }) {
+export function GuestRequestForm({ initialService = 'repair', supportContact = null }: { initialService?: 'repair' | 'cleaning'; supportContact?: SupportContact | null }) {
   const [step, setStep] = useState(0);
   const [photos,setPhotos] = useState<File[]>([]);
   const [preparing,setPreparing] = useState(false);
@@ -25,12 +28,20 @@ export function GuestRequestForm({ initialService = 'repair' }: { initialService
   const [uncertain, setUncertain] = useState(false);
   const [message, setMessage] = useState('');
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [postcodeError, setPostcodeError] = useState(false);
+  const [coverage, setCoverage] = useState<Extract<CoverageOutcome, { kind: 'out_of_area' | 'unknown' }> | null>(null);
+  const [areaStatus, setAreaStatus] = useState<{ postcode: string } | null>(null);
+  const checkingNow = useRef(false);
+  const decided = useRef(new Set<string>());
+  const postcodeInput = useRef<HTMLInputElement>(null);
   const attempt = useRef<{ key: string; body: string; photos: File[] } | null>(null);
   const sending = useRef(false);
   const form = useRef<HTMLFormElement>(null);
   const stepTitle = useRef<HTMLHeadingElement>(null);
 
   function moveTo(next: number) {
+    setCoverage(null); setPostcodeError(false);
     if (form.current) setSummary(Object.fromEntries([...new FormData(form.current)].filter((entry): entry is [string,string] => typeof entry[1] === 'string')));
     setStep(next);
     requestAnimationFrame(() => {
@@ -54,12 +65,35 @@ export function GuestRequestForm({ initialService = 'repair' }: { initialService
     }
     return true;
   }
+  function areaKey() { return `${service}:${normalisePostcode(postcodeInput.current?.value)}`; }
+  function clearArea() { setCoverage(null); setPostcodeError(false); setAreaStatus(null); }
+  // Runs when the customer continues from the Location step. Only an in-area decision moves on; out of area
+  // and unknown (unavailable) both stop here with their own message.
+  async function gateArea() {
+    if (checkingNow.current) return;
+    const postcode = normalisePostcode(postcodeInput.current?.value);
+    if (!isPostcodeShape(postcode)) { setPostcodeError(true); postcodeInput.current?.focus(); return; }
+    const key = areaKey();
+    if (decided.current.has(key)) { setAreaStatus({ postcode }); moveTo(2); return; }
+    checkingNow.current = true; setChecking(true); setCoverage(null); setPostcodeError(false);
+    const outcome = await checkCoverage({ service, postcode });
+    checkingNow.current = false; setChecking(false);
+    if (areaKey() !== key) return;
+    if (outcome.kind === 'invalid_input') { setPostcodeError(true); postcodeInput.current?.focus(); return; }
+    if (outcome.kind === 'out_of_area' || outcome.kind === 'unknown') { setCoverage(outcome); return; }
+    decided.current.add(key); setAreaStatus({ postcode }); moveTo(2);
+  }
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (sending.current || preparing) return;
-    if (!uncertain && step < 2) { if (validate(step)) moveTo(step + 1); return; }
+    if (sending.current || preparing || checkingNow.current) return;
+    if (!uncertain && step < 2) {
+      if (!validate(step)) { if (step === 1) setPostcodeError(!isPostcodeShape(normalisePostcode(postcodeInput.current?.value))); return; }
+      if (step === 1) void gateArea(); else moveTo(step + 1);
+      return;
+    }
     if (!attempt.current) {
       for (let index = 0; index < steps.length; index++) if (!validate(index)) return;
+      if (!decided.current.has(areaKey())) { moveTo(1); return; }
       const fields = Object.fromEntries(new FormData(event.currentTarget));
       attempt.current = { key: crypto.randomUUID(), body: JSON.stringify({ ...fields, consent: fields.consent === 'on' }), photos: [...photos] };
     }
@@ -102,10 +136,10 @@ export function GuestRequestForm({ initialService = 'repair' }: { initialService
         <label className="care-field">What would you like done?<textarea name="description" required minLength={10} maxLength={2000} rows={4} placeholder={service === 'repair' ? 'e.g. A scratch on the rear bumper and a small dent on the door.' : 'e.g. A full interior clean and an exterior detail.'}/></label>
         <DamagePhotos files={photos} disabled={busy || uncertain} onChange={setPhotos} onProcessing={setPreparing}/><label className="care-field">When suits you?<select name="preferred_window" defaultValue="flexible"><option value="flexible">I’m flexible</option><option value="one_to_two_business_days">Within 1–2 business days</option><option value="seven_to_fourteen_days">Within 7–14 days</option></select></label><p className="care-help">Your preferred timing helps us review the request in Australia/Adelaide. It isn’t a reserved appointment.</p>
       </fieldset>
-      <fieldset data-step="1" hidden={step !== 1} disabled={busy || uncertain}><legend className="sr-only">Service area</legend><label className="care-field">Suburb<input name="suburb" required minLength={2} maxLength={100} placeholder="Your service suburb" autoComplete="address-level2"/></label><label className="care-field">Postcode<input name="postcode" required pattern="[0-9]{4}" maxLength={4} inputMode="numeric" placeholder="4-digit postcode" autoComplete="postal-code"/></label><div className="guest-trust-note"><AppIcon name="shield"/><p>We’ll confirm coverage before arranging your service.</p></div></fieldset>
-      <fieldset data-step="2" hidden={step !== 2} disabled={busy || uncertain}><legend className="sr-only">Contact details</legend><section className="booking-summary" aria-label="Request summary"><p className="eyebrow">YOUR REQUEST AT A GLANCE</p><strong>{summary.vehicle}</strong><p>{service === "repair" ? "Repair" : "Cleaning"} · {summary.suburb} {summary.postcode} · {photos.length} photo{photos.length !== 1 ? "s" : ""}</p><p>{summary.description}</p><p>{windowLabels[summary.preferred_window] ?? 'Preferred timing recorded'} · Australia/Adelaide</p><p className="care-help">This preference is not a confirmed appointment.</p><button type="button" onClick={() => moveTo(0)}>Edit car and details</button></section><label className="care-field">Name<input name="name" required minLength={2} maxLength={100} autoComplete="name" placeholder="Your name"/></label><label className="care-field">Email<input type="email" name="email" required maxLength={254} autoComplete="email" placeholder="you@example.com"/></label><label className="care-field">Phone<input type="tel" name="phone" required minLength={8} maxLength={24} autoComplete="tel" placeholder="Your contact number"/></label><label className="guest-consent"><input type="checkbox" name="consent" required/> I agree that Skycar may contact me about this service request.</label><div className="guest-trust-note"><AppIcon name="shield"/><p>Saved privately with your request. Submitting does not create an account.</p></div></fieldset>
+      <fieldset data-step="1" hidden={step !== 1} disabled={busy || uncertain || checking}><legend className="sr-only">Service area</legend><label className="care-field">Suburb<input name="suburb" required minLength={2} maxLength={100} placeholder="Your service suburb" autoComplete="address-level2"/></label><label className="care-field">Postcode<input ref={postcodeInput} name="postcode" required pattern="[0-9]{4}" maxLength={4} inputMode="numeric" placeholder="4-digit postcode" autoComplete="postal-code" onChange={clearArea} aria-invalid={postcodeError} aria-describedby={postcodeError ? 'guest-postcode-error' : undefined}/></label>{postcodeError && <CoveragePostcodeError id="guest-postcode-error"/>}{coverage && step === 1 && <CoverageNotice outcome={coverage} contact={supportContact} busy={checking} onRetry={() => void gateArea()} onChangePostcode={() => postcodeInput.current?.focus()}/>}<div className="guest-trust-note"><AppIcon name="shield"/><p>We’ll confirm coverage before arranging your service.</p></div></fieldset>
+      <fieldset data-step="2" hidden={step !== 2} disabled={busy || uncertain}><legend className="sr-only">Contact details</legend><section className="booking-summary" aria-label="Request summary"><p className="eyebrow">YOUR REQUEST AT A GLANCE</p><strong>{summary.vehicle}</strong><p>{service === "repair" ? "Repair" : "Cleaning"} · {summary.suburb} {summary.postcode} · {photos.length} photo{photos.length !== 1 ? "s" : ""}</p><p>{summary.description}</p><p>{windowLabels[summary.preferred_window] ?? 'Preferred timing recorded'} · Australia/Adelaide</p><p className="care-help">This preference is not a confirmed appointment.</p>{areaStatus && <CoverageConfirmed postcode={areaStatus.postcode}/>}<button type="button" onClick={() => moveTo(0)}>Edit car and details</button></section><label className="care-field">Name<input name="name" required minLength={2} maxLength={100} autoComplete="name" placeholder="Your name"/></label><label className="care-field">Email<input type="email" name="email" required maxLength={254} autoComplete="email" placeholder="you@example.com"/></label><label className="care-field">Phone<input type="tel" name="phone" required minLength={8} maxLength={24} autoComplete="tel" placeholder="Your contact number"/></label><label className="guest-consent"><input type="checkbox" name="consent" required/> I agree that Skycar may contact me about this service request.</label><div className="guest-trust-note"><AppIcon name="shield"/><p>Saved privately with your request. Submitting does not create an account.</p></div></fieldset>
       {message && <div className="care-entry-warning" role="alert"><p>{message}</p>{uncertain && <p>Your original details are kept for this retry.</p>}</div>}
-      <div className="guest-flow-actions">{step > 0 && <button className="guest-back" type="button" disabled={busy || uncertain} onClick={() => moveTo(step - 1)}>Back</button>}<button className="care-entry-button" type="submit" disabled={busy || preparing}>{busy ? 'Submitting…' : uncertain ? 'Check same request' : step < 2 ? 'Continue' : 'Send my request'}<AppIcon name="arrow"/></button></div>
+      <div className="guest-flow-actions">{step > 0 && <button className="guest-back" type="button" disabled={busy || uncertain} onClick={() => moveTo(step - 1)}>Back</button>}<button className="care-entry-button" type="submit" disabled={busy || preparing || checking}>{busy ? 'Submitting…' : checking ? 'Checking your area…' : uncertain ? 'Check same request' : step < 2 ? 'Continue' : 'Send my request'}<AppIcon name="arrow"/></button></div>
       <details className="booking-explainer"><summary>How does a request become a booking?</summary><p>First, your details and photos are reviewed. A quote needs to explain the proposed work, price and any inspection required. Expert availability and an appointment are then confirmed before work goes ahead.</p><p>You can review the proposed work before deciding to proceed. No payment is taken here.</p></details><p className="care-entry-boundary">{step === 2 ? 'Your request will be reviewed. Pricing, coverage and appointment availability need confirmation.' : 'No account needed. No payment taken here.'}</p>
     </form>}
   </main>;

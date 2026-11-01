@@ -36,19 +36,20 @@ test("built Next.js Care routes publish the catalogue and fail closed without ac
         { id: "cleaning", name: "Detailing & cleaning" },
       ]);
 
-      const coverage = await fetch(`${base}/api/v1/care/coverage`, {
-        method: "POST",
-        // Send the real browser origin, not Next's internal normalized hostname.
-        headers: { origin: base, "content-type": "application/json" },
-        body: JSON.stringify({ service: "repair", postcode: "5000" }),
-        signal: AbortSignal.timeout(2000),
-      });
-      const coverageBody = await coverage.json();
-      assert.equal(coverage.status, 503, JSON.stringify(coverageBody));
-      assert.equal(coverage.headers.get("cache-control"), "no-store");
-      assert.equal(coverageBody.error.code, "COVERAGE_UNAVAILABLE");
-      assert.equal(coverageBody.error.retryable, true);
-      assert.equal(coverageBody.data, undefined);
+      for (const [postcode, expected] of [["5000", "available"], ["5700", "unavailable"]]) {
+        const coverage = await fetch(`${base}/api/v1/care/coverage`, {
+          method: "POST",
+          // Send the real browser origin, not Next's internal normalized hostname.
+          headers: { origin: base, "content-type": "application/json" },
+          body: JSON.stringify({ service: "repair", postcode }),
+          signal: AbortSignal.timeout(2000),
+        });
+        const coverageBody = await coverage.json();
+        assert.equal(coverage.status, 200, JSON.stringify(coverageBody));
+        assert.equal(coverage.headers.get("cache-control"), "no-store");
+        assert.deepEqual(coverageBody.data, { service: "repair", postcode, coverage: expected });
+        assert.equal(coverageBody.error, undefined);
+      }
 
       for (const [path, method] of [
         ["/api/v1/care/requests", "GET"],

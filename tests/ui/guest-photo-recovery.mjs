@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
+import { coverageRoute } from './support/coverage-fixture.mjs';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const origin = 'http://127.0.0.1:3192';
 const server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '-p', '3192'], { stdio: 'ignore' });
@@ -29,6 +30,8 @@ try {
     if (guestMode === 'lost') return route.abort('failed');
     return route.fulfill({ status: guestMode === 'success' ? 201 : 503, json: guestMode === 'success' ? { data: receipt } : rejected });
   });
+  const coverage = coverageRoute();
+  await page.route(coverage.pattern, coverage.handler);
   await page.goto(origin);
   await page.getByRole('link', { name: 'Request a service — no account needed' }).click();
   await page.waitForURL('**/care/request');
