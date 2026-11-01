@@ -1,6 +1,7 @@
 // Request-photo server logic with injected dependencies, so route behaviour is
 // unit-testable without Next, Supabase or Storage. Nothing here reads or logs a
 // service key.
+import { GuestError } from '../../../domain/care/guest.mjs';
 import { manifestDigest, storeCarePhotos, verifyStoredCarePhotos } from '../guest-photos.mjs';
 
 export const PHOTO_UPLOAD_LIMIT = 10;
@@ -36,14 +37,21 @@ export async function releasePhotoSlot(db, reservation) {
   } catch { return false; }
 }
 
-// The recorded photo set of a request (account or guest), or null. Unknown (a read
-// error) is treated as "not recorded": the upload then takes the normal quota and
+// The marker of a request (account or guest), or null. state 'recorded' carries the real
+// manifest hash; state 'legacy_unknown' means photos are known to exist but the hash is not
+// known (manifestSha256 is null, count is only what was observed). Unknown (a read error or
+// an unrecognised row) is treated as "no marker": the upload then takes the normal quota and
 // Storage path, which is idempotent, so a failed read can never grant a free pass.
 export async function recordedPhotoSet(db, requestId, kind = 'account') {
   try {
-    const { data, error } = await db.from('care_request_photo_sets').select('manifest_sha256,photo_count').eq('request_id', requestId).eq('request_kind', kind).maybeSingle();
-    if (error || !data || typeof data.manifest_sha256 !== 'string') return null;
-    return { manifestSha256: data.manifest_sha256, count: Number(data.photo_count) };
+    const { data, error } = await db.from('care_request_photo_sets').select('manifest_sha256,photo_count,marker_state').eq('request_id', requestId).eq('request_kind', kind).maybeSingle();
+    if (error || !data) return null;
+    const state = data.marker_state ?? 'recorded';
+    const count = Number(data.photo_count);
+    if (!Number.isInteger(count) || count < 1 || count > 3) return null;
+    if (state === 'recorded' && typeof data.manifest_sha256 === 'string') return { state, manifestSha256: data.manifest_sha256, count };
+    if (state === 'legacy_unknown' && data.manifest_sha256 == null) return { state, manifestSha256: null, count };
+    return null;
   } catch { return null; }
 }
 
@@ -51,6 +59,18 @@ export async function recordRequestPhotos(db, requestId, { count, manifestSha256
   const { data, error } = await db.rpc('care_record_request_photos', { p_request_id: requestId, p_count: count, p_manifest_sha256: manifestSha256, p_kind: kind });
   if (error) throw new PhotoError(error.code === 'P0001' && error.message === 'IDEMPOTENCY_CONFLICT' ? 'IDEMPOTENCY_CONFLICT' : 'UNAVAILABLE');
   return data;
+}
+
+// Quota-free heal for a request with no marker. One database call: when Storage metadata
+// shows a complete set (manifest + consecutive photo-1..N) a 'legacy_unknown' marker (no hash)
+// is written; otherwise nothing is. It never reads the quota table, never calls Storage and
+// never invents a hash. Returns the marker ({state, manifestSha256, count}) or null.
+export async function healPhotoMarker(db, requestId, kind = 'account') {
+  const { data, error } = await db.rpc('care_heal_request_photo_marker', { p_request_id: requestId, p_kind: kind });
+  if (error || !data || typeof data.state !== 'string') throw new PhotoError('UNAVAILABLE');
+  if (data.state === 'recorded' && typeof data.manifest_sha256 === 'string') return { state: 'recorded', manifestSha256: data.manifest_sha256, count: Number(data.photo_count) };
+  if (data.state === 'legacy_unknown') return { state: 'legacy_unknown', manifestSha256: null, count: Number(data.photo_count) };
+  return null;
 }
 
 // Stores one photo set and records its marker. `stateOpen` is false when the journey has
@@ -74,20 +94,27 @@ export async function savePhotoSet({ db, bucket, prefix, photos, requestId, kind
 }
 
 // POST /api/v1/care/journey/:id/photos. Order: ownership -> content type -> CSRF ->
-// recorded-set lookup (one PK read) -> quota reservation (account upload of a new
-// set only) -> bounded body -> validation -> hash compare -> storage -> DB marker.
-// A request that already has a recorded set never touches Storage: an identical
-// body (same manifest hash) returns success, a different one IDEMPOTENCY_CONFLICT,
-// and neither takes quota. Otherwise a slot is kept only by the call that creates
-// the marker (save returns {recorded:{replayed:false}}); invalid bodies, failures
-// and 503s release it. Guest and admin-completion uploads take no quota (their sets
-// are write-once; guests are limited by intake).
+// marker lookup (one PK read) -> quota-free heal when there is no marker (one database call,
+// no Storage) -> quota reservation (account upload of a request with no marker only) ->
+// bounded body -> validation -> hash compare -> storage -> DB marker.
+// A request with a 'recorded' marker never touches Storage: an identical body (same manifest
+// hash) returns success, a different one IDEMPOTENCY_CONFLICT, and neither takes quota.
+// A legacy request (photos already in Storage, no marker or 'legacy_unknown') gets a
+// 'legacy_unknown' marker from the heal, never reserves quota (so it works at the limit), and
+// goes through the idempotent Storage path: slots are verified against the body (a different
+// body is IDEMPOTENCY_CONFLICT from the write-once objects, a partial set is completed), then
+// the marker is upgraded to 'recorded' with the real hash of the body. Otherwise a slot is
+// kept only by the call that creates the marker (save returns {recorded:{replayed:false}});
+// invalid bodies, failures and 503s release it. Guest and admin-completion uploads take no
+// quota (their sets are write-once; guests are limited by intake).
 export async function handlePhotoUpload(request, id, deps) {
   const completion = new URL(request.url).searchParams.get('kind') === 'completion';
   const access = await deps.access(request, id, completion);
   if (request.headers.get('content-type')?.split(';')[0].trim() !== 'multipart/form-data') throw new PhotoError('VALIDATION_FAILED');
   if (!deps.isTrustedWrite(request)) throw new PhotoError('CSRF_FAILED');
-  const recorded = completion ? null : await deps.recordedSet(access);
+  let recorded = completion ? null : await deps.recordedSet(access);
+  // A failed heal is not an error: the upload then takes the normal quota and Storage path.
+  if (!completion && !recorded) recorded = await Promise.resolve().then(() => deps.healMarker(access)).catch(() => null);
   const limited = !completion && access.kind === 'account';
   let reservation = null;
   if (limited && !recorded) reservation = await deps.reserveQuota(access);
@@ -101,7 +128,7 @@ export async function handlePhotoUpload(request, id, deps) {
       photos = await deps.readPhotos(data.getAll('photos'));
       if (!photos.length) throw new Error();
     } catch { throw new PhotoError('VALIDATION_FAILED'); }
-    if (recorded) {
+    if (recorded?.state === 'recorded') {
       const incoming = manifestDigest(photos);
       if (incoming.count !== recorded.count || incoming.manifestSha256 !== recorded.manifestSha256) throw new PhotoError('IDEMPOTENCY_CONFLICT');
       return { status: 201, data: { stored: photos.length }, account: access.account };
@@ -111,5 +138,29 @@ export async function handlePhotoUpload(request, id, deps) {
     return { status: 201, data: { stored: photos.length }, account: access.account };
   } finally {
     if (reservation && !keep) await deps.releaseQuota(access, reservation);
+  }
+}
+
+// Guest intake: records the marker after the photos are stored, like the authenticated path.
+// A request that already has a recorded set is compared by manifest hash BEFORE any Storage
+// call (an intake retry with the same Idempotency-Key costs zero Storage I/O; different
+// photos are IDEMPOTENCY_CONFLICT). With no marker, or a 'legacy_unknown' one, the immutable
+// slots are written/verified idempotently and the marker is then recorded (or upgraded with
+// the real hash). Guests take no quota. Errors are GuestError codes for guestHandler.
+export async function saveGuestIntakePhotos({ db, bucket, requestId, photos }) {
+  if (!photos.length) return null;
+  try {
+    const recorded = await recordedPhotoSet(db, requestId, 'guest');
+    if (recorded?.state === 'recorded') {
+      const incoming = manifestDigest(photos);
+      if (incoming.count !== recorded.count || incoming.manifestSha256 !== recorded.manifestSha256) throw new PhotoError('IDEMPOTENCY_CONFLICT');
+      return { replayed: true };
+    }
+    const stored = await storeCarePhotos(bucket, `guest-requests/${requestId}`, photos);
+    await recordRequestPhotos(db, requestId, stored, 'guest');
+    return { replayed: false };
+  } catch (error) {
+    if (error instanceof PhotoError) throw new GuestError(error.code === 'IDEMPOTENCY_CONFLICT' ? 'IDEMPOTENCY_CONFLICT' : 'UNAVAILABLE');
+    throw error;
   }
 }

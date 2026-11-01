@@ -1,7 +1,7 @@
 import { guestCookie } from '@/server/care/journey/access.mjs';
 import { getPublicEnvironment } from '@/server/env';
 import { createHmac } from 'node:crypto';
-import { storeGuestPhotos } from '@/server/care/guest-photos.mjs';
+import { saveGuestIntakePhotos } from '@/server/care/journey/photo-service.mjs';
 import { guestReceipt } from '@/domain/care/guest.mjs';
 import { guestHandler } from '@/server/care/guest-http.mjs';
 import { GuestError } from '@/domain/care/guest.mjs';
@@ -34,7 +34,7 @@ export const POST = guestHandler({
       throw new GuestError('UNAVAILABLE');
     }
     const receipt = guestReceipt(data);
-    await storeGuestPhotos(client.storage.from('private-media'), receipt.id, photos);
+    await saveGuestIntakePhotos({db:client,bucket:client.storage.from('private-media'),requestId:receipt.id,photos});
     return receipt;
   },
 });

@@ -5,7 +5,7 @@ import { featureEnabled,requireSupabaseSecretConfig } from '@/server/env';
 import { verifyGuestCookie } from './access.mjs';
 import { JourneyError,identifier } from './http';
 import {verifyCompletionEvidence} from '@/server/care/completion-evidence.mjs';
-import { PhotoError,reservePhotoSlot,releasePhotoSlot,recordedPhotoSet,savePhotoSet } from './photo-service.mjs';
+import { PhotoError,reservePhotoSlot,releasePhotoSlot,recordedPhotoSet,savePhotoSet,healPhotoMarker } from './photo-service.mjs';
 
 type Photo = {bytes:Buffer;mimeType:string;hash:string};
 type ManifestEntry = {slot:number;mime_type:string;size_bytes:number;sha256:string};
@@ -76,6 +76,7 @@ export async function saveJourneyPhotos(access:JourneyAccess,photos:Photo[],comp
 export async function reserveJourneyPhotoSlot(access:JourneyAccess){return reservePhotoSlot(access.db,access);}
 export async function releaseJourneyPhotoSlot(access:JourneyAccess,reservation:{subject:string;windowStart:string}){return releasePhotoSlot(access.db,reservation);}
 export async function journeyRecordedPhotoSet(access:JourneyAccess){return recordedPhotoSet(access.db,access.id,access.kind);}
+export async function healJourneyPhotoMarker(access:JourneyAccess){return healPhotoMarker(access.db,access.id,access.kind);}
 export {PhotoError};
 export async function journeySnapshot(access:JourneyAccess) {
  const results=await Promise.all([

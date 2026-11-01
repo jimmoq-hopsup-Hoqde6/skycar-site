@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { journeyBoundary, journeyJson, boundedBody, JourneyError } from '../../src/server/care/journey/http.ts';
 import {
   PHOTO_UPLOAD_LIMIT, PHOTO_UPLOAD_WINDOW_SECONDS,
-  PhotoError, handlePhotoUpload, recordedPhotoSet, recordRequestPhotos, releasePhotoSlot, reservePhotoSlot, savePhotoSet,
+  PhotoError, handlePhotoUpload, healPhotoMarker, recordedPhotoSet, recordRequestPhotos, releasePhotoSlot, reservePhotoSlot, saveGuestIntakePhotos, savePhotoSet,
 } from '../../src/server/care/journey/photo-service.mjs';
 import { manifestDigest, readGuestPhotos, storeCarePhotos, verifyStoredCarePhotos } from '../../src/server/care/guest-photos.mjs';
 import { isTrustedWriteOrigin } from '../../src/server/http/request-origin.mjs';
@@ -31,9 +31,9 @@ const prefixOf = access => `${access.kind === 'guest' ? 'guest-requests' : 'care
 // different hash; every Storage call is counted so tests can assert zero I/O.
 function world({ limit = PHOTO_UPLOAD_LIMIT, failReserve = false } = {}) {
   const counts = new Map(); const markers = new Map(); const objects = new Map();
-  const calls = { reserve: 0, release: 0, record: 0, lookup: 0 };
+  const calls = { reserve: 0, release: 0, record: 0, lookup: 0, heal: 0 };
   const io = { upload: 0, download: 0 };
-  const flags = { storageFail: 0, markerFail: 0, journeyOpen: true };
+  const flags = { storageFail: 0, markerFail: 0, healFail: 0, noMetadata: false, beforeRecord: null, journeyOpen: true };
   const db = {
     async rpc(name, args) {
       await Promise.resolve();
@@ -53,11 +53,31 @@ function world({ limit = PHOTO_UPLOAD_LIMIT, failReserve = false } = {}) {
       }
       if (name === 'care_record_request_photos') {
         calls.record += 1;
+        if (flags.beforeRecord) { const hook = flags.beforeRecord; flags.beforeRecord = null; await hook(); }
         if (flags.markerFail > 0) { flags.markerFail -= 1; return { data: null, error: { code: '57014', message: SECRET } }; }
         const current = markers.get(args.p_request_id);
-        if (current && (current.manifest_sha256 !== args.p_manifest_sha256 || current.photo_count !== args.p_count || current.request_kind !== args.p_kind)) return { data: null, error: { code: 'P0001', message: 'IDEMPOTENCY_CONFLICT' } };
-        if (!current) markers.set(args.p_request_id, { manifest_sha256: args.p_manifest_sha256, photo_count: args.p_count, request_kind: args.p_kind });
+        if (current && current.request_kind !== args.p_kind) return { data: null, error: { code: 'P0001', message: 'IDEMPOTENCY_CONFLICT' } };
+        if (current?.marker_state === 'legacy_unknown') {
+          markers.set(args.p_request_id, { ...current, marker_state: 'recorded', manifest_sha256: args.p_manifest_sha256, photo_count: args.p_count });
+          return { data: { request_id: args.p_request_id, photo_count: args.p_count, replayed: false }, error: null };
+        }
+        if (current && (current.manifest_sha256 !== args.p_manifest_sha256 || current.photo_count !== args.p_count)) return { data: null, error: { code: 'P0001', message: 'IDEMPOTENCY_CONFLICT' } };
+        if (!current) markers.set(args.p_request_id, { manifest_sha256: args.p_manifest_sha256, photo_count: args.p_count, request_kind: args.p_kind, marker_state: 'recorded' });
         return { data: { request_id: args.p_request_id, photo_count: args.p_count, replayed: Boolean(current) }, error: null };
+      }
+      if (name === 'care_heal_request_photo_marker') {
+        calls.heal += 1;
+        if (flags.healFail > 0) { flags.healFail -= 1; return { data: null, error: { code: '57014', message: SECRET } }; }
+        let current = markers.get(args.p_request_id);
+        // Mirrors the SQL: Storage METADATA only (names), manifest + consecutive photo-1..N, never a hash.
+        const folder = args.p_kind === 'guest' ? 'guest-requests' : 'care-requests';
+        const names = [...objects.keys()].filter(name => name.startsWith(`${folder}/${args.p_request_id}/`)).map(name => name.split('/')[2]);
+        const slots = names.filter(name => /^photo-\d+$/.test(name)).sort();
+        const complete = names.includes('manifest.json') && slots.length >= 1 && slots.length <= 3 && slots.every((name, index) => name === `photo-${index + 1}`);
+        let healed = false;
+        if (!current && complete && !flags.noMetadata) { current = { manifest_sha256: null, photo_count: slots.length, request_kind: args.p_kind, marker_state: 'legacy_unknown' }; markers.set(args.p_request_id, current); healed = true; }
+        if (!current) return { data: { state: 'none', healed: false }, error: null };
+        return { data: { request_id: args.p_request_id, photo_count: current.photo_count, state: current.marker_state, manifest_sha256: current.manifest_sha256, healed }, error: null };
       }
       throw new Error(`unexpected rpc ${name}`);
     },
@@ -65,7 +85,7 @@ function world({ limit = PHOTO_UPLOAD_LIMIT, failReserve = false } = {}) {
       assert.equal(table, 'care_request_photo_sets');
       return { select: () => ({ eq: (_c1, requestId) => ({ eq: (_c2, kind) => ({ async maybeSingle() {
         calls.lookup += 1; const row = markers.get(requestId);
-        return { data: row && row.request_kind === kind ? { manifest_sha256: row.manifest_sha256, photo_count: row.photo_count } : null, error: null };
+        return { data: row && row.request_kind === kind ? { manifest_sha256: row.manifest_sha256, photo_count: row.photo_count, marker_state: row.marker_state } : null, error: null };
       } }) }) }) };
     },
   };
@@ -89,6 +109,7 @@ function harness({ access = async (_request, requestId) => accountAccess(owner, 
     access: async (...args) => { events.push('access'); return access(...args); },
     isTrustedWrite: request => { events.push('csrf'); return isTrustedWriteOrigin(request); },
     recordedSet: async value => { events.push('lookup'); return recordedPhotoSet(state.db, value.id, value.kind); },
+    healMarker: async value => { events.push('heal'); return healPhotoMarker(state.db, value.id, value.kind); },
     reserveQuota: async value => { events.push('reserve'); return reservePhotoSlot(state.db, value); },
     releaseQuota: async (_value, reservation) => { events.push('release'); return releasePhotoSlot(state.db, reservation); },
     readBody: async (...args) => { events.push('body'); return boundedBody(...args); },
@@ -110,7 +131,7 @@ test('upload checks ownership, CSRF and the recorded set, reserves, and only the
   assert.deepEqual(await response.json(), { data: { stored: 2 } });
   assert.equal(response.headers.get('x-skycar-account'), owner);
   assert.equal(response.headers.get('cache-control'), 'private, no-store');
-  assert.deepEqual(h.events, ['access', 'csrf', 'lookup', 'reserve', 'body', 'save']);
+  assert.deepEqual(h.events, ['access', 'csrf', 'lookup', 'heal', 'reserve', 'body', 'save']);
   assert.equal(h.saves[0].photos.length, 2);
   assert.equal(h.state.used(), 1);
   assert.equal(h.state.calls.release, 0);
@@ -209,9 +230,13 @@ test('a 503 (storage or marker failure) releases the slot and the identical retr
   assert.equal(h.state.used(), 0);
   assert.equal(h.state.markers.size, 0);
   assert.equal((await h.post(upload(2))).status, 201);
-  assert.equal(h.state.used(), 1, 'the set that finally succeeded counts once');
-  assert.equal(h.state.calls.reserve, 3); assert.equal(h.state.calls.release, 2);
+  // The marker-503 call stored the whole set, so the retry heals it from Storage metadata for
+  // free (quota-free heal) and then records the real hash: that set is never charged.
+  assert.equal(h.state.used(), 0, 'a set whose marker write failed is healed free');
+  assert.equal(h.state.calls.reserve, 2); assert.equal(h.state.calls.release, 2);
   assert.equal(h.state.markers.size, 1);
+  assert.equal(h.state.markers.get(id).marker_state, 'recorded');
+  assert.equal(h.state.markers.get(id).manifest_sha256.length, 64);
 });
 
 test('503-then-retry for ten different requests never reaches the limit', async () => {
@@ -259,19 +284,118 @@ test('40 concurrent replays and 40 concurrent conflicting sets cause zero Storag
   assert.equal(h.state.used(), 1);
 });
 
-test('legacy sets (objects stored, no marker) are healed by one identical upload, after which replays are free', async () => {
+test('legacy sets (objects stored, no marker) heal quota-free from metadata, upgrade to the real hash, then replays are free', async () => {
   const h = harness();
-  const access = accountAccess();
   const first = await readGuestPhotos([photo(300), photo(301)]);
-  await storeCarePhotos(h.state.bucket, prefixOf(access), first);
+  await storeCarePhotos(h.state.bucket, prefixOf(accountAccess()), first);
   assert.equal(h.state.markers.size, 0);
   assert.equal((await h.post(upload(2))).status, 201);
+  assert.deepEqual(h.events, ['access', 'csrf', 'lookup', 'heal', 'body', 'save'], 'no quota step for a legacy request');
   assert.equal(h.state.markers.size, 1);
-  assert.equal(h.state.used(), 1, 'recording the marker is the one success that counts');
+  assert.equal(h.state.markers.get(id).marker_state, 'recorded');
+  assert.equal(h.state.markers.get(id).manifest_sha256, manifestDigest(first).manifestSha256, 'the hash comes from the body, verified against Storage');
+  assert.equal(h.state.calls.reserve, 0); assert.equal(h.state.used(), 0, 'legacy healing never consumes quota');
   h.state.io.upload = 0; h.state.io.download = 0;
   assert.equal((await h.post(upload(2))).status, 201);
   assert.equal(h.state.storageCalls(), 0);
-  assert.equal(h.state.used(), 1);
+  assert.equal(h.state.used(), 0);
+});
+
+test('legacy heal works at the upload limit: no reserve, no 429, no new objects, real hash recorded', async () => {
+  const h = harness();
+  for (let n = 1; n <= PHOTO_UPLOAD_LIMIT; n++) assert.equal((await post(h, n)).status, 201);
+  assert.equal(h.state.used(), PHOTO_UPLOAD_LIMIT);
+  assert.equal((await post(h, 99, 1, 700)).status, 429, 'the account is at its limit');
+  const legacyId = uuid(50);
+  const stored = await readGuestPhotos([photo(400), photo(401)]);
+  await storeCarePhotos(h.state.bucket, prefixOf(accountAccess(owner, legacyId)), stored);
+  const objectsBefore = h.state.objects.size; const reserves = h.state.calls.reserve;
+  assert.equal((await h.post(upload(2, {}, urlFor(legacyId), 400), legacyId)).status, 201, 'identical re-send heals at the limit');
+  assert.equal(h.state.calls.reserve, reserves, 'not even a reservation attempt');
+  assert.equal(h.state.used(), PHOTO_UPLOAD_LIMIT);
+  assert.equal(h.state.objects.size, objectsBefore, 'nothing new in Storage');
+  assert.equal(h.state.markers.get(legacyId).manifest_sha256, manifestDigest(stored).manifestSha256);
+  // A different body for the same legacy request is the write-once conflict, still free.
+  const other = uuid(51);
+  await storeCarePhotos(h.state.bucket, prefixOf(accountAccess(owner, other)), stored);
+  const conflict = await h.post(upload(2, {}, urlFor(other), 500), other);
+  assert.equal(conflict.status, 409);
+  assert.equal((await conflict.json()).error.code, 'IDEMPOTENCY_CONFLICT');
+  assert.equal(h.state.markers.get(other).marker_state, 'legacy_unknown', 'the marker stays legacy, never a fabricated hash');
+  assert.equal(h.state.markers.get(other).manifest_sha256, null);
+  assert.equal(h.state.used(), PHOTO_UPLOAD_LIMIT);
+});
+
+test('a legacy_unknown marker skips the heal and the quota; the identical re-send upgrades it', async () => {
+  const h = harness();
+  const stored = await readGuestPhotos([photo(300), photo(301)]);
+  await storeCarePhotos(h.state.bucket, prefixOf(accountAccess()), stored);
+  h.state.markers.set(id, { manifest_sha256: null, photo_count: 2, request_kind: 'account', marker_state: 'legacy_unknown' });
+  assert.equal((await h.post(upload(2))).status, 201);
+  assert.deepEqual(h.events, ['access', 'csrf', 'lookup', 'body', 'save']);
+  assert.equal(h.state.calls.heal, 0); assert.equal(h.state.calls.reserve, 0);
+  assert.equal(h.state.markers.get(id).marker_state, 'recorded');
+  assert.equal(h.state.markers.get(id).manifest_sha256, manifestDigest(stored).manifestSha256);
+  // A different body against a legacy marker is the Storage-level conflict and leaves it legacy.
+  const other = uuid(60);
+  await storeCarePhotos(h.state.bucket, prefixOf(accountAccess(owner, other)), stored);
+  h.state.markers.set(other, { manifest_sha256: null, photo_count: 2, request_kind: 'account', marker_state: 'legacy_unknown' });
+  assert.equal((await h.post(upload(2, {}, urlFor(other), 900), other)).status, 409);
+  assert.equal(h.state.markers.get(other).marker_state, 'legacy_unknown');
+  assert.equal(h.state.used(), 0);
+});
+
+test('a partial legacy set is completed by the identical re-send without quota; a set with a gap is not healed', async () => {
+  const h = harness();
+  const photos = await readGuestPhotos([photo(300), photo(301)]);
+  await storeCarePhotos(h.state.bucket, prefixOf(accountAccess()), photos);
+  h.state.objects.delete(`${prefixOf(accountAccess())}/photo-2`);
+  assert.equal((await h.post(upload(2))).status, 201);
+  assert.equal(h.state.used(), 0);
+  assert.equal(h.state.markers.get(id).photo_count, 2);
+  assert.notEqual(await verifyStoredCarePhotos(h.state.bucket, prefixOf(accountAccess()), photos), null, 'the missing slot was written');
+  const gap = harness();
+  await storeCarePhotos(gap.state.bucket, prefixOf(accountAccess()), photos);
+  gap.state.objects.delete(`${prefixOf(accountAccess())}/photo-1`);
+  assert.equal(await healPhotoMarker(gap.state.db, id, 'account'), null, 'photo-2 without photo-1 is not a set');
+  assert.equal(gap.state.markers.size, 0);
+  assert.equal((await gap.post(upload(2))).status, 201, 'the normal charged path still works');
+  assert.equal(gap.state.used(), 1);
+});
+
+test('a failing or metadata-blind heal falls back to the charged path and never breaks the upload', async () => {
+  for (const mode of ['healFail', 'noMetadata']) {
+    const h = harness();
+    const photos = await readGuestPhotos([photo(300), photo(301)]);
+    await storeCarePhotos(h.state.bucket, prefixOf(accountAccess()), photos);
+    if (mode === 'healFail') h.state.flags.healFail = 1; else h.state.flags.noMetadata = true;
+    assert.equal((await h.post(upload(2))).status, 201, mode);
+    assert.equal(h.state.calls.reserve, 1, `${mode}: the old path reserves`);
+    assert.equal(h.state.used(), 1, `${mode}: charged once, by the call that recorded the set`);
+    assert.equal(h.state.markers.get(id).marker_state, 'recorded');
+    assert.equal((await h.post(upload(2))).status, 201);
+    assert.equal(h.state.used(), 1, 'replay is free');
+  }
+});
+
+test('invalid bodies never cause Storage I/O or a heal write; heal precedes only quota and body', async () => {
+  const h = harness();
+  const photos = await readGuestPhotos([photo(300)]);
+  await storeCarePhotos(h.state.bucket, prefixOf(accountAccess()), photos);
+  h.state.io.upload = 0; h.state.io.download = 0;
+  const bad = new Request(urlFor(id), { method: 'POST', body: new FormData(), headers: { origin: 'https://skycar.test' } });
+  assert.equal((await h.post(bad)).status, 400);
+  assert.equal(h.state.storageCalls(), 0, 'no Storage API call for an invalid body');
+  assert.equal(h.state.used(), 0);
+});
+
+test('race: a heal landing between the upload reserving a slot and recording keeps that slot (the upgrade counts as creation)', async () => {
+  const h = harness();
+  h.state.flags.beforeRecord = () => healPhotoMarker(h.state.db, id, 'account');
+  assert.equal((await h.post(upload(2))).status, 201);
+  assert.equal(h.state.markers.get(id).marker_state, 'recorded');
+  assert.equal(h.state.used(), 1, 'the set was created by this call: the slot is kept, so the limit cannot be bypassed');
+  assert.equal(h.state.calls.release, 0);
 });
 
 test('marker 503 then a journey transition: the identical retry heals the marker without writing to Storage', async () => {
@@ -283,9 +407,10 @@ test('marker 503 then a journey transition: the identical retry heals the marker
   h.state.io.upload = 0; h.state.io.download = 0;
   const healed = await h.post(upload(2));
   assert.equal(healed.status, 201);
+  assert.equal(h.state.markers.get(id).marker_state, 'recorded');
   assert.equal(h.state.markers.size, 1, 'marker healed');
   assert.equal(h.state.io.upload, 0, 'healing writes nothing to Storage');
-  assert.equal(h.state.used(), 1, 'the set is charged once, by the call that recorded it');
+  assert.equal(h.state.used(), 0, 'healing a legacy set is quota-free');
   h.state.io.download = 0;
   assert.equal((await h.post(upload(2))).status, 201);
   assert.equal(h.state.storageCalls(), 0, 'then replays are free');
@@ -299,9 +424,10 @@ test('after a transition only an identical complete stored set may heal; anythin
   const different = await h.post(upload(2, {}, urlFor(id), 500));
   assert.equal(different.status, 409);
   assert.equal((await different.json()).error.code, 'INVALID_TRANSITION');
-  assert.equal(h.state.markers.size, 0);
+  assert.equal(h.state.markers.get(id).marker_state, 'legacy_unknown', 'the stored set is real, so it reports photos, with no hash');
+  assert.equal(h.state.markers.get(id).manifest_sha256, null);
   assert.equal(h.state.io.upload, uploadsBefore, 'nothing new is written after the transition');
-  assert.equal(h.state.used(), 0, 'the rejected attempt released its slot');
+  assert.equal(h.state.used(), 0, 'no quota involved');
   // A partial stored set (a missing slot) is not healed.
   const partial = harness();
   const photos = await readGuestPhotos([photo(300), photo(301)]);
@@ -310,8 +436,8 @@ test('after a transition only an identical complete stored set may heal; anythin
   partial.state.flags.journeyOpen = false;
   const response = await partial.post(upload(2));
   assert.equal(response.status, 409);
-  assert.equal(partial.state.markers.size, 0);
-  assert.equal(partial.state.used(), 0, 'the failed heal released its slot');
+  assert.equal(partial.state.markers.get(id).marker_state, 'legacy_unknown', 'a manifest plus photo-1 is observed, never upgraded to recorded');
+  assert.equal(partial.state.used(), 0, 'legacy request: no quota involved');
   // Nothing stored at all: nothing is written once the journey moved on.
   const empty = harness(); empty.state.flags.journeyOpen = false;
   assert.equal((await empty.post(upload(1))).status, 409);
@@ -414,15 +540,87 @@ test('marker recording passes only counts and hashes, maps a conflict and fails 
   await assert.rejects(recordRequestPhotos({ async rpc() { return { data: null, error: { code: '57014', message: SECRET } }; } }, id, { count: 1, manifestSha256: 'a'.repeat(64) }), error => error.code === 'UNAVAILABLE' && !error.message.includes(SECRET));
 });
 
-test('the recorded-set lookup filters by kind and treats errors as not recorded (so quota is still reserved)', async () => {
+test('the recorded-set lookup filters by kind, maps both states and treats errors or corrupt rows as not recorded', async () => {
   const seen = [];
-  const row = { manifest_sha256: 'd'.repeat(64), photo_count: 2 };
-  const ok = { from: () => ({ select: cols => ({ eq: (c1, v1) => ({ eq: (c2, v2) => ({ maybeSingle: async () => { seen.push([cols, c1, v1, c2, v2]); return { data: row, error: null }; } }) }) }) }) };
-  assert.deepEqual(await recordedPhotoSet(ok, id, 'guest'), { manifestSha256: 'd'.repeat(64), count: 2 });
-  assert.deepEqual(seen, [['manifest_sha256,photo_count', 'request_id', id, 'request_kind', 'guest']]);
+  const lookup = row => ({ from: () => ({ select: cols => ({ eq: (c1, v1) => ({ eq: (c2, v2) => ({ maybeSingle: async () => { seen.push([cols, c1, v1, c2, v2]); return { data: row, error: null }; } }) }) }) }) });
+  const hash = 'd'.repeat(64);
+  assert.deepEqual(await recordedPhotoSet(lookup({ manifest_sha256: hash, photo_count: 2, marker_state: 'recorded' }), id, 'guest'), { state: 'recorded', manifestSha256: hash, count: 2 });
+  assert.deepEqual(seen, [['manifest_sha256,photo_count,marker_state', 'request_id', id, 'request_kind', 'guest']]);
+  assert.deepEqual(await recordedPhotoSet(lookup({ manifest_sha256: null, photo_count: 2, marker_state: 'legacy_unknown' }), id), { state: 'legacy_unknown', manifestSha256: null, count: 2 });
+  for (const bad of [{ manifest_sha256: null, photo_count: 2, marker_state: 'recorded' }, { manifest_sha256: hash, photo_count: 2, marker_state: 'legacy_unknown' }, { manifest_sha256: hash, photo_count: 4, marker_state: 'recorded' }, { manifest_sha256: hash, photo_count: 2, marker_state: 'x' }, null]) {
+    assert.equal(await recordedPhotoSet(lookup(bad), id), null, JSON.stringify(bad));
+  }
   assert.equal(await recordedPhotoSet({ from() { throw new Error(SECRET); } }, id), null);
-  const errored = { from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: { message: 'x' } }) }) }) }) }) };
+  const errored = { from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { manifest_sha256: hash, photo_count: 2, marker_state: 'recorded' }, error: { message: 'x' } }) }) }) }) }) };
   assert.equal(await recordedPhotoSet(errored, id), null);
+});
+
+test('healPhotoMarker maps the RPC states, passes id and kind, and fails closed without leaking detail', async () => {
+  const seen = []; const reply = data => ({ rpc: async (name, args) => { seen.push([name, args]); return { data, error: null }; } });
+  const hash = 'e'.repeat(64);
+  assert.equal(await healPhotoMarker(reply({ state: 'none', healed: false }), id, 'account'), null);
+  assert.deepEqual(await healPhotoMarker(reply({ state: 'legacy_unknown', photo_count: 3, manifest_sha256: null }), id, 'guest'), { state: 'legacy_unknown', manifestSha256: null, count: 3 });
+  assert.deepEqual(await healPhotoMarker(reply({ state: 'recorded', photo_count: 1, manifest_sha256: hash }), id), { state: 'recorded', manifestSha256: hash, count: 1 });
+  assert.deepEqual(seen[0], ['care_heal_request_photo_marker', { p_request_id: id, p_kind: 'account' }]);
+  assert.equal(seen[1][1].p_kind, 'guest');
+  for (const broken of [{ data: null, error: { message: SECRET } }, { data: null, error: null }, { data: { state: 5 }, error: null }]) {
+    await assert.rejects(healPhotoMarker({ rpc: async () => broken }, id), error => error instanceof PhotoError && error.code === 'UNAVAILABLE' && !String(error.message).includes(SECRET));
+  }
+});
+
+test('guest intake records the marker after storing, compares replays with the marker before any Storage call, and upgrades legacy guests', async () => {
+  const guestId = uuid(70); const dir = `guest-requests/${guestId}`;
+  const files = (base = 300, n = 2) => Promise.all(Array.from({ length: n }, (_, i) => photo(base + i))).then(readGuestPhotos);
+  const run = (state, photos, requestId = guestId) => saveGuestIntakePhotos({ db: state.db, bucket: state.bucket, requestId, photos });
+  // No photos: nothing happens.
+  const none = world();
+  assert.equal(await run(none, []), null);
+  assert.deepEqual([none.storageCalls(), none.calls.record], [0, 0]);
+  // First intake stores, then records the guest marker with the manifest hash; the guest kind is used.
+  const state = world(); const photos = await files();
+  const first = await run(state, photos);
+  assert.equal(first.replayed, false);
+  assert.equal(state.markers.get(guestId).request_kind, 'guest');
+  assert.equal(state.markers.get(guestId).manifest_sha256, manifestDigest(photos).manifestSha256);
+  assert.equal(state.markers.get(guestId).photo_count, 2);
+  assert.ok(state.objects.has(`${dir}/manifest.json`) && state.objects.has(`${dir}/photo-2`));
+  assert.equal(state.used(), 0, 'guest intake takes no account quota');
+  // An identical replay is decided from the marker: zero Storage I/O, no second record.
+  state.io.upload = 0; state.io.download = 0; const records = state.calls.record; const lookups = state.calls.lookup;
+  assert.equal((await run(state, await files())).replayed, true);
+  assert.equal(state.storageCalls(), 0, 'no Storage call before the marker comparison');
+  assert.equal(state.calls.record, records); assert.equal(state.calls.lookup, lookups + 1);
+  // A different body is a conflict decided from the marker, again without Storage I/O.
+  await assert.rejects(run(state, await files(500)), error => error.constructor.name === 'GuestError' && error.code === 'IDEMPOTENCY_CONFLICT');
+  await assert.rejects(run(state, await files(300, 3)), error => error.code === 'IDEMPOTENCY_CONFLICT');
+  assert.equal(state.storageCalls(), 0);
+  // Marker failure after Storage succeeded: UNAVAILABLE, then the identical retry records it.
+  const failing = world(); failing.flags.markerFail = 1;
+  await assert.rejects(run(failing, photos), error => error.code === 'UNAVAILABLE');
+  assert.equal(failing.markers.size, 0);
+  assert.equal((await run(failing, photos)).replayed, false);
+  assert.equal(failing.markers.get(guestId).marker_state, 'recorded');
+  // Storage failure leaves no marker.
+  const broken = world(); broken.flags.storageFail = 1;
+  await assert.rejects(run(broken, photos), error => error.code === 'UNAVAILABLE');
+  assert.equal(broken.markers.size, 0);
+  // Legacy guest (marker legacy_unknown, set already stored): the identical body upgrades it; a
+  // different body is the write-once conflict and the marker stays legacy.
+  const legacy = world();
+  await storeCarePhotos(legacy.bucket, dir, photos);
+  legacy.markers.set(guestId, { manifest_sha256: null, photo_count: 2, request_kind: 'guest', marker_state: 'legacy_unknown' });
+  await assert.rejects(run(legacy, await files(800)), error => error.code === 'IDEMPOTENCY_CONFLICT');
+  assert.equal(legacy.markers.get(guestId).marker_state, 'legacy_unknown');
+  await run(legacy, photos);
+  assert.equal(legacy.markers.get(guestId).marker_state, 'recorded');
+  assert.equal(legacy.markers.get(guestId).manifest_sha256, manifestDigest(photos).manifestSha256);
+});
+
+test('the guest intake route records the marker through saveGuestIntakePhotos instead of storing blindly', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync('src/app/api/v1/care/guest-requests/route.ts', 'utf8');
+  assert.match(source, /saveGuestIntakePhotos\(/);
+  assert.equal(/storeGuestPhotos\(/.test(source), false);
 });
 
 test('route sources never reference service keys and the signed-URL route is gone', async () => {

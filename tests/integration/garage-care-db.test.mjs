@@ -16,6 +16,7 @@ import { verifyTechnicianInbox } from "./technician-inbox.acceptance.mjs";
 import { verifyTechnicianAvailability } from "./technician-availability.acceptance.mjs";
 import { verifyMyJobsJourneyState } from "./my-jobs-journey-state.acceptance.mjs";
 import { verifyRequestPhotos } from "./request-photos.acceptance.mjs";
+import { verifyRequestPhotoMarker } from "./request-photo-marker.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
@@ -118,6 +119,7 @@ before(() => {
     '20261101062300_technician_availability.sql',
     '20261101062400_my_jobs_journey_status.sql',
     '20261101130000_request_photo_flag_and_upload_quota.sql',
+    '20261101150000_request_photo_marker_legacy_state_and_cleanup.sql',
   ], 'combined verification must include every public migration in filename order');
   for (const migration of migrations) file(`supabase/migrations/${migration}`);
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
@@ -305,4 +307,8 @@ test('My Jobs exposes the caller journey state without private issue text', () =
 });
 test('Request photo marker is set only by the trusted route and the upload quota is atomic', async () => {
   await verifyRequestPhotos({ sql, auth, quote, run, carePayload, garageCreate });
+});
+
+test('Legacy photo markers heal quota-free, backfill without fabricated hashes and are removed with their request', async () => {
+  await verifyRequestPhotoMarker({ sql, auth, quote, run, carePayload, garageCreate });
 });
