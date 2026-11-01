@@ -97,6 +97,15 @@ begin
   if p_request_id is null or p_kind is null or p_kind not in ('account', 'guest') then
     return null;
   end if;
+  -- The owner of this function may lack USAGE on schema storage (to_regclass and has_table_privilege
+  -- then raise 42501 instead of answering). Check namespace, schema USAGE, relation and table SELECT
+  -- in that order, one at a time, and answer "unknown" (NULL) rather than fail.
+  if to_regnamespace('storage') is null then
+    return null;
+  end if;
+  if not has_schema_privilege(current_user, 'storage', 'usage') then
+    return null;
+  end if;
   if to_regclass('storage.objects') is null or not has_table_privilege(current_user, 'storage.objects', 'select') then
     return null;
   end if;
@@ -174,12 +183,26 @@ declare
   result jsonb;
   added integer := 0;
 begin
+  -- Prerequisite, checked explicitly and one step at a time (each later call raises 42501 when an
+  -- earlier privilege is missing): schema storage exists, the migration role has USAGE on it, then
+  -- storage.objects exists and the role can SELECT it. Any miss is a NOTICE and a skipped backfill, never
+  -- a failed migration: the lazy heal on the next upload applies instead. Hosted Supabase `postgres`
+  -- has USAGE on storage (verified on staging 1 Nov 2026); if a project's role does not, grant it and
+  -- run `select public.care_backfill_legacy_photo_markers();` again (idempotent).
+  if to_regnamespace('storage') is null then
+    raise notice 'care_backfill_legacy_photo_markers: schema storage does not exist; skipped (lazy heal applies)';
+    return 0;
+  end if;
+  if not has_schema_privilege(current_user, 'storage', 'usage') then
+    raise notice 'care_backfill_legacy_photo_markers: role % has no USAGE on schema storage; skipped (lazy heal applies; grant usage on schema storage to that role and re-run the function)', current_user;
+    return 0;
+  end if;
   if to_regclass('storage.objects') is null then
     raise notice 'care_backfill_legacy_photo_markers: storage.objects is not available; skipped (lazy heal applies)';
     return 0;
   end if;
   if not has_table_privilege(current_user, 'storage.objects', 'select') then
-    raise notice 'care_backfill_legacy_photo_markers: no select on storage.objects; skipped (lazy heal applies)';
+    raise notice 'care_backfill_legacy_photo_markers: role % has no SELECT on storage.objects; skipped (lazy heal applies)', current_user;
     return 0;
   end if;
   for candidate in
