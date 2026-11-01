@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element -- Local blob previews are never sent to the image optimizer. */
 import { useEffect, useRef, useState } from 'react';
+import { photoKind } from '@/domain/care/photo-types';
 
 function PhotoPreview({file,label}: {file: File; label: string}) {
   const image = useRef<HTMLImageElement>(null);
@@ -27,8 +28,9 @@ export function DamagePhotos({purpose='damage',files,disabled,onChange,onProcess
     try {
       const next: File[] = [];
       for (const file of selected) {
-        if (!['image/jpeg','image/png','image/webp'].includes(file.type) || file.size > 15_000_000) throw new Error('Use JPEG, PNG or WebP photos under 15 MB. Export HEIC photos as JPEG first.');
-        const bitmap = await createImageBitmap(file);
+        const kind = photoKind(file);
+        if (!kind || file.size > 15_000_000) throw new Error('Use JPEG, PNG or WebP photos under 15 MB. HEIC photos work only where your browser can open them.');
+        const bitmap = await createImageBitmap(file).catch(() => { throw new Error(kind === 'heic' ? 'This browser cannot open HEIC photos. Choose a JPEG, PNG or WebP copy, or set your camera to the most compatible format.' : 'Could not read this photo. Please try another.'); });
         try {
           if (bitmap.width * bitmap.height > 60_000_000) throw new Error('This photo is too large. Choose a smaller copy.');
           const scale = Math.min(1,1200 / Math.max(bitmap.width,bitmap.height));
