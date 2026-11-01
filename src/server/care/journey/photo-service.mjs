@@ -1,15 +1,10 @@
 // Request-photo server logic with injected dependencies, so route behaviour is
 // unit-testable without Next, Supabase or Storage. Nothing here reads or logs a
-// service key; signed URLs are returned only to the caller who passed access.
+// service key.
+import { manifestDigest, storeCarePhotos, verifyStoredCarePhotos } from '../guest-photos.mjs';
+
 export const PHOTO_UPLOAD_LIMIT = 10;
 export const PHOTO_UPLOAD_WINDOW_SECONDS = 3600;
-// Short, fixed server-side TTL. 120 s covers an <img> load plus one retry of a
-// <= 900,000 byte file on a slow mobile link (about 7 s at 1 Mbps), while a
-// leaked bearer URL stops working within two minutes. Not client-selectable.
-export const SIGNED_URL_TTL_SECONDS = 120;
-export const MIN_SIGNED_URL_TTL_SECONDS = 60;
-export const MAX_SIGNED_URL_TTL_SECONDS = 300;
-
 export class PhotoError extends Error {
   constructor(code, retryAfter) { super(code); this.name = 'PhotoError'; this.code = code; this.retryAfter = retryAfter; }
 }
@@ -41,53 +36,61 @@ export async function releasePhotoSlot(db, reservation) {
   } catch { return false; }
 }
 
-// A request whose photo set is already recorded can store nothing new (the
-// manifest is write-once), so uploads to it are free. Unknown means "not recorded".
-export async function hasRecordedPhotos(db, requestId) {
+// The recorded photo set of a request (account or guest), or null. Unknown (a read
+// error) is treated as "not recorded": the upload then takes the normal quota and
+// Storage path, which is idempotent, so a failed read can never grant a free pass.
+export async function recordedPhotoSet(db, requestId, kind = 'account') {
   try {
-    const { data, error } = await db.from('care_request_photo_sets').select('request_id').eq('request_id', requestId).maybeSingle();
-    return !error && Boolean(data);
-  } catch { return false; }
+    const { data, error } = await db.from('care_request_photo_sets').select('manifest_sha256,photo_count').eq('request_id', requestId).eq('request_kind', kind).maybeSingle();
+    if (error || !data || typeof data.manifest_sha256 !== 'string') return null;
+    return { manifestSha256: data.manifest_sha256, count: Number(data.photo_count) };
+  } catch { return null; }
 }
 
-export async function recordRequestPhotos(db, requestId, { count, manifestSha256 }) {
-  const { data, error } = await db.rpc('care_record_request_photos', { p_request_id: requestId, p_count: count, p_manifest_sha256: manifestSha256 });
+export async function recordRequestPhotos(db, requestId, { count, manifestSha256 }, kind = 'account') {
+  const { data, error } = await db.rpc('care_record_request_photos', { p_request_id: requestId, p_count: count, p_manifest_sha256: manifestSha256, p_kind: kind });
   if (error) throw new PhotoError(error.code === 'P0001' && error.message === 'IDEMPOTENCY_CONFLICT' ? 'IDEMPOTENCY_CONFLICT' : 'UNAVAILABLE');
   return data;
 }
 
-export function clampSignedUrlTtl(value) {
-  const ttl = Number.isInteger(value) ? value : SIGNED_URL_TTL_SECONDS;
-  return Math.min(MAX_SIGNED_URL_TTL_SECONDS, Math.max(MIN_SIGNED_URL_TTL_SECONDS, ttl));
+// Stores one photo set and records its marker. `stateOpen` is false when the journey has
+// moved past the upload window. Then nothing new may be written, but if the identical
+// complete set already sits in Storage (a marker 503 followed by a transition) the marker
+// is healed from it, so has_photos cannot stay false while photos exist.
+// Completion evidence has no marker. Returns {recorded} when a marker was written or confirmed.
+export async function savePhotoSet({ db, bucket, prefix, photos, requestId, kind, completion = false, stateOpen = true }) {
+  if (!stateOpen) {
+    const existing = completion ? null : await verifyStoredCarePhotos(bucket, prefix, photos).catch(() => null);
+    if (!existing) throw new PhotoError('INVALID_TRANSITION');
+    return { recorded: await recordRequestPhotos(db, requestId, existing, kind) };
+  }
+  let stored;
+  try { stored = await storeCarePhotos(bucket, prefix, photos); }
+  catch (error) { throw new PhotoError(error instanceof Error && 'code' in error ? String(error.code) : 'UNAVAILABLE'); }
+  // Storage stays the source of truth; a marker failure is a retryable 503 and the
+  // identical retry re-records it idempotently.
+  if (!completion && stored) return { recorded: await recordRequestPhotos(db, requestId, stored, kind) };
+  return null;
 }
 
-export async function signedPhotoUrl({ storage, prefix, manifest, slot, ttl = SIGNED_URL_TTL_SECONDS, now = () => Date.now() }) {
-  const meta = manifest.find(entry => entry.slot === slot);
-  if (!meta) throw new PhotoError('NOT_FOUND');
-  const seconds = clampSignedUrlTtl(ttl);
-  const { data, error } = await storage.createSignedUrl(`${prefix}/photo-${slot}`, seconds);
-  if (error || !data || typeof data.signedUrl !== 'string') throw new PhotoError('UNAVAILABLE');
-  return {
-    slot, url: data.signedUrl, mime_type: meta.mime_type, size_bytes: meta.size_bytes,
-    expires_in: seconds, expires_at: new Date(now() + seconds * 1000).toISOString(),
-  };
-}
-
-// POST /api/v1/care/journey/:id/photos. Order: ownership -> content type ->
-// CSRF -> quota reservation (account uploads without a recorded set) -> bounded
-// body -> validation -> storage -> DB marker. Quota policy: a slot is kept only
-// by the call that creates the marker (save returns {recorded:{replayed:false}}).
-// Invalid or rejected bodies, any failure/503, and replays release the slot.
-// Guest and admin-completion uploads are not account uploads and are not limited
-// (their sets are write-once; guests are limited by intake).
+// POST /api/v1/care/journey/:id/photos. Order: ownership -> content type -> CSRF ->
+// recorded-set lookup (one PK read) -> quota reservation (account upload of a new
+// set only) -> bounded body -> validation -> hash compare -> storage -> DB marker.
+// A request that already has a recorded set never touches Storage: an identical
+// body (same manifest hash) returns success, a different one IDEMPOTENCY_CONFLICT,
+// and neither takes quota. Otherwise a slot is kept only by the call that creates
+// the marker (save returns {recorded:{replayed:false}}); invalid bodies, failures
+// and 503s release it. Guest and admin-completion uploads take no quota (their sets
+// are write-once; guests are limited by intake).
 export async function handlePhotoUpload(request, id, deps) {
   const completion = new URL(request.url).searchParams.get('kind') === 'completion';
   const access = await deps.access(request, id, completion);
   if (request.headers.get('content-type')?.split(';')[0].trim() !== 'multipart/form-data') throw new PhotoError('VALIDATION_FAILED');
   if (!deps.isTrustedWrite(request)) throw new PhotoError('CSRF_FAILED');
+  const recorded = completion ? null : await deps.recordedSet(access);
   const limited = !completion && access.kind === 'account';
   let reservation = null;
-  if (limited && !(await deps.hasRecordedPhotos(access))) reservation = await deps.reserveQuota(access);
+  if (limited && !recorded) reservation = await deps.reserveQuota(access);
   let keep = false;
   try {
     const bytes = await deps.readBody(request, 2_800_000);
@@ -98,20 +101,15 @@ export async function handlePhotoUpload(request, id, deps) {
       photos = await deps.readPhotos(data.getAll('photos'));
       if (!photos.length) throw new Error();
     } catch { throw new PhotoError('VALIDATION_FAILED'); }
+    if (recorded) {
+      const incoming = manifestDigest(photos);
+      if (incoming.count !== recorded.count || incoming.manifestSha256 !== recorded.manifestSha256) throw new PhotoError('IDEMPOTENCY_CONFLICT');
+      return { status: 201, data: { stored: photos.length }, account: access.account };
+    }
     const outcome = await deps.save(access, photos, completion);
     keep = reservation !== null && outcome?.recorded?.replayed === false;
     return { status: 201, data: { stored: photos.length }, account: access.account };
   } finally {
     if (reservation && !keep) await deps.releaseQuota(access, reservation);
   }
-}
-
-// GET /api/v1/care/journey/:id/photos/:slot/url
-export async function handlePhotoUrl(request, id, slotValue, deps) {
-  if (!/^[1-3]$/.test(slotValue)) throw new PhotoError('NOT_FOUND');
-  const completion = new URL(request.url).searchParams.get('kind') === 'completion';
-  const access = await deps.access(request, id);
-  if (completion) await deps.completionVisible(access);
-  const data = await deps.sign(access, Number(slotValue), completion);
-  return { status: 200, data, account: access.account };
 }
