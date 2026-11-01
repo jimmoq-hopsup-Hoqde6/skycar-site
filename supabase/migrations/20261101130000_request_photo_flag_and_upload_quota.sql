@@ -14,8 +14,12 @@ begin;
 --       identical replays of a recorded set never consume quota.
 -- Browser roles get no table or function privilege on the new objects.
 
+-- One row per request (account request or guest request; both use random UUIDs
+-- that cannot collide). The server compares the hash of an incoming body with
+-- manifest_sha256 before any Storage call, so a replay costs no Storage I/O.
 create table public.care_request_photo_sets (
-  request_id uuid primary key references public.care_requests(id),
+  request_id uuid primary key,
+  request_kind text not null default 'account' check (request_kind in ('account', 'guest')),
   photo_count smallint not null check (photo_count between 1 and 3),
   manifest_sha256 text not null check (manifest_sha256 ~ '^[0-9a-f]{64}$'),
   recorded_at timestamptz not null default clock_timestamp()
@@ -40,7 +44,8 @@ grant select, insert, update, delete on public.care_photo_upload_quota to servic
 create or replace function public.care_record_request_photos(
   p_request_id uuid,
   p_count integer,
-  p_manifest_sha256 text
+  p_manifest_sha256 text,
+  p_kind text default 'account'
 ) returns jsonb
 language plpgsql security invoker set search_path = '' as $$
 declare
@@ -48,20 +53,24 @@ declare
   inserted boolean := false;
 begin
   if p_request_id is null or p_count is null or p_count not between 1 and 3
-    or p_manifest_sha256 is null or p_manifest_sha256 !~ '^[0-9a-f]{64}$' then
+    or p_manifest_sha256 is null or p_manifest_sha256 !~ '^[0-9a-f]{64}$'
+    or p_kind is null or p_kind not in ('account', 'guest') then
     raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
   end if;
-  if not exists (select 1 from public.care_requests where id = p_request_id) then
+  if not exists (
+    select 1 where (p_kind = 'account' and exists (select 1 from public.care_requests where id = p_request_id))
+      or (p_kind = 'guest' and exists (select 1 from public.care_guest_requests where id = p_request_id))
+  ) then
     raise exception using errcode = 'P0001', message = 'NOT_FOUND';
   end if;
-  insert into public.care_request_photo_sets(request_id, photo_count, manifest_sha256)
-  values (p_request_id, p_count, p_manifest_sha256)
+  insert into public.care_request_photo_sets(request_id, request_kind, photo_count, manifest_sha256)
+  values (p_request_id, p_kind, p_count, p_manifest_sha256)
   on conflict (request_id) do nothing
   returning * into stored;
   inserted := found;
   if not inserted then
     select * into stored from public.care_request_photo_sets where request_id = p_request_id;
-    if stored.photo_count <> p_count or stored.manifest_sha256 <> p_manifest_sha256 then
+    if stored.request_kind <> p_kind or stored.photo_count <> p_count or stored.manifest_sha256 <> p_manifest_sha256 then
       raise exception using errcode = 'P0001', message = 'IDEMPOTENCY_CONFLICT';
     end if;
   end if;
@@ -133,8 +142,8 @@ begin
 end;
 $$;
 
-revoke all on function public.care_record_request_photos(uuid, integer, text) from public, anon, authenticated;
-grant execute on function public.care_record_request_photos(uuid, integer, text) to service_role;
+revoke all on function public.care_record_request_photos(uuid, integer, text, text) from public, anon, authenticated;
+grant execute on function public.care_record_request_photos(uuid, integer, text, text) to service_role;
 revoke all on function public.care_reserve_photo_upload_slot(text, integer, integer) from public, anon, authenticated;
 grant execute on function public.care_reserve_photo_upload_slot(text, integer, integer) to service_role;
 revoke all on function public.care_release_photo_upload_slot(text, timestamptz) from public, anon, authenticated;
@@ -171,7 +180,7 @@ begin
       from public.care_requests r
       join public.vehicles v on v.id = r.vehicle_id
       left join public.care_journeys j on j.account_request_id = r.id
-      left join public.care_request_photo_sets ps on ps.request_id = r.id
+      left join public.care_request_photo_sets ps on ps.request_id = r.id and ps.request_kind = 'account'
       where r.customer_id = actor and v.owner_id = actor
         and (p_vehicle_id is null or r.vehicle_id = p_vehicle_id)
         and (p_before_created_at is null or (r.created_at, r.id) < (p_before_created_at, p_before_id))
