@@ -98,6 +98,30 @@ runs, and an availability write parked on its schedule lock while an admin bind 
 deadlocks. Out-of-band tooling that deactivates an account/expert will now wait for an in-flight
 availability write, as it already does for the technician work commands.
 
+## Hosted prerequisite: `btree_gist` (migration `20261101063000`)
+
+The two exclusion constraints need `btree_gist` (uuid and smallint equality inside GiST). The migration runs
+`create extension if not exists btree_gist with schema extensions` (plain `create extension if not exists btree_gist` if
+no schema named `extensions` exists). **One of these must be true before the migration is applied**, otherwise it fails
+closed with `permission denied to create extension "btree_gist"` / `Must have CREATE privilege on current database`
+(SQLSTATE 42501) and, being one transaction, changes nothing:
+
+1. **Pre-install the extension** (preferred, least privilege for the migration role), as a role allowed to install it:
+   `create extension if not exists btree_gist with schema extensions;`. The migration's own statement then does nothing.
+2. **Or grant the migration role `CREATE` on the database**: `grant create on database <db> to <migration role>;` (on
+   hosted Supabase the `postgres` role already has it; `btree_gist` is a trusted extension, so no superuser is needed).
+
+Staging, read-only check on 1 Nov 2026 (reported by DevOps): `postgres` has CREATE on the database and on schema
+`extensions`, `btree_gist` 1.7 is available and listed in `supautils.privileged_extensions`, and it was not installed yet,
+so option 2 applies as it stands and the migration installs it into schema `extensions`. Any other project, and any CI
+runner that is not `postgres`, must satisfy 1 or 2 first.
+
+Tested in `tests/integration/supabase-admin-sequence-default-acl.acceptance.mjs` on PostgreSQL 17.6 with a non-superuser runner that has
+no CREATE on the database: not pre-installed -> the migration fails with the error above and leaves no constraint and no
+extension; pre-installed in schema `extensions` -> the full chain applies as that runner; runner with `CREATE` on the database
+-> the migration's own block installs `btree_gist` WITH SCHEMA `extensions`. The test no longer grants CREATE to the runner to
+get the chain through.
+
 ## Open questions / follow-ups
 
 - Through #76's RPC the new constraints surface as raw `23514` / `23P01` errors, because its `exception` handler does not map them. Mapping them to `VALIDATION_FAILED` needs another replacement of that function.

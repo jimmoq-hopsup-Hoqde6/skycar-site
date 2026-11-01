@@ -45,6 +45,7 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
   const cleanup = () => {
     sql(`drop database if exists skycar_chain_probe with (force)`);
     sql(`drop database if exists skycar_gate_probe with (force)`);
+    sql(`drop database if exists skycar_ext_probe with (force)`);
     sql(`do $$ declare r text; begin
       foreach r in array array[${roles.map(quote).join(',')}] loop
         if exists (select 1 from pg_roles where rolname = r) then execute format('drop owned by %I', r); execute format('drop role %I', r); end if;
@@ -241,9 +242,9 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
     // ---- Full chain applied by a non-superuser, non-member runner on a hosted-like scratch database.
     sql(`create role supabase_admin superuser nologin; create role sa_runner nologin`);
     sql(`drop database if exists skycar_chain_probe with (force)`); sql(`create database skycar_chain_probe`);
-    // 20261101063000 runs CREATE EXTENSION btree_gist (a trusted extension), which needs CREATE on the database;
-    // the hosted migration role has it. The runner stays non-superuser and a non-member of supabase_admin.
-    sql(`grant create on database skycar_chain_probe to sa_runner`);
+    // The runner gets NO create privilege on the database: a hosted-like role that cannot install extensions.
+    // 20261101063000 needs btree_gist; that requirement is tested explicitly below (docs/TECHNICIAN_AVAILABILITY_CONTRACT_RPC.md,
+    // 'Hosted prerequisite: btree_gist'). Hosted projects have a schema named extensions; the migration then installs into it.
     const scratch = statement => spawnSync('psql', [scratchUrl, '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-c', statement], { encoding: 'utf8' });
     const scratchSql = statement => { const result = scratch(statement); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
     const bootstrap = readFileSync('tests/integration/bootstrap.sql', 'utf8').split('\n').filter(line => !/^create role /.test(line)).join('\n');
@@ -257,6 +258,8 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
       end $$;
       alter default privileges for role postgres in schema public revoke all on sequences from anon, authenticated, service_role`);
     scratchSql(`set role sa_runner; alter default privileges in schema public grant all on sequences to anon, authenticated, service_role; reset role`);
+    scratchSql(`create schema extensions; grant usage on schema extensions to sa_runner`);
+    equal(scratchSql(`select has_database_privilege('sa_runner', 'skycar_chain_probe', 'create')`), 'f', 'the runner cannot create objects (extensions) in the database');
     simulateHosted(scratchSql);
     const chain = readdirSync('supabase/migrations').filter(name => name.endsWith('.sql')).sort();
     const aclMigration = '20261101140000_revoke_supabase_admin_sequence_default_acl.sql';
@@ -264,6 +267,17 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
     ok(chain.includes(aclMigration) && chain.at(-1) >= aclMigration, 'the migration is in the chain, with only later migrations after it');
     let last, aclOutput;
     for (const name of chain) {
+      if (name.startsWith('20261101063000_')) {
+        // (a) Requirement, not pre-installed, no CREATE: the migration fails closed and leaves nothing behind.
+        const refused = apply(`supabase/migrations/${name}`, 'sa_runner', scratchUrl);
+        ok(refused.status !== 0 && /permission denied to create extension "btree_gist"/.test(refused.output) && /Must have CREATE privilege on current database/.test(refused.output), `btree_gist: without CREATE and without the extension the migration fails with the documented error: ${refused.output}`);
+        equal(scratchSql(`select count(*) from pg_extension where extname = 'btree_gist'`), '0', 'btree_gist: the failed run installed nothing');
+        equal(scratchSql(`select count(*) from pg_constraint where conname like 'care_technician_availability%_no_overlap'`), '0', 'btree_gist: the failed run is rolled back completely (no exclusion constraint)');
+        // (b) Hosted prerequisite met by pre-installing as a privileged role (postgres on hosted; supautils privileged extension):
+        // the non-CREATE runner now applies the migration, which keeps its create-if-not-exists as a no-op.
+        scratchSql(`create extension btree_gist with schema extensions`);
+        equal(scratchSql(`select extnamespace::regnamespace::text from pg_extension where extname = 'btree_gist'`), 'extensions', 'btree_gist: pre-installed in schema extensions');
+      }
       last = apply(`supabase/migrations/${name}`, 'sa_runner', scratchUrl);
       equal(last.status, 0, `chain: ${name} applies as a non-superuser, non-member runner: ${last.output}`);
       if (name === aclMigration) aclOutput = last.output;
@@ -271,6 +285,23 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
     ok(hasWarning(aclOutput, 'creator=supabase_admin scope=public grantee=anon privilege=USAGE') && hasWarning(aclOutput, 'creator=supabase_admin scope=GLOBAL(all schemas) grantee=anon privilege=USAGE'), 'the chain reports the supabase_admin defaults it cannot change');
     equal(scratchSql(`select count(*) from pg_class where relnamespace='public'::regnamespace and relname in ('care_requests','care_journeys','care_journey_events')`), '3', 'the full chain created its tables');
     equal(browserDefaults('sa_runner', scratchSql), 'none', 'the runner\'s own defaults are clean after the chain');
+    equal(scratchSql(`select count(*) from pg_constraint where conname in ('care_technician_availability_windows_no_overlap', 'care_technician_availability_exception_windows_no_overlap')`), '2', 'btree_gist: both exclusion constraints exist after the pre-installed path');
+    // (c) The alternative requirement: the runner holds CREATE on the database (hosted postgres does):
+    // the migration's own extension block installs btree_gist into schema extensions.
+    const extensionBlock = readFileSync('supabase/migrations/20261101063000_technician_availability_enforcement_delta.sql', 'utf8').match(/do \$\$[^$]*btree_gist[\s\S]*?end \$\$;/)?.[0];
+    ok(extensionBlock && /with schema extensions/.test(extensionBlock), 'btree_gist: the migration installs the extension WITH SCHEMA extensions when that schema exists');
+    sql(`drop database if exists skycar_ext_probe with (force)`); sql(`create database skycar_ext_probe`);
+    const extUrl = (() => { const url = new URL(database); url.pathname = '/skycar_ext_probe'; return url.toString(); })();
+    const extRun = (statement, role = 'sa_runner') => spawnSync('psql', [extUrl, '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-c', `${role ? `set role ${role}; ` : ''}${statement}`], { encoding: 'utf8' });
+    const extAdmin = statement => { const r = extRun(statement, null); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+    extAdmin(`create schema extensions; grant usage on schema extensions to sa_runner`);
+    const noCreate = extRun(extensionBlock);
+    ok(noCreate.status !== 0 && /permission denied to create extension "btree_gist"/.test(noCreate.stderr), `btree_gist: the migration's own block fails for a runner without CREATE: ${noCreate.stderr}`);
+    extAdmin(`grant create on database skycar_ext_probe to sa_runner`);
+    const granted = extRun(extensionBlock);
+    equal(granted.status, 0, `btree_gist: with CREATE on the database (usage on schema extensions) the migration block installs it (PostgreSQL 17.6, trusted extension): ${granted.stderr}`);
+    equal(extAdmin(`select extnamespace::regnamespace::text from pg_extension where extname = 'btree_gist'`), 'extensions', 'btree_gist: installed WITH SCHEMA extensions');
+    sql(`drop database if exists skycar_ext_probe with (force)`);
     const chainGate = apply(gateFile, null, scratchUrl);
     ok(chainGate.status !== 0 && /NO-GO/.test(chainGate.output), 'the gate is NO-GO until supabase_admin runs the ops script');
     const chainOps = apply(opsFile, 'supabase_admin', scratchUrl);
