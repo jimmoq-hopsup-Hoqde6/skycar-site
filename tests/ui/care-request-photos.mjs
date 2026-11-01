@@ -42,6 +42,8 @@ try {
       if (outcome === "abort") return route.abort("failed");
       if (outcome === "limited") return route.fulfill({ status: 429, headers: { "Retry-After": "3" }, json: { error: { code: "RATE_LIMITED", message: "Too many photo uploads. Wait a little, then retry the same photos.", retryable: true } } });
       if (outcome === "limited-no-header") return route.fulfill({ status: 429, json: { error: { code: "RATE_LIMITED", message: "Too many photo uploads. Wait a little, then retry the same photos.", retryable: true } } });
+      if (outcome === "invalid") return route.fulfill({ status: 400, json: { error: { code: "VALIDATION_FAILED", message: "Check the details, price and appointment times.", retryable: false } } });
+      if (outcome === "toolarge") return route.fulfill({ status: 413, json: { error: { code: "PAYLOAD_TOO_LARGE", message: "Choose up to three smaller photos.", retryable: false } } });
       if (outcome === "conflict") return route.fulfill({ status: 409, json: { error: { code: "INVALID_TRANSITION", message: "Photos can no longer be added to this request." } } });
       return route.fulfill({ status: 201, json: { data: { stored: files.length } } });
     });
@@ -95,11 +97,69 @@ try {
     await submit(page);
     await page.getByText("Request saved without photos").waitFor();
     assert.equal(await page.getByRole("button", { name: "Submit for review" }).isDisabled(), true);
-    const link = page.getByRole("link", { name: "Continue to your request without photos" });
+    const link = page.getByRole("link", { name: "Continue without photos" });
     assert.equal(await link.getAttribute("href"), `/care/requests/${requestId}`);
+    assert.ok((await link.boundingBox()).height >= 44, "continue link is a 44px target");
+    // Photos are write-once on the server after a conflict, so no "different photos" offer here.
+    assert.equal(await page.getByRole("button", { name: "Choose different photos" }).count(), 0);
     assert.equal(creates.length, 1); assert.equal(uploads.length, 1);
     await link.click();
     await page.waitForURL(`${origin}/care/requests/${requestId}`);
+  });
+
+  // 3b. A refused upload (400 / 413) stored nothing: continue without photos, or choose different photos for the SAME saved request.
+  for (const [mode, label] of [["invalid", "400"], ["toolarge", "413"]]) {
+    await scenario(n => (n === 1 ? mode : n === 2 ? mode : "ok"), async ({ page, creates, uploads }) => {
+      const input = page.getByLabel("Add damage photos");
+      await input.setInputFiles({ name: "front.jpg", mimeType: "image/jpeg", buffer: jpeg });
+      await page.getByRole("button", { name: "Remove photo 1" }).waitFor();
+      await input.setInputFiles({ name: "side.jpg", mimeType: "image/jpeg", buffer: jpeg });
+      await page.getByRole("button", { name: "Remove photo 2" }).waitFor();
+      await submit(page);
+      await page.getByText("Photos not accepted").waitFor();
+      await page.setViewportSize({ width: 320, height: 800 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, label + ": no horizontal scroll at 320 with recovery actions");
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await page.getByRole("button", { name: "Submit for review" }).isDisabled(), true, label + ": no way to create a second request");
+      const cont = page.getByRole("link", { name: "Continue without photos" });
+      const choose = page.getByRole("button", { name: "Choose different photos" });
+      assert.ok((await cont.boundingBox()).height >= 44 && (await cont.boundingBox()).width >= 44);
+      assert.ok((await choose.boundingBox()).height >= 44 && (await choose.boundingBox()).width >= 44);
+      assert.equal(await page.getByLabel("Describe the damage or cleaning work").isDisabled(), true);
+      assert.equal(await input.isDisabled(), true);
+      await choose.click();
+      // Only the photo picker opens; the saved request details stay locked and nothing is uploaded until photos are chosen.
+      assert.equal(await input.isDisabled(), false);
+      assert.equal(await page.getByLabel("Describe the damage or cleaning work").isDisabled(), true);
+      assert.equal(await page.getByRole("button", { name: "Remove photo 1" }).count(), 0, "old photos are cleared");
+      const upload = page.getByRole("button", { name: "Upload these photos" });
+      assert.equal(await upload.isDisabled(), true);
+      assert.ok((await upload.boundingBox()).height >= 44);
+      await input.setInputFiles({ name: "smaller.jpg", mimeType: "image/jpeg", buffer: jpeg });
+      await page.getByRole("button", { name: "Remove photo 1" }).waitFor();
+      await upload.click();
+      // A second refusal keeps the same way forward.
+      await page.getByText("Photos not accepted").waitFor();
+      assert.equal(await page.getByRole("button", { name: "Choose different photos" }).count(), 1);
+      await page.getByRole("button", { name: "Choose different photos" }).click();
+      await input.setInputFiles({ name: "third.jpg", mimeType: "image/jpeg", buffer: jpeg });
+      await page.getByRole("button", { name: "Remove photo 1" }).waitFor();
+      await page.getByRole("button", { name: "Upload these photos" }).click();
+      await page.waitForURL(`${origin}/care/requests/${requestId}`);
+      assert.equal(creates.length, 1, label + ": still exactly one create (no duplicate request)");
+      assert.deepEqual(uploads.map(batch => batch.length), [2, 1, 1]);
+    });
+  }
+
+  // 3c. After a refused upload the user can also just continue without photos.
+  await scenario(() => "invalid", async ({ page, creates }) => {
+    await page.getByLabel("Add damage photos").setInputFiles({ name: "front.jpg", mimeType: "image/jpeg", buffer: jpeg });
+    await page.getByRole("button", { name: "Remove photo 1" }).waitFor();
+    await submit(page);
+    await page.getByText("Photos not accepted").waitFor();
+    await page.getByRole("link", { name: "Continue without photos" }).click();
+    await page.waitForURL(`${origin}/care/requests/${requestId}`);
+    assert.equal(creates.length, 1);
   });
 
   // 4. A HEIC file this browser cannot decode is refused with a specific message and nothing is attached.
@@ -123,7 +183,7 @@ try {
     await retry.waitFor();
     assert.equal(await retry.isDisabled(), true);
     assert.equal((await retry.boundingBox()).height >= 44, true);
-    assert.equal(await page.getByRole("link", { name: "Continue to your request without photos" }).count(), 1);
+    assert.equal(await page.getByRole("link", { name: "Continue without photos" }).count(), 1);
     await page.getByRole("button", { name: "Retry photo upload" }).waitFor({ timeout: 8000 });
     assert.equal(uploads.length, 1, "no upload while the countdown runs");
     await page.getByRole("button", { name: "Retry photo upload" }).click();
@@ -155,5 +215,5 @@ try {
     await page.getByLabel("Add damage photos").waitFor({ state: "attached" });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `no horizontal scroll at ${width}`);
   }
-  console.log("PASS: signed-in request photos: 0-3 picker, JPEG/HEIC prepare, exact-byte retry without second create, 429 countdown retry, saved-without-photos recovery, HEIC refusal, three widths");
+  console.log("PASS: signed-in request photos: 0-3 picker, JPEG/HEIC prepare, exact-byte retry without second create, 429 countdown retry, saved-without-photos recovery (Continue without photos; Choose different photos for 400/413 on the same request), HEIC refusal, three widths");
 } finally { if (browser) await browser.close(); server.kill("SIGTERM"); }
