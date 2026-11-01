@@ -236,6 +236,9 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
     // ---- Full chain applied by a non-superuser, non-member runner on a hosted-like scratch database.
     sql(`create role supabase_admin superuser nologin; create role sa_runner nologin`);
     sql(`drop database if exists skycar_chain_probe with (force)`); sql(`create database skycar_chain_probe`);
+    // 20261101063000 runs CREATE EXTENSION btree_gist (a trusted extension), which needs CREATE on the database;
+    // the hosted migration role has it. The runner stays non-superuser and a non-member of supabase_admin.
+    sql(`grant create on database skycar_chain_probe to sa_runner`);
     const scratch = statement => spawnSync('psql', [scratchUrl, '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-c', statement], { encoding: 'utf8' });
     const scratchSql = statement => { const result = scratch(statement); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
     const bootstrap = readFileSync('tests/integration/bootstrap.sql', 'utf8').split('\n').filter(line => !/^create role /.test(line)).join('\n');
