@@ -22,6 +22,7 @@ import { verifySupabaseAdminSequenceDefaultAcl } from "./supabase-admin-sequence
 import { verifyRequestPhotos } from "./request-photos.acceptance.mjs";
 import { verifyRequestPhotoMarker } from "./request-photo-marker.acceptance.mjs";
 import { verifyCoverageEnforcement } from "./coverage-enforcement.acceptance.mjs";
+import { verifyCrossLockOrder } from "./week1-cross-lock-order.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
@@ -337,4 +338,7 @@ test('Legacy photo markers heal quota-free, backfill without fabricated hashes a
 });
 test('Technician availability delta rejects overlaps and provides a DST-aware, lock-free enforcement check', async () => {
   await verifyTechnicianAvailabilityDelta({ sql, quote, result, waitForQuery });
+});
+test('Journey RPCs share no lock inversion with care_submit_request, the photo-marker RPCs and the availability RPC', async () => {
+  await verifyCrossLockOrder({ sql, quote, result });
 });
