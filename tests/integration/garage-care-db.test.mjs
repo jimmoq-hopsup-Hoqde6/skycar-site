@@ -110,6 +110,7 @@ before(() => {
     '20261004150000_customer_completion_review.sql',
     '20261020183000_completion_review_security_fix.sql',
     '20261020183001_completion_review_replay_authority.sql',
+    '20261101024732_completion_review_final_lock_authority.sql',
   ], 'combined verification must include every public migration in filename order');
   for (const migration of migrations) file(`supabase/migrations/${migration}`);
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
