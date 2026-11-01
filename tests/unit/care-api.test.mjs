@@ -28,11 +28,18 @@ test("strict normalized input rejects authoritative client fields and malformed 
   for (const body of [null, [], {}, { ...input, vehicle_id: "invalid" }, { ...input, service: "magic" },
     { ...input, description: "short" }, { ...input, description: "x".repeat(2001) },
     { ...input, description: "null\u0000character" }, { ...input, preferred_window: "confirmed" },
-    // the postcode is required and exactly four digits (same rule as /api/v1/care/coverage and the database)
-    { vehicle_id: id, service: "repair", description: input.description, preferred_window: "flexible" },
+    // a postcode that is present is exactly four digits (same rule as /api/v1/care/coverage and the database)
+    { vehicle_id: id, service: "repair", description: input.description },
+    { ...input, extra: "x" },
     ...[5000, null, "", " 5000", "5000 ", "500", "50000", "5OOO", "٥٠٠٠", ["5000"], { v: "5000" }].map(postcode => ({ ...input, postcode }))]) {
     assert.throws(() => careInput(body), /VALIDATION_FAILED/);
   }
+  // The legacy four-key shape (no postcode) is still accepted and forwarded unchanged, never given an invented postcode:
+  // it is how a stale form replays a request it created, and the database decides what it may do.
+  const { postcode: _postcode, ...legacy } = input; void _postcode;
+  assert.deepEqual(careInput(legacy), legacy);
+  assert.equal("postcode" in careInput(legacy), false);
+  assert.deepEqual(careInput(input), input);
   assert.equal(uuid(id.toUpperCase()), id);
 });
 

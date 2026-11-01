@@ -259,7 +259,7 @@ try {
     await page.getByRole('alert').filter({ hasText: 'Nothing was saved.' }).waitFor();
     assert.equal(creates.length, 1);
     assert.equal(coverage.calls.length, 3);
-    assert.equal(JSON.parse(creates[0]).postcode, undefined, 'the postcode is used for the check only and is not sent with the request');
+    assert.equal(JSON.parse(creates[0]).postcode, '5000', 'the checked postcode is sent with the create request so the database can enforce the area');
     await page.close();
   }
   {

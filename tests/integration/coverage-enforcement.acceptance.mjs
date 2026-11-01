@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import data from '../../src/server/care/coverage-areas.json' with { type: 'json' };
 import { buildCoverageIndex } from '../../src/server/care/coverage-resolver.ts';
 
-// Server-side service-area enforcement (migration 20261101160000). Every case calls the real
+// Server-side service-area enforcement (migration 20261101160000, including its deploy-window compatibility switch). Every case calls the real
 // database functions as the roles a scripted client would use (authenticated via PostgREST RPC;
 // service_role for guest intake), so the UI and /api/v1/care/coverage are bypassed entirely.
 export async function verifyCoverageEnforcement({ sql, auth, quote, garageCreate, result }) {
@@ -57,9 +57,14 @@ export async function verifyCoverageEnforcement({ sql, auth, quote, garageCreate
   }
   equal(counts(), before, 'rejections create no request, command, event, outbox or guest rows');
 
-  // 4. A scripted client cannot skip the check by leaving the postcode out or bending it.
+  // 4. A scripted client cannot skip the check by bending the postcode. (Leaving it out is the legacy
+  //    four-key shape: allowed to replay always, and to create only while the compatibility switch is on; see 11.)
   const { postcode: dropped, ...legacy } = JSON.parse(payload()); void dropped;
-  fails(auth(owner, submit(randomUUID(), JSON.stringify(legacy))), 'VALIDATION_FAILED', 'four-key payload without postcode');
+  const legacyBody = (overrides = {}) => JSON.stringify({ ...legacy, ...overrides });
+  const { description: noDescription, ...threeKeys } = legacy; void noDescription;
+  fails(auth(owner, submit(randomUUID(), JSON.stringify(threeKeys))), 'VALIDATION_FAILED', 'three-key payload is not a valid shape');
+  fails(auth(owner, submit(randomUUID(), JSON.stringify({ ...legacy, extra: 'x' }))), 'VALIDATION_FAILED', 'legacy shape plus an unknown key');
+  fails(auth(owner, submit(randomUUID(), legacyBody({ service: 'detailing' }))), 'VALIDATION_FAILED', 'legacy shape with a bad service');
   for (const bad of ['500', '50000', ' 5000', '5000 ', '5000\n', 'abcd', '５０００', '', 5000, null, ['5000'], { v: '5000' }, true]) {
     fails(auth(owner, submit(randomUUID(), payload({ postcode: bad }))), 'VALIDATION_FAILED', `postcode ${JSON.stringify(bad)}`);
   }
@@ -93,6 +98,56 @@ export async function verifyCoverageEnforcement({ sql, auth, quote, garageCreate
   equal(JSON.parse(sql(auth(owner, submit(key, payload({ postcode: outside[0] })))).split('\n')[0]).replayed, true, 'legacy replay is not re-decided by area');
   fails(auth(owner, submit(key, payload({ description: 'A different description here' }))), 'IDEMPOTENCY_CONFLICT', 'legacy replay with changed content');
   sql(`update public.care_request_commands set payload = payload || jsonb_build_object('postcode', ${quote(covered)}) where idempotency_key = ${quote(key)}::uuid`);
+
+  // 11. Deploy window (migration first, app later, or a stale form). The legacy four-key payload:
+  //     - replays any request already created, whichever shape created it, never VALIDATION_FAILED;
+  //     - creates only while care_service_coverage_compat.accept_legacy_create is true (the default);
+  //     - never makes the 5-key path weaker: a postcode that is present is always checked.
+  equal(sql('select accept_legacy_create from public.care_service_coverage_compat'), 't', 'the switch is open by default');
+  for (const role of ['anon', 'authenticated', 'service_role']) {
+    fails(`begin; set local role ${role}; select * from public.care_service_coverage_compat`, 'permission denied');
+    fails(`begin; set local role ${role}; update public.care_service_coverage_compat set accept_legacy_create = false`, 'permission denied');
+  }
+  equal(sql("select relrowsecurity from pg_class where oid = 'public.care_service_coverage_compat'::regclass"), 't', 'RLS enabled on the switch');
+  const closed = 'update public.care_service_coverage_compat set accept_legacy_create = false;';
+  // 11a. a request created by the OLD function (command stored with four keys) replays in both shapes, also with the switch closed.
+  const oldKey = randomUUID();
+  const oldCreated = JSON.parse(sql(auth(owner, submit(oldKey, payload()))).split('\n')[0]); persisted += 1;
+  sql(`update public.care_request_commands set payload = payload - 'postcode' where idempotency_key = ${quote(oldKey)}::uuid`);
+  for (const [label, body] of [['legacy four-key', legacyBody()], ['five-key in area', payload()], ['five-key out of area', payload({ postcode: outside[0] })]]) {
+    for (const [mode, setup] of [['switch open', ''], ['switch closed', closed], ['list unavailable', 'delete from public.care_service_coverage; delete from public.care_service_coverage_meta;'], ['switch row missing', 'delete from public.care_service_coverage_compat;']]) {
+      const replay = JSON.parse(sql(asOwner(submit(oldKey, body), setup)).split('\n')[0]);
+      equal([replay.replayed, replay.request.id], [true, oldCreated.request.id], `old-created request replays: ${label}, ${mode}`);
+    }
+  }
+  fails(auth(owner, submit(oldKey, legacyBody({ description: 'A different description here' }))), 'IDEMPOTENCY_CONFLICT', 'legacy replay with changed content');
+  fails(auth(owner, submit(oldKey, legacyBody({ preferred_window: 'seven_to_fourteen_days' }))), 'IDEMPOTENCY_CONFLICT', 'legacy replay with another window');
+  // 11b. a request created by the NEW function (command has the postcode) replays from a legacy-shaped retry; two postcodes still conflict.
+  const newKey = randomUUID();
+  const newCreated = JSON.parse(sql(auth(owner, submit(newKey, payload()))).split('\n')[0]); persisted += 1;
+  for (const setup of ['', closed, 'delete from public.care_service_coverage;']) {
+    const replay = JSON.parse(sql(asOwner(submit(newKey, legacyBody()), setup)).split('\n')[0]);
+    equal([replay.replayed, replay.request.id], [true, newCreated.request.id], `legacy-shaped retry of a five-key request replays (${setup || 'defaults'})`);
+  }
+  fails(auth(owner, submit(newKey, legacyBody({ description: 'A different description here' }))), 'IDEMPOTENCY_CONFLICT', 'legacy-shaped retry with changed content');
+  fails(auth(owner, submit(newKey, payload({ postcode: '5251' }))), 'IDEMPOTENCY_CONFLICT', 'a different postcode under a five-key command conflicts');
+  // 11c. a legacy create while the switch is open stores a command without a postcode and replays in all shapes.
+  const legacyKey = randomUUID();
+  const legacyCreated = JSON.parse(sql(auth(owner, submit(legacyKey, legacyBody()))).split('\n')[0]); persisted += 1;
+  equal([legacyCreated.replayed, Object.keys(legacyCreated.request).includes('postcode')], [false, false], 'legacy create works while the switch is open');
+  equal(sql(`select payload ? 'postcode' from public.care_request_commands where idempotency_key = ${quote(legacyKey)}::uuid`), 'f', 'the stored command has no invented postcode');
+  const legacyReplay = JSON.parse(sql(auth(owner, submit(legacyKey, payload({ postcode: outside[0] })))).split('\n')[0]);
+  equal([legacyReplay.replayed, legacyReplay.request.id], [true, legacyCreated.request.id], 'five-key replay of a legacy create');
+  // 11d. the switch closes (and fails closed when its row is gone) for CREATION only; the 5-key path is unaffected.
+  for (const [label, setup] of [['closed', closed], ['row missing', 'delete from public.care_service_coverage_compat;']]) {
+    fails(asOwner(submit(randomUUID(), legacyBody()), setup), 'VALIDATION_FAILED', `legacy create refused: switch ${label}`);
+    equal(JSON.parse(sql(asOwner(submit(randomUUID(), payload()), setup)).split('\n')[0]).replayed, false, `five-key create unaffected: switch ${label}`);
+    fails(asOwner(submit(randomUUID(), payload({ postcode: outside[0] })), setup), 'OUT_OF_AREA', `five-key out of area refused: switch ${label}`);
+  }
+  // 11e. a legacy create is refused without leaving rows when the switch is closed, and does not wait for the vehicle lock.
+  const legacyBefore = counts();
+  fails(auth(owner, submit(randomUUID(), legacyBody())).replace('begin;', `begin; ${closed}`), 'VALIDATION_FAILED', 'closed switch, committed path');
+  equal(counts(), legacyBefore, 'refused legacy creates leave no rows');
 
   // 8. Fail closed: a missing or empty list is COVERAGE_UNAVAILABLE for creation, never "covered" and never "out of area".
   const unavailable = (setup, body = payload(), expected = 'COVERAGE_UNAVAILABLE') => fails(asOwner(submit(randomUUID(), body), setup), expected, setup);

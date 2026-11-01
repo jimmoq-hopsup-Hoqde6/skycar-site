@@ -195,7 +195,7 @@ try {
     await submitButton(page).click();
     await page.waitForURL(`**/care/requests/${id}`);
     assert.equal(created, 1);
-    assert.equal(lastBody.postcode, undefined, 'the create request still carries no postcode');
+    assert.equal(lastBody.postcode, '5000', 'the create request carries the checked postcode');
     await page.goto(`${origin}/care/journey/${id}`);
     const field = page.getByLabel('Postcode', { exact: true });
     await field.waitFor();

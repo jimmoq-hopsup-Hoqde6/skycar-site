@@ -44,7 +44,10 @@ Body (maximum 16 KiB, strict fields):
 Service: `repair | cleaning`; preferred_window:
 `one_to_two_business_days | seven_to_fourteen_days | flexible`. These are
 preferences, never confirmed appointment availability. Description: 10–2000
-trimmed characters. `postcode` is required: exactly four digits (no spaces).
+trimmed characters. `postcode` is exactly four digits (no spaces). It is sent by the current form; the
+legacy four-key body (no `postcode`) is still accepted during the deploy window: it replays any existing key and, until the
+forward-only follow-up migration closes `care_service_coverage_compat`, can still create without an area check
+(`docs/contracts/service-coverage.md`, "Deploy order").
 No price, owner, state, media or slot fields are accepted.
 
 **Service area is enforced here, not only in the form.** `care_submit_request`

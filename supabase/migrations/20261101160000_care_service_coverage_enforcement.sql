@@ -28,6 +28,22 @@ alter table public.care_service_coverage enable row level security;
 alter table public.care_service_coverage_meta enable row level security;
 revoke all on public.care_service_coverage, public.care_service_coverage_meta from public, anon, authenticated, service_role;
 
+-- Deploy-order compatibility switch (one row). While accept_legacy_create is true,
+-- care_submit_request still CREATES from the legacy four-key payload (no postcode) so an app that
+-- has not been redeployed yet, or a browser tab that still runs the old form, keeps working when
+-- this migration ships first. Such a create carries no postcode and therefore cannot be
+-- checked against the service area: it is a temporary, deliberate gap. Replaying an existing
+-- key never depends on the switch. Close it in a NEW migration once the app that sends the
+-- postcode is live (docs/contracts/service-coverage.md, "Deploy order"):
+--   update public.care_service_coverage_compat set accept_legacy_create = false;
+create table public.care_service_coverage_compat (
+  singleton boolean primary key default true check (singleton),
+  accept_legacy_create boolean not null default true
+);
+insert into public.care_service_coverage_compat(singleton, accept_legacy_create) values (true, true);
+alter table public.care_service_coverage_compat enable row level security;
+revoke all on public.care_service_coverage_compat from public, anon, authenticated, service_role;
+
 -- BEGIN GENERATED COVERAGE SEED (scripts/coverage-data/build-coverage-migration.mjs)
 delete from public.care_service_coverage;
 insert into public.care_service_coverage(service, postcode)
@@ -96,11 +112,15 @@ grant execute on function public.care_assert_postcode_covered(text, text) to ser
 
 -- Authenticated creation. Same body, lock order and results as before
 -- (advisory -> vehicle -> care_requests/commands/events), plus:
---   * payload requires a 4-digit `postcode` (exactly five keys);
---   * after the idempotency replay lookup and BEFORE the vehicle lock, the postcode must be in
---     the list for the service, so an out-of-area request locks and writes nothing;
---   * commands stored before this migration have no postcode: they replay (with any postcode)
---     against the other four fields and return the request already created, never a new one.
+--   * the payload is the four legacy keys plus a 4-digit `postcode` (five keys). The legacy
+--     four-key payload (no postcode) is still a valid SHAPE: it is how an old client replays, and
+--     while care_service_coverage_compat.accept_legacy_create is true it may also create;
+--   * after the idempotency replay lookup and BEFORE the vehicle lock, a request with a postcode
+--     must be in the list for the service, so an out-of-area request locks and writes nothing;
+--   * replay decides on the four request fields only when either side has no postcode: a retry of a
+--     request created before this migration (or by an old client) returns the request already
+--     created, whichever shape the retry uses, never a new one and never VALIDATION_FAILED. Two
+--     different postcodes under one key still conflict.
 create or replace function public.care_submit_request(p_key uuid, p_payload jsonb) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
@@ -110,17 +130,18 @@ declare
   policy public.care_response_policy;
   vehicle uuid;
   normalized jsonb;
-  replay_payload jsonb;
+  stored_core jsonb;
+  incoming_core jsonb;
   at_time timestamptz := clock_timestamp();
 begin
   if p_key is null or p_payload is null or jsonb_typeof(p_payload) <> 'object' or
-    not (p_payload ?& array['vehicle_id','service','description','preferred_window','postcode']) or
+    not (p_payload ?& array['vehicle_id','service','description','preferred_window']) or
     p_payload - array['vehicle_id','service','description','preferred_window','postcode'] <> '{}'::jsonb or
     jsonb_typeof(p_payload->'vehicle_id') <> 'string' or
     jsonb_typeof(p_payload->'service') <> 'string' or
     jsonb_typeof(p_payload->'description') <> 'string' or
     jsonb_typeof(p_payload->'preferred_window') <> 'string' or
-    jsonb_typeof(p_payload->'postcode') <> 'string' then
+    (p_payload ? 'postcode' and jsonb_typeof(p_payload->'postcode') <> 'string') then
     raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
   end if;
   begin vehicle := (p_payload->>'vehicle_id')::uuid;
@@ -129,7 +150,7 @@ begin
   end;
   if p_payload->>'service' not in ('repair','cleaning') or
     p_payload->>'preferred_window' not in ('one_to_two_business_days','seven_to_fourteen_days','flexible') or
-    p_payload->>'postcode' !~ '^[0-9]{4}$' or
+    (p_payload ? 'postcode' and p_payload->>'postcode' !~ '^[0-9]{4}$') or
     length(btrim(p_payload->>'description')) not between 10 and 2000 then
     raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
   end if;
@@ -138,15 +159,26 @@ begin
   select * into command from public.care_request_commands
     where customer_id = actor and operation = 'submit' and idempotency_key = p_key;
   if found then
-    -- Commands stored before this migration have no postcode: compare them without it.
-    if command.payload ? 'postcode' then replay_payload := normalized; else replay_payload := normalized - 'postcode'; end if;
-    if command.payload <> replay_payload then
+    -- Compare the postcode only when both the stored command and this call carry one: a
+    -- command created without it (before this migration, or by an old client) replays against the
+    -- four request fields, and a legacy-shaped retry of a command that has one does too.
+    if command.payload ? 'postcode' and normalized ? 'postcode' then
+      stored_core := command.payload; incoming_core := normalized;
+    else
+      stored_core := command.payload - 'postcode'; incoming_core := normalized - 'postcode';
+    end if;
+    if stored_core <> incoming_core then
       raise exception using errcode = 'P0001', message = 'IDEMPOTENCY_CONFLICT';
     end if;
     return jsonb_build_object('request', public.care_get_request(command.request_id), 'replayed', true);
   end if;
-  -- Creation only: decide coverage before any row lock or write.
-  perform public.care_assert_postcode_covered(normalized->>'service', normalized->>'postcode');
+  -- Creation only: decide coverage before any row lock or write. A legacy four-key create has no
+  -- postcode to check; it is allowed only while the compatibility switch is on.
+  if normalized ? 'postcode' then
+    perform public.care_assert_postcode_covered(normalized->>'service', normalized->>'postcode');
+  elsif not coalesce((select accept_legacy_create from public.care_service_coverage_compat), false) then
+    raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
+  end if;
   -- Serializes against archiving/ownership edits and prevents check/use races.
   perform 1 from public.vehicles where id = vehicle and owner_id = actor and archived_at is null for update;
   if not found then raise exception using errcode = 'P0001', message = 'NOT_FOUND'; end if;

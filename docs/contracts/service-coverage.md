@@ -179,9 +179,32 @@ Needs Python 3 with `openpyxl`. The script holds the rule and the two LGA codes;
 
 One list, two readers. `src/server/care/coverage-areas.json` is authoritative. The database cannot read it, so a generated mirror is migrated: `supabase/migrations/20261101160000_care_service_coverage_enforcement.sql` creates `public.care_service_coverage(service, postcode)` and `care_service_coverage_meta(area_id, version)` and seeds them from the **same** `buildCoverageIndex()` the resolver uses (`scripts/coverage-data/build-coverage-migration.mjs`; the block between the `GENERATED COVERAGE SEED` markers). Both tables are RLS-enabled with every grant revoked (no browser, anon or service role can read or edit them); only the SECURITY DEFINER function `care_assert_postcode_covered(service, postcode)` (`search_path=''`) reads them.
 
-- **Authenticated:** `care_submit_request` now requires a fifth key, `postcode` (`^[0-9]{4}$`). Order: advisory lock → idempotency lookup (a replay returns the existing request with no area decision) → coverage → vehicle `FOR UPDATE` → policy → insert. An out-of-area request locks and writes nothing. Commands stored before the migration have no postcode and replay against the other four fields.
+- **Authenticated:** `care_submit_request` takes a fifth key, `postcode` (`^[0-9]{4}$`; the legacy four-key shape remains valid for replay and, during the deploy window, create: see "Deploy order" below). Order: advisory lock → idempotency lookup (a replay returns the existing request with no area decision) → coverage → vehicle `FOR UPDATE` → policy → insert. An out-of-area request locks and writes nothing. Commands stored before the migration have no postcode and replay against the other four fields.
 - **Guest:** `care_submit_guest_request` runs the same check after its replay lookup and before the rate limits and insert. The route stores photos only after the function returns a receipt, so a rejected request does no Storage I/O (`src/server/care/guest-intake.mjs`).
 - **Errors:** `OUT_OF_AREA` (422, `retryable:false`), `COVERAGE_UNAVAILABLE` (503, `retryable:false`: the list is missing or empty for that service; nothing was submitted).
 - **Drift is a test failure:** `tests/unit/coverage-enforcement.test.mjs` compares the latest seed block with the JSON-derived one; `tests/integration/coverage-enforcement.acceptance.mjs` compares the live table with the JSON.
 - **Changing coverage:** regenerate the JSON, then add a NEW migration whose filename contains `care_service_coverage` and whose body is the regenerated seed block (it deletes and reseeds both tables). Never edit an applied migration. The drift test always reads the newest such migration.
 - **Not covered:** guest requests and signed-in requests created before this migration are not re-checked, and later technician or journey writes do not consult the list.
+
+### Deploy order (signed-in create, migration and app in either order)
+
+The signed-in payload changed from four keys to five (`postcode`). Neither deploy order may break signed-in create or turn an exact retry into `VALIDATION_FAILED`:
+
+| Order | State | What happens |
+|---|---|---|
+| Migration first | new database, old app/stale tab sends four keys | `care_submit_request` accepts the legacy four-key shape. **Replay** of any existing key returns the original receipt (never `VALIDATION_FAILED`). **Create** is allowed while `public.care_service_coverage_compat.accept_legacy_create` is `true` (the default); that create has no postcode and is therefore **not** area-checked (a temporary, deliberate gap). |
+| App first | new app sends five keys, old database | The old function rejects the fifth key as `VALIDATION_FAILED` and stores nothing. `careHandlers.submit` retries **once**, same idempotency key, with the four legacy keys (only for `VALIDATION_FAILED` on a payload that had a postcode; `OUT_OF_AREA`, `COVERAGE_UNAVAILABLE`, conflicts and outages are never retried). The form has already checked the area through `/api/v1/care/coverage`. Once the migration is applied the same key replays against the stored four-key command. |
+| Stale tab, new app | new app route, old browser JS | `careInput` accepts the four-key shape and forwards it unchanged (no postcode is invented). The database decides replay or create as above. |
+
+Replay compares the postcode only when both the stored command and the call carry one: four request fields otherwise. Two different postcodes under one key remain `IDEMPOTENCY_CONFLICT`.
+
+**Closing the window (required follow-up, not part of this migration).** After the app that sends the postcode has been live everywhere (no old tabs or workers), ship a NEW forward-only migration containing
+
+```sql
+update public.care_service_coverage_compat set accept_legacy_create = false;
+```
+
+and, in the same release, make `careInput` require `postcode` again and delete the retry in `careHandlers.submit`. After that a legacy-shaped call can only replay; a legacy create is `VALIDATION_FAILED`. If the switch row is ever missing, legacy creates are refused (fail closed). `care_service_coverage_compat` is RLS-enabled with every grant revoked, like the list tables.
+
+`20261101160000` was revised in place, not superseded, because it has not been applied anywhere: it is not on `main` (`git merge-base --is-ancestor` of its commit against `origin/main` fails; only the coverage and integration branches contain it), and the staging install record (`docs/staging/V2_NINE_MIGRATION_INSTALL.md` section 11 at `ceaf6e8`, branch `docs/staging-nine-migration-checklist`) lists the ten files applied on 1 Nov 2026 (the nine at `18240dc` plus `20261101133000`); `20261101160000` is not among them. If it had been applied somewhere, this change would have to be a new migration instead.
+
