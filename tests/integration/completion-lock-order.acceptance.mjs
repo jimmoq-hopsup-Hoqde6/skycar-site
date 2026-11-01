@@ -41,7 +41,7 @@ export async function verifyCompletionLockOrder({sql,quote,result}) {
    const service=(body,label)=>`begin;/* ${label}_${tag} */set local statement_timeout='12s';set local role service_role;${body};commit;`;
    const review=label=>service(`select public.care_customer_completion_review_command(${quote(actor)}::uuid,null,${quote(key)}::uuid,'confirm_completion',${quote(id)}::uuid,'{}'::jsonb)`,label);
    // Completed journey is intentional: select_quote acquires its real source
-   // locks then rejects INVALID_TRANSITION, without a synthetic quote mutation.
+   // locks then rejects VALIDATION_FAILED, without a synthetic quote mutation.
    const select=label=>service(`select public.care_journey_command('select_quote',${quote(id)}::uuid,${quote(actor)}::uuid,null,${quote(key)}::uuid,'{}'::jsonb)`,label);
    const first=result(reviewFirst?review('first'):select('first'));
    let second;
@@ -59,7 +59,7 @@ export async function verifyCompletionLockOrder({sql,quote,result}) {
     assert.equal(deadlock,inverted,'negative control must deadlock; candidate must not');
     if(!inverted){
      if(reviewFirst){assert.equal(firstOutcome.error,undefined);assert.ok(secondOutcome.output?.includes('IDEMPOTENCY_CONFLICT'));}
-     else {assert.ok(firstOutcome.output?.includes('INVALID_TRANSITION'));assert.equal(secondOutcome.error,undefined);}
+     else {assert.ok(firstOutcome.output?.includes('VALIDATION_FAILED'));assert.equal(secondOutcome.error,undefined);}
      assert.equal(sql(`select completion_review_state from public.care_journeys where id=${quote(id)}`),'confirmed');
      assert.equal(sql(`select count(*) from public.care_journey_commands where actor_scope=${quote('user:'+actor)} and idempotency_key=${quote(key)}`),'1');
      assert.equal(sql(`select count(*) from public.care_journey_events where journey_id=${quote(id)} and type='completion_confirmed'`),'1');
