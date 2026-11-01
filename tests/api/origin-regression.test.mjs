@@ -3,10 +3,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createHmac, randomUUID } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
+import { startNext } from './support/next-server.mjs';
 
 const actor = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const vehicleId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -61,23 +60,15 @@ test('built writes accept the real page origin and reject origin/proxy spoofing 
   ];
   try {
     for (const mode of ['local', 'proxy', 'unconfigured']) {
-      const port = { local: 3431, proxy: 3432, unconfigured: 3433 }[mode];
-      const base = `http://127.0.0.1:${port}`;
-      const pageOrigin = mode === 'local' ? base : 'https://phone.skycar.test';
       const env = { ...process.env, SKYCAR_ENV: mode === 'local' ? 'demo' : 'staging', FEATURE_CARE: 'true',
         FEATURE_GARAGE: 'true', NEXT_PUBLIC_SUPABASE_URL: stubUrl,
         NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'synthetic-only', SUPABASE_SECRET_KEY: 'sb_secret_synthetic_server_only_fixture' };
       delete env.SKYCAR_APP_ORIGIN;
-      if (mode === 'proxy') env.SKYCAR_APP_ORIGIN = pageOrigin;
-      const server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', String(port)], { env, stdio: 'ignore' });
-      const exited = once(server, 'exit');
+      if (mode === 'proxy') env.SKYCAR_APP_ORIGIN = 'https://phone.skycar.test';
+      const app = await startNext(env);
+      const base = app.base;
+      const pageOrigin = mode === 'local' ? base : 'https://phone.skycar.test';
       try {
-        let ready = false;
-        for (let i = 0; i < 75; i++) {
-          try { const r = await fetch(`${base}/api/v1/health`, { signal: AbortSignal.timeout(500) }); await r.text(); ready = true; break; }
-          catch { await delay(100); }
-        }
-        assert.ok(ready, 'Built application started');
         for (const [path, method, data, expected] of operations) {
           for (const variant of ['same-origin', 'foreign', 'missing', 'null', 'cross-site', 'forged-forwarded-host']) {
             const origin = variant === 'foreign' || variant === 'forged-forwarded-host' ? 'https://attacker.test'
@@ -98,7 +89,7 @@ test('built writes accept the real page origin and reject origin/proxy spoofing 
           }
         }
         console.log(`PASS origin boundary: ${mode}, 7 operations × 6 origin cases`);
-      } finally { server.kill('SIGTERM'); await exited; }
+      } finally { await app.stop(); }
     }
     assert.ok(authChecks > 0, 'Session validation was exercised');
   } finally { await new Promise(resolve => stub.close(resolve)); }
