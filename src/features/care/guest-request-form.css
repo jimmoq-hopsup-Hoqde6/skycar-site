@@ -61,7 +61,7 @@ body .guest-steps li {
   align-items: center;
   gap: 9px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 body .guest-steps li > span {
@@ -71,7 +71,7 @@ body .guest-steps li > span {
   place-items: center;
   border-radius: 50%;
   border: 1px solid #466072;
-  font-size: 11px;
+  font-size: 14px;
 }
 body .guest-steps li[aria-current="step"] {
   color: var(--text);
@@ -93,7 +93,7 @@ body .guest-step-heading {
   padding: 26px 0 20px;
 }
 body .guest-step-heading .eyebrow {
-  font-size: 10px;
+  font-size: 14px;
   margin: 0 0 8px;
 }
 body .guest-step-heading h2 {
@@ -107,7 +107,7 @@ body .guest-step-heading h2:focus {
 }
 body .guest-step-heading > p:last-child {
   margin: 8px 0 0;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
 }
 body .guest-form fieldset {
@@ -165,7 +165,7 @@ body .guest-service-choice strong {
 }
 body .guest-service-choice > span:not(.guest-choice-check) {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 14px;
 }
 body .guest-choice-check {
   display: none;
@@ -182,7 +182,7 @@ body .guest-choice-check svg {
   height: 17px;
 }
 body .guest-form .care-field {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
 }
 body .guest-form .care-field input,
@@ -213,7 +213,7 @@ body .guest-trust-note svg {
   margin-top: 2px;
 }
 body .guest-trust-note p {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.65;
   margin: 0;
 }
@@ -247,7 +247,7 @@ body .guest-flow-actions button:disabled {
 }
 body .guest-form > .care-entry-boundary {
   text-align: center;
-  font-size: 11px;
+  font-size: 14px;
   margin-top: 16px;
   padding-bottom: 16px;
 }
@@ -283,11 +283,11 @@ body .guest-reference {
   margin: 24px 0;
 }
 body .guest-reference span {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--muted);
 }
 body .guest-reference strong {
-  font-size: 13px;
+  font-size: 14px;
   overflow-wrap: anywhere;
   font-weight: 500;
 }
@@ -302,7 +302,7 @@ body .guest-receipt .care-entry-button {
     font-size: 40px;
   }
   body .guest-steps li {
-    font-size: 11px;
+    font-size: 14px;
     gap: 7px;
   }
   body .guest-steps li > span {
@@ -313,11 +313,11 @@ body .guest-receipt .care-entry-button {
     font-size: 23px;
   }
   body .guest-flow .care-entry-nav a:last-child {
-    font-size: 12px;
+    font-size: 14px;
     gap: 10px;
   }
   body .guest-flow .guest-consent {
-    font-size: 13px;
+    font-size: 14px;
   }
 }
 body .booking-vehicle-choice {
@@ -343,14 +343,14 @@ body .booking-vehicle-choice > div {
 }
 body .booking-vehicle-choice .eyebrow {
   margin: 0;
-  font-size: 9px;
+  font-size: 14px;
 }
 body .booking-vehicle-choice strong {
-  font-size: 13px;
+  font-size: 14px;
 }
 body .booking-vehicle-choice span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 14px;
 }
 body .booking-vehicle-choice svg {
   width: 18px;
@@ -377,13 +377,13 @@ body .damage-photo-heading h3 {
   margin: 0;
 }
 body .damage-photo-heading > span {
-  font-size: 10px;
+  font-size: 14px;
   white-space: nowrap;
   color: var(--accent);
 }
 body .damage-photos > p {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
   margin: 8px 0 16px;
 }
 body .damage-photo-grid {
@@ -409,17 +409,17 @@ body .damage-photo-card > div {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 36px;
-  padding: 0 9px;
-  font-size: 10px;
+  min-height: 44px;
+  padding: 0 0 0 9px;
+  font-size: 14px;
 }
 body .damage-photo-card button {
   color: var(--text);
   background: transparent;
   border: 0;
   font-size: 20px;
-  min-height: 36px;
-  min-width: 28px;
+  min-height: 44px;
+  min-width: 44px;
   cursor: pointer;
 }
 body .damage-upload {
@@ -431,7 +431,7 @@ body .damage-upload {
   border: 1px dashed #83bda5;
   border-radius: 10px;
   color: var(--accent);
-  font-size: 12px;
+  font-size: 14px;
   cursor: pointer;
 }
 body .damage-upload input {
@@ -452,7 +452,7 @@ body .damage-upload:has(input:disabled) {
 }
 body .damage-photos .care-help {
   margin: 10px 0 0;
-  font-size: 10px;
+  font-size: 14px;
 }
 body .booking-summary {
   border: 1px solid #466b61;
@@ -462,14 +462,14 @@ body .booking-summary {
   margin-bottom: 24px;
 }
 body .booking-summary .eyebrow {
-  font-size: 9px;
+  font-size: 14px;
   margin: 0 0 10px;
 }
 body .booking-summary strong {
   font-size: 17px;
 }
 body .booking-summary p:not(.eyebrow) {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--muted);
   overflow-wrap: anywhere;
 }
@@ -480,13 +480,13 @@ body .booking-summary button {
   color: var(--accent);
   text-decoration: underline;
   cursor: pointer;
-  font-size: 12px;
-  min-height: 36px;
+  font-size: 14px;
+  min-height: 44px;
 }
 body .booking-explainer {
   margin-top: 22px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
 }
 body .booking-explainer summary {
   cursor: pointer;
@@ -515,14 +515,14 @@ body .quote-journey strong {
   font-size: 14px;
 }
 body .quote-journey span {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--muted);
 }
 body .guest-secondary-link {
   display: inline-block;
   margin-top: 16px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
 }
 @media (max-width: 560px) {
@@ -534,7 +534,7 @@ body .guest-secondary-link {
   }
   body .damage-photo-card > div {
     padding: 0 6px;
-    font-size: 9px;
+    font-size: 14px;
   }
   body .damage-photo-heading h3 {
     max-width: 190px;
