@@ -6,8 +6,12 @@ begin;
 --   N2  care_request_photo_sets + care_record_request_photos: a write-once
 --       marker (count + manifest hash) set only after Storage confirms the
 --       manifest; care_list_requests projects photo_count / has_photos from it.
---   N6  care_photo_upload_quota + care_consume_photo_upload_quota: an atomic
---       fixed-window upload counter keyed by the authenticated subject.
+--   N6  care_photo_upload_quota + care_reserve_photo_upload_slot /
+--       care_release_photo_upload_slot: an atomic fixed-window counter keyed by
+--       the authenticated subject. The server reserves a slot BEFORE storing and
+--       releases it on any failure or reject; only a call that creates the
+--       photo marker keeps its slot, so rejected bodies, retries after a 503 and
+--       identical replays of a recorded set never consume quota.
 -- Browser roles get no table or function privilege on the new objects.
 
 create table public.care_request_photo_sets (
@@ -20,7 +24,7 @@ create table public.care_request_photo_sets (
 create table public.care_photo_upload_quota (
   subject text not null check (length(subject) between 1 and 80),
   window_start timestamptz not null,
-  uploads integer not null check (uploads >= 1),
+  uploads integer not null check (uploads >= 0),
   primary key (subject, window_start)
 );
 
@@ -65,7 +69,7 @@ begin
 end;
 $$;
 
-create or replace function public.care_consume_photo_upload_quota(
+create or replace function public.care_reserve_photo_upload_slot(
   p_subject text,
   p_limit integer,
   p_window_seconds integer
@@ -83,7 +87,8 @@ begin
   end if;
   window_begin := to_timestamp(floor(extract(epoch from evaluated_at) / p_window_seconds) * p_window_seconds);
   -- One atomic statement: concurrent callers serialise on the row, and the
-  -- guarded update re-checks the limit against the committed value.
+  -- guarded update re-checks the limit against the committed value, so held
+  -- plus kept slots can never exceed p_limit.
   insert into public.care_photo_upload_quota as q(subject, window_start, uploads)
   values (p_subject, window_begin, 1)
   on conflict (subject, window_start) do update set uploads = q.uploads + 1
@@ -95,20 +100,45 @@ begin
       where subject = p_subject and window_start < window_begin - make_interval(secs => p_window_seconds);
     end if;
     return jsonb_build_object('allowed', true, 'limit', p_limit, 'used', used, 'remaining', p_limit - used,
-      'window_seconds', p_window_seconds, 'retry_after_seconds', 0);
+      'window_seconds', p_window_seconds, 'window_start', window_begin, 'retry_after_seconds', 0);
   end if;
   select uploads into used from public.care_photo_upload_quota
   where subject = p_subject and window_start = window_begin;
   return jsonb_build_object('allowed', false, 'limit', p_limit, 'used', used, 'remaining', 0,
-    'window_seconds', p_window_seconds,
+    'window_seconds', p_window_seconds, 'window_start', window_begin,
     'retry_after_seconds', greatest(1, ceil(extract(epoch from (window_begin + make_interval(secs => p_window_seconds) - evaluated_at)))::integer));
+end;
+$$;
+
+-- Gives back one reserved slot of the window it was taken in. The count never
+-- goes below zero; an unknown or already-empty window releases nothing.
+create or replace function public.care_release_photo_upload_slot(
+  p_subject text,
+  p_window_start timestamptz
+) returns jsonb
+language plpgsql security invoker set search_path = '' as $$
+declare
+  used integer;
+begin
+  if p_subject is null or length(p_subject) not between 1 and 80 or p_window_start is null or not isfinite(p_window_start) then
+    raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
+  end if;
+  update public.care_photo_upload_quota as q set uploads = q.uploads - 1
+  where q.subject = p_subject and q.window_start = p_window_start and q.uploads > 0
+  returning q.uploads into used;
+  if found then
+    return jsonb_build_object('released', true, 'used', used);
+  end if;
+  return jsonb_build_object('released', false, 'used', null);
 end;
 $$;
 
 revoke all on function public.care_record_request_photos(uuid, integer, text) from public, anon, authenticated;
 grant execute on function public.care_record_request_photos(uuid, integer, text) to service_role;
-revoke all on function public.care_consume_photo_upload_quota(text, integer, integer) from public, anon, authenticated;
-grant execute on function public.care_consume_photo_upload_quota(text, integer, integer) to service_role;
+revoke all on function public.care_reserve_photo_upload_slot(text, integer, integer) from public, anon, authenticated;
+grant execute on function public.care_reserve_photo_upload_slot(text, integer, integer) to service_role;
+revoke all on function public.care_release_photo_upload_slot(text, timestamptz) from public, anon, authenticated;
+grant execute on function public.care_release_photo_upload_slot(text, timestamptz) to service_role;
 
 -- Same signature, grants and fields as 20261101062400 (journey_state and
 -- completion_review_state kept) plus photo_count and has_photos. Read-only.

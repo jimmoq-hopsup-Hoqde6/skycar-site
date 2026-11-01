@@ -53,8 +53,10 @@ export async function verifyRequestPhotos({ sql, auth, quote, run, carePayload, 
   denies(anon(recordCall(withPhotos, 2, manifest)), 'permission denied', 'anon cannot call record RPC');
   denies(auth(owner, `insert into public.care_request_photo_sets(request_id,photo_count,manifest_sha256) values (${quote(withPhotos)}::uuid,3,${quote(manifest)})`), 'permission denied', 'no direct insert');
   denies(auth(owner, 'select * from public.care_request_photo_sets'), 'permission denied', 'no direct read');
-  denies(auth(owner, "select public.care_consume_photo_upload_quota('x', 5, 3600)"), 'permission denied', 'authenticated cannot consume quota');
-  denies(anon("select public.care_consume_photo_upload_quota('x', 5, 3600)"), 'permission denied', 'anon cannot consume quota');
+  denies(auth(owner, "select public.care_reserve_photo_upload_slot('x', 5, 3600)"), 'permission denied', 'authenticated cannot reserve quota');
+  denies(anon("select public.care_reserve_photo_upload_slot('x', 5, 3600)"), 'permission denied', 'anon cannot reserve quota');
+  denies(auth(owner, "select public.care_release_photo_upload_slot('x', now())"), 'permission denied', 'authenticated cannot release quota');
+  denies(anon("select public.care_release_photo_upload_slot('x', now())"), 'permission denied', 'anon cannot release quota');
   denies(auth(owner, 'select * from public.care_photo_upload_quota'), 'permission denied', 'quota table is private');
   equal(sql(`select count(*) from public.care_request_photo_sets`), '0', 'nothing was written by denied callers');
 
@@ -87,40 +89,71 @@ export async function verifyRequestPhotos({ sql, auth, quote, run, carePayload, 
   sql(`insert into public.care_journeys(id, account_request_id, state) values (${quote(withPhotos)}::uuid, ${quote(withPhotos)}::uuid, 'quotes_ready')`);
   equal([item(owner, withPhotos).journey_state, item(owner, withPhotos).photo_count], ['quotes_ready', 2]);
 
-  // N6: boundary, per-subject isolation, denied calls do not consume, and rollover.
-  const consume = (subject, limit, window = 3600) => json(sql(service(`select public.care_consume_photo_upload_quota(${quote(subject)}, ${limit}, ${window})`)));
+  // N6: reserve/release. Boundary, per-subject isolation, denied calls do not consume, rollover.
+  const reserve = (subject, limit, window = 3600) => json(sql(service(`select public.care_reserve_photo_upload_slot(${quote(subject)}, ${limit}, ${window})`)));
+  const release = (subject, windowStart) => json(sql(service(`select public.care_release_photo_upload_slot(${quote(subject)}, ${quote(windowStart)}::timestamptz)`)));
+  const used = subject => Number(sql(`select coalesce(sum(uploads),0) from public.care_photo_upload_quota where subject=${quote(subject)}`));
   const a = `journey-photos:${owner}`; const b = `journey-photos:${stranger}`;
-  const steps = [1, 2, 3].map(() => consume(a, 3));
+  const steps = [1, 2, 3].map(() => reserve(a, 3));
   equal(steps.map(step => [step.allowed, step.used, step.remaining]), [[true, 1, 2], [true, 2, 1], [true, 3, 0]]);
-  const denied = consume(a, 3);
+  assert.ok(steps.every(step => step.window_start === steps[0].window_start)); checks += 1;
+  const denied = reserve(a, 3);
   equal([denied.allowed, denied.used, denied.remaining], [false, 3, 0]);
   assert.ok(denied.retry_after_seconds >= 1 && denied.retry_after_seconds <= 3600); checks += 1;
-  equal(consume(a, 3).used, 3, 'denied attempts do not increment');
-  equal(consume(b, 3).allowed, true, 'another account is independent');
-  denies(service("select public.care_consume_photo_upload_quota('', 3, 3600)"), 'VALIDATION_FAILED');
-  denies(service(`select public.care_consume_photo_upload_quota(${quote('x'.repeat(81))}, 3, 3600)`), 'VALIDATION_FAILED');
-  denies(service("select public.care_consume_photo_upload_quota('x', 0, 3600)"), 'VALIDATION_FAILED');
-  denies(service("select public.care_consume_photo_upload_quota('x', 3, 59)"), 'VALIDATION_FAILED');
+  equal(reserve(a, 3).used, 3, 'denied attempts do not increment');
+  // Failure releases the slot: a released slot is immediately reusable, and the limit stays exact.
+  equal(release(a, steps[0].window_start), { released: true, used: 2 });
+  equal(used(a), 2);
+  const reused = reserve(a, 3);
+  equal([reused.allowed, reused.used], [true, 3]);
+  equal(reserve(a, 3).allowed, false, 'limit is still exact after release and re-reserve');
+  // Releases never go below zero and an unknown window releases nothing.
+  for (let i = 0; i < 3; i++) release(a, steps[0].window_start);
+  equal(release(a, steps[0].window_start), { released: false, used: null });
+  equal(used(a), 0, 'count floors at zero');
+  equal(release(b, steps[0].window_start), { released: false, used: null });
+  equal(reserve(a, 3).used, 1, 'a floored window counts from zero again');
+  equal(reserve(b, 3).allowed, true, 'another account is independent');
+  denies(service("select public.care_reserve_photo_upload_slot('', 3, 3600)"), 'VALIDATION_FAILED');
+  denies(service(`select public.care_reserve_photo_upload_slot(${quote('x'.repeat(81))}, 3, 3600)`), 'VALIDATION_FAILED');
+  denies(service("select public.care_reserve_photo_upload_slot('x', 0, 3600)"), 'VALIDATION_FAILED');
+  denies(service("select public.care_reserve_photo_upload_slot('x', 3, 59)"), 'VALIDATION_FAILED');
+  denies(service("select public.care_release_photo_upload_slot('', now())"), 'VALIDATION_FAILED');
+  denies(service("select public.care_release_photo_upload_slot('x', null)"), 'VALIDATION_FAILED');
   const rolling = `journey-photos:${randomUUID()}`;
-  equal(consume(rolling, 1, 60).allowed, true);
-  equal(consume(rolling, 1, 60).allowed, false);
+  const firstWindow = reserve(rolling, 1, 60);
+  equal(firstWindow.allowed, true);
+  equal(reserve(rolling, 1, 60).allowed, false);
   sql(`update public.care_photo_upload_quota set window_start = window_start - interval '60 seconds' where subject=${quote(rolling)}`);
-  equal(consume(rolling, 1, 60).allowed, true, 'a new window starts a new count');
+  equal(reserve(rolling, 1, 60).allowed, true, 'a new window starts a new count');
   sql(`update public.care_photo_upload_quota set window_start = window_start - interval '1 day' where subject=${quote(rolling)}`);
   sql(`insert into public.care_photo_upload_quota(subject,window_start,uploads) values (${quote(rolling)}, now() - interval '3 days', 1)`);
-  consume(rolling, 1, 60);
+  reserve(rolling, 1, 60);
   equal(sql(`select count(*) from public.care_photo_upload_quota where subject=${quote(rolling)}`), '1', 'expired windows are pruned');
 
   // Concurrency: many simultaneous sessions never exceed the limit and never deadlock.
   const crowded = `journey-photos:${randomUUID()}`;
   const attempts = await Promise.all(Array.from({ length: 40 }, async () => {
-    try { return JSON.parse(first(await run(service(`select public.care_consume_photo_upload_quota(${quote(crowded)}, 7, 3600)`)))); }
+    try { return JSON.parse(first(await run(service(`select public.care_reserve_photo_upload_slot(${quote(crowded)}, 7, 3600)`)))); }
     catch (error) { return { error: `${error.message}\n${error.stderr ?? ''}` }; }
   }));
   assert.equal(attempts.some(entry => entry.error), false, JSON.stringify(attempts.filter(entry => entry.error))); checks += 1;
   equal(attempts.filter(entry => entry.allowed).length, 7, 'exactly the limit is allowed');
   equal(attempts.filter(entry => !entry.allowed).length, 33);
-  equal(sql(`select uploads::text from public.care_photo_upload_quota where subject=${quote(crowded)}`), '7');
+  equal(used(crowded), 7);
+  // Concurrent releases of the held slots return exactly the held count, never more.
+  const windowStart = attempts.find(entry => entry.allowed).window_start;
+  const releases = await Promise.all(Array.from({ length: 20 }, async () => JSON.parse(first(await run(service(`select public.care_release_photo_upload_slot(${quote(crowded)}, ${quote(windowStart)}::timestamptz)`))))));
+  equal(releases.filter(entry => entry.released).length, 7);
+  equal(used(crowded), 0);
+  // Mixed concurrent reserve and release: the stored count always equals reserves minus releases.
+  const mixed = `journey-photos:${randomUUID()}`;
+  const seed = reserve(mixed, 50);
+  const mix = await Promise.all(Array.from({ length: 30 }, async (_, index) => index % 3 === 0
+    ? JSON.parse(first(await run(service(`select public.care_release_photo_upload_slot(${quote(mixed)}, ${quote(seed.window_start)}::timestamptz)`))))
+    : JSON.parse(first(await run(service(`select public.care_reserve_photo_upload_slot(${quote(mixed)}, 50, 3600)`))))));
+  const granted = mix.filter(entry => entry.allowed).length; const refunded = mix.filter(entry => entry.released).length;
+  equal(used(mixed), 1 + granted - refunded);
   // Concurrent identical marker writes converge on one row.
   const raced = submit(owner, vehicle.id);
   const writes = await Promise.all(Array.from({ length: 12 }, async () => JSON.parse(first(await run(service(recordCall(raced, 1, manifest)))))));
