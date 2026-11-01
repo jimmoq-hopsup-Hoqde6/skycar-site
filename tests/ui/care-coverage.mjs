@@ -38,6 +38,13 @@ async function assertAccessible(page, selector, label) {
   assert.deepEqual(result, { small: [], short: [], overflow: false }, label);
 }
 
+// The blocking messages are announced to assistive technology: exactly one role=alert carries the message.
+async function assertAlert(page, text, label) {
+  const alerts = page.getByRole('alert').filter({ hasText: text });
+  assert.equal(await alerts.count(), 1, `${label}: exactly one role=alert with "${text}"`);
+  assert.equal(await alerts.first().evaluate(el => el.classList.contains('coverage-notice') && el.getAttribute('role') === 'alert'), true, `${label}: the alert is the coverage notice`);
+}
+
 async function fillLocation(page, origin, postcode) {
   await page.goto(`${origin}/care/request`);
   await page.getByLabel('Your car', { exact: true }).fill('Toyota Corolla 2020');
@@ -75,6 +82,7 @@ try {
     assert.equal(await box.getAttribute('data-coverage'), 'out_of_area');
     assert.equal(await box.getAttribute('data-contact'), 'email', 'default email only, no phone');
     await page.getByRole('heading', { name: 'We don’t cover 5999 yet' }).waitFor();
+    await assertAlert(page, 'We don’t cover 5999 yet', `guest out of area ${width}px`);
     const mail = box.getByRole('link', { name: 'info@skycar.au' });
     assert.equal(await mail.getAttribute('href'), 'mailto:info@skycar.au');
     assert.ok((await mail.boundingBox()).height >= 44, 'mailto link is at least 44px tall');
@@ -118,6 +126,7 @@ try {
     await box.waitFor();
     assert.equal(await box.getAttribute('data-coverage'), 'unknown', name);
     await page.getByRole('heading', { name: 'We can’t check your area right now' }).waitFor();
+    await assertAlert(page, 'We can’t check your area right now', `guest unavailable (${name})`);
     assert.equal(await nameField(page).isVisible(), false, `${name}: no silent advance`);
     assert.equal(await page.getByRole('button', { name: /Continue —/ }).count(), 0, `${name}: unavailable has no bypass`);
     assert.equal(await page.getByText('Skycar is starting in Adelaide').count(), 0, `${name}: unavailable is not worded as out of area`);
@@ -148,6 +157,32 @@ try {
       await page.getByRole('heading', { name: `We don’t cover ${postcode} yet` }).waitFor();
       assert.equal(await nameField(page).isVisible(), false, postcode);
     }
+    await page.close();
+  }
+
+  // 4b. The guest decision cache is keyed by service AND postcode: an answer for one service is never reused for the other.
+  {
+    const { page, coverage } = await newGuest(390, body => (body.service === 'repair' ? 'available' : 'unavailable'));
+    await fillLocation(page, plain, '5000');
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await nameField(page).waitFor();
+    assert.deepEqual(coverage.calls, [{ service: 'repair', postcode: '5000' }]);
+    const goBackTo = async times => { for (let i = 0; i < times; i++) await page.getByRole('button', { name: 'Back', exact: true }).click(); };
+    await goBackTo(2);
+    await page.getByRole('radio', { name: /Cleaning/ }).check();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByRole('heading', { name: 'We don’t cover 5000 yet' }).waitFor();
+    assert.deepEqual(coverage.calls, [{ service: 'repair', postcode: '5000' }, { service: 'cleaning', postcode: '5000' }], 'cleaning is checked on its own, not served from the repair answer');
+    assert.equal(await nameField(page).isVisible(), false, 'cleaning in an area that only covers repair cannot advance');
+    // Back to repair: the earlier repair decision is reused (no third call) and the form advances.
+    await page.getByRole('button', { name: 'Back', exact: true }).click();
+    await page.getByRole('radio', { name: /Repair/ }).check();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await nameField(page).waitFor();
+    assert.equal(coverage.calls.length, 2, 'the repair:5000 decision is cached');
+    assert.equal(await page.locator('.coverage-notice').count(), 0);
     await page.close();
   }
 
@@ -206,6 +241,7 @@ try {
     const box = page.locator('.coverage-notice');
     await box.waitFor();
     assert.equal(await box.getAttribute('data-coverage'), 'out_of_area');
+    await assertAlert(page, 'We don’t cover 5999 yet', `signed-in out of area ${width}px`);
     assert.equal(await page.locator('.coverage-notice a[href="mailto:info@skycar.au"]').count(), 1);
     assert.equal(await page.locator('.coverage-notice a[href^="tel:"]').count(), 0);
     assert.equal(creates.length, 0, 'out of area creates nothing');
@@ -214,6 +250,7 @@ try {
     await page.getByLabel('Where will the work happen? Postcode').fill('5000');
     await page.getByRole('button', { name: 'Submit for review' }).click();
     await page.waitForFunction(() => document.querySelector('.coverage-notice')?.getAttribute('data-coverage') === 'unknown');
+    await assertAlert(page, 'We can’t check your area right now', `signed-in unavailable ${width}px`);
     assert.equal(creates.length, 0, 'unknown never creates a request');
     await assertAccessible(page, '.coverage-notice', `signed-in unknown ${width}px`);
     assert.equal(await page.getByRole('button', { name: /Continue —/ }).count(), 0, 'unavailable has no bypass');

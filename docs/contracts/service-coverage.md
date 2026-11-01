@@ -122,7 +122,8 @@ The forms never decide coverage; they read the existing response shape (`docs/CA
 Rules:
 
 - A response counts as in/out of area only if it is `200`, has exactly `{service, postcode, coverage}`, and echoes what was asked. Anything else is unknown, never in area.
-- A decision is remembered per `service:postcode` for the visit; the final send does not ask again. Changing the postcode or service clears it.
+- A decision is remembered per `service:postcode` for the visit (the key carries the service, so a repair answer is never reused for cleaning); the final send does not ask again. Changing the postcode or the service clears the on-screen notice and confirmation; coming back to a pair already decided reuses its answer.
+- The out-of-area and unavailable notices are `role="alert"` so assistive technology announces them (asserted for both forms).
 - The signed-in form has a new postcode field, labelled as used only to check coverage and not saved with the request (the request body is unchanged). The customer enters the postcode again later at booking, which is where it is stored today. An uncertain-submission retry ("Check same request") never re-checks.
 - Mobile-first: notice text 15–17px (≥14px everywhere), buttons and links ≥44px tall (buttons 48px), no horizontal scroll at 320, 390 or 1440px (asserted in `tests/ui/care-coverage.mjs`).
 
@@ -155,7 +156,7 @@ Rules:
 
 ## 7. Tests
 
-- Unit `tests/unit/coverage-resolver.test.mjs`: in-area, out-of-area, borderline (included and excluded), invalid input at the route (400), unavailable (503 for broken data), data provenance, every flag re-derived from ratios, tamper/empty/duplicate/bad-ratio/unknown-service data all fail closed.
+- Unit `tests/unit/coverage-resolver.test.mjs`: in-area, out-of-area, borderline (included and excluded), invalid input at the route (400), unavailable (503 for broken data), data provenance, every flag re-derived from ratios, tamper/empty/duplicate/bad-ratio/unknown-service data all fail closed, and the threshold boundary (a share of exactly 0.5 is included, just below is excluded, for the Greater Adelaide share and the combined Hills share; a mismatched flag at the boundary fails closed; no real postcode sits within 0.01 of the threshold).
 - Unit `tests/unit/care-coverage.test.mjs`, `tests/unit/support-contact.test.mjs`: the browser reader, strictness, no bypass, contact validation, default email, phone hidden when unset.
 - API `tests/api/care-smoke.test.mjs`, `tests/api/origin-regression.test.mjs`: the real built route returns `200` available for 5000 and `200` unavailable for an out-of-area postcode.
 - Browser `tests/ui/care-coverage.mjs` (synthetic intercepted API plus the real route and real data for in-area, out-of-area and borderline postcodes): both forms, all four states, retry, no bypass, default email present and phone hidden when unset, env override showing email and phone, size and overflow checks at 320/390/1440.
