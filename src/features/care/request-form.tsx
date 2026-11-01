@@ -8,6 +8,7 @@ import { readCareSubmission } from "@/domain/care/submission";
 import { unreadableResponseIsUncertain } from "@/domain/care/submission-recovery";
 import { checkCoverage, isPostcodeShape, normalisePostcode, type CoverageOutcome } from "@/domain/care/coverage";
 import type { SupportContact } from "@/domain/care/support-contact";
+import { rememberCheckedPostcode } from "./checked-postcode";
 import { ApiError, garageApi, type Page, type Vehicle } from "@/features/garage/types";
 import { CoverageConfirmed, CoverageNotice, CoveragePostcodeError } from "./coverage-notice";
 import "./request-form.css";
@@ -113,6 +114,8 @@ export function CareRequestForm({ supportContact = null }: { supportContact?: Su
   const latestArea = useRef({ service: "repair" as CareInput["service"], postcode: "" });
   const selectedVehicle = useRef("");
   const pending = useRef<Pending | null>(null);
+  // The postcode that passed the area check for the attempt in `pending`; handed to the journey page on success.
+  const attemptPostcode = useRef("");
   const controller = useRef<AbortController | null>(null);
   const accountEpoch = useRef(0);
   const validation = useRef<ValidationRun | null>(null);
@@ -249,6 +252,7 @@ export function CareRequestForm({ supportContact = null }: { supportContact?: Su
       setAreaStatus("in_area");
       const input: CareInput = { vehicle_id: vehicleId, service, description: description.trim(), preferred_window: preferredWindow };
       pending.current = { key: crypto.randomUUID(), body: JSON.stringify(input) };
+      attemptPostcode.current = code;
     }
     const attempt = pending.current;
     const epoch = accountEpoch.current;
@@ -260,6 +264,7 @@ export function CareRequestForm({ supportContact = null }: { supportContact?: Su
         return;
       }
       pending.current = null; setUncertain(false);
+      rememberCheckedPostcode(result.request.id, attemptPostcode.current);
       router.push(`/care/requests/${encodeURIComponent(result.request.id)}`);
     } catch (caught) {
       if (!(await latestValidationAllows(epoch))) {
