@@ -1,6 +1,6 @@
 # V2 nine-migration install: manifest, pre-migration checklist, post-migration verification, backup gap review
 
-> **Revision 6 (adds section 12: changed install set `60a48da`, pre-checks P9 to P11). Revision 5 (adds section 11: install results of 1 Nov 2026). Revision 4 (adds section 10: live staging inventory of 1 Nov 2026, the sequence-revoke migration `20261101133000` in the install set, and checklist items 14-15 with query P8). Revision 3 added section 9: pre-launch ops for request-photo uploads. Revision 2 added sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed.**
+> **Revision 7 (adds section 13: restore test of the logical export). Revision 6 (adds section 12: changed install set `60a48da`, pre-checks P9 to P11). Revision 5 (adds section 11: install results of 1 Nov 2026). Revision 4 (adds section 10: live staging inventory of 1 Nov 2026, the sequence-revoke migration `20261101133000` in the install set, and checklist items 14-15 with query P8). Revision 3 added section 9: pre-launch ops for request-photo uploads. Revision 2 added sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed.**
 >
 > **Status: documentation only. Nothing in this document has been executed against any hosted
 > database.** No migration has been applied, no workflow has been dispatched, and no secret or
@@ -1298,3 +1298,41 @@ This is the open finding of section 11.5 (item 2). It does **not** block install
 Staging result today, **NO-GO as expected** (6 findings, all `default_acl`, creator `supabase_admin`, scope `public`): grantees `anon` and `authenticated`, each with `SELECT`, `UPDATE` and `USAGE`. There is **no** `sequence` finding (no public sequence grants anon, authenticated or PUBLIC anything) and **no** global (all-schemas) default ACL. The full set of sequence default ACLs on staging: `supabase_admin` in `public`, `graphql_public`, `graphql` (grants to `anon`, `authenticated`, `service_role`) and `extensions`, `realtime`; `postgres` in `public` (`service_role` only) and `storage`; `supabase_auth_admin` in `auth`.
 
 After the ops script and the migration, the gate must print `GO`. Until then the gate result NO-GO is the known state and is **non-blocking** for the install.
+
+## 13. Restore test of the section 11.1 logical export (2 Nov 2026, docs only; no data in this note)
+
+Executed 2 Nov 2026 between about 01:20 and 01:35 ACDT (Australia/Adelaide, UTC+10:30) on the executor box. The export was restored into a throwaway local PostgreSQL 17.6 cluster (temporary directory, port 54329, bound to 127.0.0.1 only, trust auth, `fsync` off), from a fresh `initdb`. Staging was only read (SELECT) for comparison; nothing was written to it. The cluster and every file derived from the data were deleted afterwards (see 13.4).
+
+### 13.1 What was restored, and how
+
+Order used: roles, schemas, stubs, enum types; 20 `create table` statements from `schema.sql`; row data from `data/*.json` through `jsonb_populate_recordset` (before constraints, so every foreign key was validated while being added); the 89 constraints from `schema.sql` (primary key, unique, check, then foreign key); the 61 indexes from `schema.sql` (constraint-backed ones skipped); `functions.sql` as is (17 functions); the 9 triggers from `schema.sql`; RLS flags; the 15 policies, rebuilt from `catalog_policies.json` (`schema.sql` holds them only as comments); sequence values; owners; table, column, function, sequence and schema ACLs from the catalog JSON; default ACLs last. The scripts are on the box only (`/workspace/bin/restore_test/`); they are not in git.
+
+### 13.2 Results (VERIFIED, a single clean pass: the restore script returned exit 0 with an empty error log)
+
+| Check | Result |
+| --- | --- |
+| Row counts equal the manifest | all 20 tables match; 32 rows in total |
+| Object counts equal the manifest | 16 tables, 17 functions, 15 policies, 9 triggers, 61 indexes, 89 constraints, 2 sequences: all equal |
+| Names and definitions against the catalog JSON | constraint, index, trigger (including enabled state) and policy definition text identical; function definition text, owner, `security definer` and ACL identical for all 17 |
+| Columns | name, type, not null, default, identity and generated expression identical for all 20 tables |
+| RLS | enabled and forced flags and owners identical (19 tables with RLS enabled; `supabase_migrations.schema_migrations` has none, as in the export) |
+| ACLs | table, column (9), sequence, schema (`auth`, `extensions`, `storage`, `public`) and all 24 default ACL entries identical to the export |
+| Sequences | `audit_events_id_seq` last_value 3 and `refresh_tokens_id_seq` 6, owner, start and increment identical |
+| Data fidelity | restored rows equal the exported JSON in all 20 tables, including generated columns |
+| Foreign keys | 21 of 21 validated when added after the load |
+| Against staging today (read-only) | per-table row hash (md5 over `to_jsonb` rows, session time zone UTC) equal for all 19 original tables except `supabase_migrations.schema_migrations`, which has 18 rows live against 8 in the export, as expected after section 11 |
+| Behavioural smoke test | as `authenticated` with a stub `auth.uid()`: the owner sees their vehicle, another user sees 0 rows, `audit_events` is not readable, and `anon` cannot read `vehicles`; and, as in the pre-install state, `authenticated` could still call `nextval` on `audit_events_id_seq` (the exposure that migration `20261101133000` removed on staging) |
+
+### 13.3 Stubs, failures and gaps
+
+Failures along the way were all in the restore tooling, not in the export, and were fixed before the final pass: (1) multi-line constraint definitions were split by my first parser; (2) the default ACL entries for three schemas needed those schemas to exist; (3) the owner entry and grant-option flags of default ACLs, and column ACLs, were not applied by my first script; (4) my verification had compared with the wrong session time zone and search path. None is a defect of the backup, though items (3) show `schema.sql` alone is not enough: grants and policies are comments there and have to be rebuilt from the catalog JSON.
+
+Stubs needed (they are not in the export): roles (names and attributes only, `NOLOGIN`, no passwords, no memberships, no per-role settings); empty schemas `graphql`, `graphql_public`, `realtime` (only so their default ACLs could be restored); `auth.uid()` and `auth.role()` (JWT-claim based), `storage.foldername()`; no-op trigger functions `storage.protect_delete`, `protect_bucket_control_columns`, `update_updated_at_column`, `enforce_bucket_name_length`, `enforce_bucket_lifecycle_service_role` (the real bodies are not in the export); enum `storage.buckettype` (labels guessed: `STANDARD`, `ANALYTICS`, `VECTOR`); standalone sequence `auth.refresh_tokens_id_seq` (its table is not exported). The local cluster has `pgcrypto` and `uuid-ossp`; `pg_stat_statements` and `supabase_vault` were not restored.
+
+Gaps that remain (UNVERIFIED or not covered): storage object **bytes** (3 objects; only the metadata rows are in the export); **role passwords**, memberships and per-role settings; every `auth` table other than `auth.users`, the real `auth` and `storage` functions, `realtime`, `vault` and other platform schemas; `pg_stat_statements` and `supabase_vault` contents. The export has `auth.users` password hashes, so the backup directory stays mode 700 with mode 600 files.
+
+**Verdict:** a usable restore of the application data and `public` schema: rebuilding the application tables, functions, policies, grants and data into a fresh Postgres 17 works and matches the live staging data. It is not a full-project restore: it cannot restore storage file contents or the platform roles and schemas, so it is a recovery aid for the `public` data and definitions, and a platform backup (or `pg_dump` from a networked machine) remains needed for a complete restore.
+
+### 13.4 Clean-up
+
+The cluster was stopped and its directory deleted. All generated SQL containing row data, the scratch queries and one stray connector output file that held a copy of `auth.users` were deleted. A search of `/workspace`, `/tmp` and the home directory for the user's id, e-mail address and password-hash prefix found no copy outside the backup directory. The backup directory is mode 700 with all files mode 600, and its 31 files still match the manifest sha256 values.
