@@ -18,7 +18,7 @@ begin read only;
 select kind, detail from (
   select 'default_acl' as kind,
          format('creator=%s scope=%s grantee=%s privilege=%s',
-                pg_get_userbyid(d.defaclrole),
+                quote_ident(pg_get_userbyid(d.defaclrole)),
                 case when d.defaclnamespace = 0 then 'GLOBAL(all schemas)' else d.defaclnamespace::regnamespace::text end,
                 case when a.grantee = 0 then 'PUBLIC' else pg_get_userbyid(a.grantee) end,
                 a.privilege_type) as detail
@@ -55,7 +55,7 @@ begin
 select kind, detail from (
   select 'default_acl' as kind,
          format('creator=%s scope=%s grantee=%s privilege=%s',
-                pg_get_userbyid(d.defaclrole),
+                quote_ident(pg_get_userbyid(d.defaclrole)),
                 case when d.defaclnamespace = 0 then 'GLOBAL(all schemas)' else d.defaclnamespace::regnamespace::text end,
                 case when a.grantee = 0 then 'PUBLIC' else pg_get_userbyid(a.grantee) end,
                 a.privilege_type) as detail
