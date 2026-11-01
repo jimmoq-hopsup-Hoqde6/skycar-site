@@ -1,5 +1,7 @@
 # V2 nine-migration install: manifest, pre-migration checklist, post-migration verification, backup gap review
 
+> **Revision 2 (adds sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed).**
+>
 > **Status: documentation only. Nothing in this document has been executed against any hosted
 > database.** No migration has been applied, no workflow has been dispatched, and no secret or
 > environment value has been read or set while writing it. Anything not demonstrated by a file in this
@@ -19,7 +21,7 @@
 | # | Finding | Evidence | Effect |
 | --- | --- | --- | --- |
 | F1 | **The nine files are not self-contained.** They reference `public.care_requests`, `public.care_guest_requests`, `public.user_roles`, `public.vehicles`, `public.vehicle_history`, `public.audit_events` and `auth.users`, which are created by the **eight earlier files** in the same directory (`202609200001` … `20261001030000`). | Reading the nine files; `care_journeys` has FKs to `care_requests` and `care_guest_requests`. | The nine can only apply on a database that already has the eight baseline migrations. "Baseline replay is prohibited" (PR comment) is consistent with that, but it means the pre-migration inventory **must** show the eight baseline versions. |
-| F2 | **Conflicting staging-state descriptions.** `docs/STAGING_BACKUP_EXECUTION.md` (at the pin) describes staging as an **empty** project with **no applied migration history** and a **six-migration** packet at application `821125d`. The nine-file stack presupposes eight applied baseline files. | `docs/STAGING_BACKUP_EXECUTION.md`; `git ls-tree 821125d supabase/migrations` lists six files. | Actual staging inventory is **UNVERIFIED**. If staging is still empty, the correct install set is the eight baseline files **plus** the nine (17), not nine. The founder must confirm inventory before the manifest below is used. |
+| F2 | **Conflicting staging-state descriptions; resolved in favour of the 20 Oct readback (section 6).** `docs/STAGING_BACKUP_EXECUTION.md` (at the pin) describes staging as an **empty** project with no applied migration history and a six-migration packet at `821125d`. The later 20 Oct 2026 readback in issue #8 (comment 6289948265) reports **eight baseline migrations installed** and the pending candidates **not** applied. | Section 6 (quoted with comment id, author and time). | The nine-file install set is consistent with the 20 Oct readback (eight baseline + nine). The 20 Oct text is a reported read by the owner account, not something re-observed here; current state **UNVERIFIED** and must be re-read (the project was INACTIVE on 11 Oct and at the start of 20 Oct). |
 | F3 | **The backup workflow cannot back up the nine-file stack as shipped** (see section 4: hard-coded `APPLICATION_SHA`, empty-project-only gate). | `ops/staging-backup/backup.mjs` lines 17-31, 98-111. | A pre-migration backup of a baseline-populated staging project with this workflow will fail closed. |
 | F4 | Manifest vs tree: **no mismatch.** All nine blob SHAs in the PR comment equal the blob SHAs in the tree at `18240dc…` and in the bytes (re-hashed with `git hash-object`). The nine are exactly the files with versions > `20261001030000`; the "original eight pending files" in the comment are unchanged from PR #74's own diff (PR #74 changes only the ninth migration + four test files). | Section 1. | none |
 | F5 | Sequence privileges are not revoked by the migrations (`care_journey_events_id_seq`). On a disposable local PostgreSQL 17.6 loaded with Supabase-style default privileges, `anon` and `authenticated` retained USAGE/SELECT/UPDATE on it. | Check D4 below. Hosted state **UNVERIFIED**. | Low severity (no table privilege, so no insert path), but it contradicts the "browser roles receive no privileges" comment in `20261003064126`. Record the hosted result; do not fix as part of this install without a reviewed migration. |
@@ -112,7 +114,7 @@ passwords into the evidence log; record presence/equality only.
 | 3 | Staging project status is **ACTIVE_HEALTHY** | Supabase dashboard project status or Management API `GET /v1/projects/{ref}` (`status` field) | `ACTIVE_HEALTHY` | screenshot/JSON, redacted | UNVERIFIED |
 | 4 | Staging project ref confirmed **non-production** | Compare the project ref/URL host to the documented staging ref and to the production ref held by the founder; project name/marker matches `skycar-v2-isolated-staging` | Ref is the staging ref; differs from production ref | redacted ref comparison | UNVERIFIED |
 | 5 | No production credentials in the environment or secrets | List secret/variable **names only** in the `skycar-staging` environment and the deployment environment (never values); confirm each Supabase URL/ref/key in use belongs to staging (derive the ref from the URL host, compare) | Every Supabase value belongs to the staging ref; no production URL/key/ref anywhere | names + equality result | UNVERIFIED |
-| 6 | `schema_migrations` inventory recorded | Run P1-P2 in section 2.1 | Output saved; the eight baseline versions present (or the founder-approved 8+9 plan, F2); no unexpected versions | saved output | UNVERIFIED |
+| 6 | `schema_migrations` inventory recorded | Run P1-P2 in section 2.1 | Output saved; the eight baseline **names** present (hosted versions may be generated at install time and differ from repository filenames, section 6); no unexpected rows; none of the nine new names present | saved output | UNVERIFIED |
 | 7 | None of the nine target versions or created objects already exist | P3, P4 | 0 rows each | output | UNVERIFIED |
 | 8 | Prerequisite tables exist | P5 | 9 rows, all true | output | UNVERIFIED |
 | 9 | RLS enabled on **all** public tables | P6 | 0 rows | output | UNVERIFIED |
@@ -184,6 +186,13 @@ is not hosted evidence: results from the real staging project are **UNVERIFIED**
 
 ### 3.1 Migration history: exactly the nine new versions, no baseline replay, no duplicates
 
+**Version caveat.** The 20 Oct readback says hosted migration versions "were generated on installation and
+differ from repository filenames". If the nine are applied through the Supabase CLI (`db push`) the versions
+equal the filename prefixes and A1 applies. If they are applied through any path that generates versions
+(for example the connector `apply_migration`), A1 will correctly FAIL on versions; use A1n (name, count and
+order based) instead and record the actual hosted versions. Either way A2/A3 must show no duplicate and no
+baseline replay (the baseline count must stay at 8 and the new rows at exactly 9).
+
 ```sql
 -- A1. Exactly the nine new versions are present, once each, with the expected names.
 with expected(ord, version, name) as (values
@@ -243,6 +252,35 @@ from supabase_migrations.schema_migrations
 where version in ('202609200001','202609200002','202609200003','202609200100',
                   '202609200300','202609220100','202609300001','20261001030000')
 order by version;
+```
+
+A1n (use instead of A1 when hosted versions were generated at install time; also run locally, 9 PASS / 0 order violations):
+
+```sql
+-- A1n. Name-based variant of A1 for projects whose hosted versions were generated at installation
+-- (20 Oct readback: "hosted migration versions ... differ from repository filenames"). Record the actual
+-- versions in the evidence log; the check is then on names, count and order. Expected: 9 rows, all PASS.
+with expected(ord, name) as (values
+  (1,'care_connected_journey'),(2,'technician_inbox'),(3,'technician_quotes'),(4,'technician_work_start'),
+  (5,'technician_completion'),(6,'customer_completion_review'),(7,'completion_review_security_fix'),
+  (8,'completion_review_replay_authority'),(9,'completion_review_final_lock_authority'))
+select e.ord, e.name, count(m.*) as rows_for_name, min(m.version) as hosted_version,
+       case when count(m.*) = 1 then 'PASS' else 'FAIL' end as status
+from expected e
+left join supabase_migrations.schema_migrations m on m.name = e.name
+group by e.ord, e.name order by e.ord;
+
+-- A1n-order. The nine names must have been applied in manifest order (hosted versions strictly increasing
+-- with ord) and after every baseline name. Expected: 0 rows.
+with expected(ord, name) as (values
+  (1,'care_connected_journey'),(2,'technician_inbox'),(3,'technician_quotes'),(4,'technician_work_start'),
+  (5,'technician_completion'),(6,'customer_completion_review'),(7,'completion_review_security_fix'),
+  (8,'completion_review_replay_authority'),(9,'completion_review_final_lock_authority'))
+select a.name as earlier_in_manifest, b.name as later_in_manifest
+from expected a join expected b on a.ord < b.ord
+join supabase_migrations.schema_migrations ma on ma.name = a.name
+join supabase_migrations.schema_migrations mb on mb.name = b.name
+where ma.version >= mb.version;
 ```
 
 ### 3.2 Tables, RLS, constraints, indexes, triggers
@@ -563,10 +601,217 @@ staging inventory (F2); (2) decide the install set (9 vs 8+9); (3) reviewed chan
 for the new pin and a populated-baseline backup contract, or an alternative backup method recorded by the
 founder; (4) test restore on a disposable target; (5) re-run section 2, then install, then run section 3.
 
-## 5. What this document does not establish
+## 5. What this document does not establish (see also sections 6-8)
 
 - It does not show that staging is ACTIVE_HEALTHY, non-production, backed up, restorable, RLS-clean or free of production credentials.
 - It does not show the hosted migration inventory. Disposable CI passes in PR #74 are not hosted evidence.
 - The SQL results quoted here come from a disposable local PostgreSQL 17.6 with stubs, not from Supabase.
 - The `md5(prosrc)` fingerprints in C1 are derived from the pinned files by applying them locally; they bind
   function bodies, not file blobs (`schema_migrations.statements` is CLI-split text and cannot be hashed back to a Git blob).
+
+## 6. Staging inventory reconciliation (read-only, repository evidence only)
+
+No Supabase connector, project credential or database access was available while writing this section, so **no
+hosted fact was observed directly**. Items are labelled **VERIFIED** only when they were read from a file,
+comment, run or log in the repository during this review (source named); hosted facts that are only reported
+in prose are **UNVERIFIED** and show their source.
+
+### 6.1 The 20 October readback (quoted)
+
+- Where: issue #8, comment `6289948265` -
+  https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/issues/8#issuecomment-6289948265
+- Posted by: `jimmoq-hopsup-Hoqde6` (author association OWNER). The comment text says it is the "existing sole
+  Backend/DevOps" owner's read-only continuation "requested by Marcel"; whether a person or an agent session
+  wrote it is not stated.
+- Posted: 2026-10-20T11:36:02Z = **20 Oct 2026, 22:06 (Australia/Adelaide, UTC+10:30)**. An earlier comment
+  (`6289648961`, 2026-10-20T11:17:41Z = 21:47 Adelaide) reported the same project **INACTIVE**.
+- Exact words relied on: "Supabase `...` is ACTIVE_HEALTHY"; "Eight baseline migrations installed (foundation,
+  Care requests/My Jobs, Garage mutations/photos, offers, access hardening, guest requests)"; "Connected
+  journey table and completion-review RPC are absent. The eight pending candidate migrations below have not
+  been applied."; "Sixteen public tables have RLS enabled. `private-media` exists with public=false. anon/authenticated
+  have no direct guest-request SELECT privilege"; "Only one customer role exists; no admin/operator or technician
+  roles"; "Existing hosted migration versions were generated on installation and differ from repository
+  filenames, reconcile names/content, do not replay the eight baseline migrations"; "Existing populated
+  baseline cannot be treated as an empty-schema recovery fixture. No backup/recovery success is established
+  by project resumption."
+- **The comment does not list the hosted version numbers.** It gives names only, so "exact versions" cannot be
+  quoted from it; the hosted versions are **UNVERIFIED** and (by its own statement) differ from the repository
+  prefixes. Its eight pending files are given as SHA-256 values, not Git blobs.
+- Cross-check done here: the eight SHA-256 values in that comment equal the SHA-256 of the same eight files at
+  `18240dc` (recomputed from the pinned tree). The ninth file did not exist then (it is added by PR #74).
+  The eight baseline names it lists correspond one-to-one to the eight baseline files in section 1.
+
+### 6.2 Inventory table
+
+| Item | Status | Evidence source |
+| --- | --- | --- |
+| Eight baseline migrations exist in the repository at the pin, with the blob SHAs in section 1 | VERIFIED | `git ls-tree` at `18240dc` |
+| The nine candidate files match the PR #74 comment and the tree | VERIFIED | section 1 script, PR #74 comment `6552566823` |
+| The eight earlier pending files are byte-identical to the ones the 20 Oct readback hashed | VERIFIED | SHA-256 recomputed from the pinned tree vs comment `6289948265` |
+| Staging project was ACTIVE_HEALTHY on 20 Oct 22:06 Adelaide | UNVERIFIED (reported) | comment `6289948265`; not re-observed |
+| Staging project is ACTIVE_HEALTHY now | UNVERIFIED | no newer record found; project was INACTIVE on 11 Oct (comment `6106946644`) and 20 Oct 21:47 (comment `6289648961`) and had to be restored; free-plan projects pause after a week of inactivity (Supabase pricing page), plan tier UNVERIFIED |
+| Eight baseline migrations installed (by name) | UNVERIFIED (reported 20 Oct) | comment `6289948265` |
+| Hosted versions/names/statements of the eight | UNVERIFIED | not quoted anywhere; comment says they differ from filenames |
+| Nine (or the earlier eight) pending migrations not yet applied | UNVERIFIED (reported absent on 20 Oct for the eight; the ninth did not exist) | comment `6289948265`; no later record found in issue #8 |
+| 16 public tables, RLS enabled on all | UNVERIFIED (reported) | comment `6289948265` ("metadata checks, not hosted JWT/media acceptance") |
+| `private-media` bucket public=false | UNVERIFIED (reported) | same |
+| Roles: one customer, no admin/operator/technician | UNVERIFIED (reported) | same |
+| Staging is non-production | UNVERIFIED | marker variable `STAGING_ISOLATION_MARKER=skycar-v2-isolated-staging` appears in run logs, but that proves only that a variable was set; no production-ref comparison was recorded |
+| Backup / PITR / any successful backup or restore | NOT ESTABLISHED | workflow history: 3 runs, all failed (section 8); 20 Oct readback: "No backup/recovery success is established" |
+| Plan tier (daily backups / PITR entitlement) | UNVERIFIED | not recorded anywhere found |
+| Secrets/variables | UNVERIFIED | never read; last independent readback of `skycar-staging` controls was 29 Sep (comment `5891303025`) and showed the two CA secrets absent, since reported added (3rd run log shows both set) |
+| Env/branch secret configuration for the candidate preview | UNVERIFIED (reported) | comment `6289948265`: `SUPABASE_SECRET_KEY` scoped only to Preview branch `fix/phone-test-delivery`; `SKYCAR_APP_ORIGIN` points at the old branch URL |
+
+### 6.3 Reconciliation
+
+- **Which source is newer:** the 20 Oct 2026 readback (22:06 Adelaide) is newer than the statements in
+  `STAGING_BACKUP_EXECUTION.md`, which are tied to application `821125d`/PR #35 and to backup runs of
+  27-30 Sep (last failed run 2026-09-29T20:59Z). Nothing in issue #8 between 30 Sep (last comment
+  2026-09-30T11:36Z) and 4 Oct mentions installing migrations; the baseline installation itself is **not
+  recorded in any comment I could read**, so its date, executor and method are unknown.
+- **Which is authoritative:** neither is authoritative proof of present hosted state. For *intent*, the 20 Oct
+  readback is the later and more specific record (eight baseline, populated, versions generated at install),
+  and the "empty / six migrations" wording in `STAGING_BACKUP_EXECUTION.md` should be treated as **stale**
+  (it is also explicitly about the failed first-capture plan). For *current* state, only a fresh read-only
+  inventory (section 2.1, P1-P7) is authoritative, and it has not been done.
+- **Why the two can both be true:** the docs describe the project when the empty-project backup was attempted
+  (27-30 Sep, all attempts failed, so the project could still have been empty then); the readback describes it
+  three weeks later after an unrecorded baseline installation.
+- **What is still unproven:** current project health; exact hosted versions and names; whether any of the
+  pending files has since been applied; non-production confirmation; RLS/grants/buckets (only reported
+  metadata); backup entitlement; any backup or restore at all; storage object contents.
+- **Practical consequence:** the install set is the nine files on top of the eight installed baseline
+  migrations (not 8+9), but only after the inventory is re-read; the backup workflow as written cannot take
+  the pre-install restore point (section 4 G1/G2, section 8).
+
+## 7. Proposed backup route for a populated project (design only; nothing implemented or executed)
+
+Principles: defence in depth (platform backup **and** an independent logical export), restore is proven only by
+restoring into a **new, disposable** target and running section 3 against it, no production credentials,
+manual/protected trigger, ciphertext-only artifacts, and no step that mutates staging.
+
+### 7.1 Layer A: Supabase platform backups (daily or PITR) with a test restore
+
+- Confirm the staging project's plan. Per Supabase's published docs (checked 1 Nov 2026): the Free plan has
+  **no** automatic backups and no PITR and cannot use "Restore to a new project"; Pro/Team/Enterprise take daily
+  backups (7/14/up to 30 days), PITR is a paid add-on (requires at least Small compute; it replaces daily backups).
+  Plan tier and any backup entitlement for the staging project are **UNVERIFIED**.
+- If entitled: record the newest backup/PITR timestamp before install; **test restore with "Restore to a new
+  project"** (database-only copy including `auth` data and the encryption root key) rather than an in-place
+  restore, which overwrites the project and makes it inaccessible during the restore. Then run P1-P7 and
+  section 3 against the copy. Restored projects reconfigure compute/SSL but not Storage objects, Edge
+  Functions or app secrets (docs: database-only copy).
+- If not entitled (Free): Layer A does not exist. Either upgrade (a purchase decision for the founder), or rely
+  on Layer B alone and record that explicitly.
+
+### 7.2 Layer B: logical export of a populated project (replaces the empty-only capture)
+
+Roles, schema and data in separate files, from a PostgreSQL 17 client matching the server major version:
+
+1. `roles.sql`: roles (`supabase db dump --role-only` or `pg_dumpall --roles-only` equivalent).
+2. `schema.sql` and `data.sql`: **explicitly include** `public`, `auth`, `storage` (rows of `storage.buckets` and
+   `storage.objects` metadata) and `supabase_migrations` (`schema_migrations`), because the default CLI
+   dump filters omit Supabase-managed schemas and migration history (documented in
+   `STAGING_BACKUP_EXECUTION.md`). Use `pg_dump --schema=public --schema=auth --schema=storage
+   --schema=supabase_migrations` (or the CLI's `--schema` option; CLI 2.117.0 flags are **UNVERIFIED** here),
+   keep `--use-copy`/`--no-owner`-style options consistent with the documented restore recipe, and keep the
+   existing exclusion of `storage.buckets_vectors`/`storage.vector_indexes`.
+3. Record in the (authenticated, signed) manifest: server version, per-schema table row counts,
+   `schema_migrations` rows (version, name), `md5` of migration `statements` where present, bucket list,
+   `storage.objects` count and total size, and the sha256 of each dump file.
+4. Vault/encrypted-column caveat: dumps never contain the root encryption key; if Vault or column encryption is
+   used, the key must be retrieved from the active project and held under the same custody rules. Whether
+   staging uses Vault is **UNVERIFIED**.
+
+### 7.3 Layer C: storage object export
+
+`pg_dump` captures object *metadata* only. Add a separate export of bucket contents (at minimum
+`private-media`) via the project's S3-compatible Storage endpoint or the CLI's recursive copy (flags
+**UNVERIFIED**), with: a pre/post object-count and byte-size comparison against `storage.objects`, per-object
+checksums in the manifest, the same encryption wrapper as the database dumps, and an explicit "restore bytes
+into the restored target and verify path/owner/`public=false`" step. If the founder decides that no staging
+object is worth keeping, record that decision and still back up the metadata so rows and bytes cannot drift
+silently. Any S3 access keys are new secrets and are outside this document's authority.
+
+### 7.4 Changes needed to `ops/staging-backup/backup.mjs` and `.github/workflows/staging-backup.yml`
+
+Reviewed code change in a separate PR with independent review; none of this is done or authorised here.
+
+| # | Change | Where | Reason |
+| --- | --- | --- | --- |
+| C1 | Remove the hard-coded `APPLICATION_SHA`; take the requested revision as an input and compare it with `STAGING_APPROVED_REVISION` (and require it to be the manifest pin, e.g. `18240dc...`) | `backup.mjs` `validateGate` (lines ~17, 108-110) | Gate currently only passes for `821125d` |
+| C2 | Replace `EMPTY_TARGET_SQL` with an **inventory gate**: PostgreSQL 17, expected baseline `schema_migrations` names present, none of the nine new names present (pre-install mode) or all nine present once (post-install mode), RLS enabled on all public tables, all buckets private; failure is a distinct `baseline`-class code with the offending object names but no data | `backup.mjs` | The empty-only gate rejects every populated project |
+| C3 | Make "before" and "after" gates compare **equal inventories** (row counts per schema, migration rows, bucket/object counts) so a concurrent change aborts the run | `backup.mjs` | Detects drift between capture start and end |
+| C4 | Dump `auth`, `storage` metadata and `supabase_migrations` explicitly; drop the "managed baseline" assumption from the oracle or extend recovery contract v3 to know populated `auth.users` FKs and `schema_migrations` | `backup.mjs`, `recovery-contract.mjs`, `recovery.mjs` | Section 7.2 |
+| C5 | Add storage object export (7.3) with a count/size/checksum manifest, or an explicit documented opt-out | `backup.mjs`, workflow | Section 7.3 |
+| C6 | Add a `restoreStatus` path that is not hard-wired `NOT_RUN`: record a rehearsal result only when a separate rehearsal job (below) passes | `backup.mjs`, workflow | Backup without a restore is not evidence |
+| C7 | Add a **restore-rehearsal job** (loopback-only, disposable local Supabase stack, same recovery helper) that restores the decrypted artifact and runs sections 2.1 and 3 SQL read-only against it | workflow + `recovery.mjs` | Restore-test criterion |
+| C8 | Keep: `workflow_dispatch` only, `skycar-staging` environment with required reviewers, branch restriction, approved-workflow-SHA pin, confirmation string, `contents: read`, concurrency group, ciphertext-only artifact with short retention, no schedule/PR triggers | workflow | Existing protections are sound (G8) |
+| C9 | Move execution off the branch tied to frozen PR #31, or get an explicit release of that branch | operations decision | G8 |
+| C10 | Add TLS/connectivity pre-diagnostics (section 8.3) that run before the baseline gate | `backup.mjs` | The previous three failures were opaque |
+| C11 | Update `STAGING_BACKUP_EXECUTION.md` (stale six-migration/empty wording), `STAGING_APPROVED_REVISION` handling, and the workflow summary text; refresh synthetic contract tests (`tests/ops/staging-backup.test.mjs`) to cover populated fixtures | docs/tests | G6 |
+
+### 7.5 Restore-rehearsal acceptance criteria
+
+All must hold, with evidence in the installation record, before any install is released:
+
+1. Restore target is a **new disposable** project (Layer A) or a loopback-only disposable stack (Layer B); never the staging project itself, never production.
+2. Restored `supabase_migrations.schema_migrations` equals the pre-install snapshot (rows, names, versions) with no duplicates.
+3. Row counts for every `public`, `auth` (users, identities) and `storage` (buckets, objects) table equal the manifest.
+4. P6/P7 and section 3.2 B2/B3 pass: RLS enabled on all public tables, no unexpected policies, buckets `public=false`.
+5. Section 3.3/3.4 grant checks match the reviewed expectations (recorded deviations explained, e.g. F5).
+6. Storage bytes restored and sha256-compared for every object in scope, or the documented opt-out is signed off.
+7. Functional probe on the restored copy with synthetic data only: a service-role RPC call succeeds and an `anon`/`authenticated` call is denied.
+8. Time to restore (RTO) and age of the restore point (RPO) are recorded; the artifact decrypts with the owner-held key and its sha256 matches the manifest.
+9. The rehearsal is repeated after any change to the backup tooling or the migration set.
+
+## 8. Why the 27-29 Sep backup runs failed (logs read-only)
+
+Times: UTC from the API, with Adelaide (ACST, UTC+9:30 before 4 Oct) in brackets. Workflow `staging-backup.yml`
+(`workflow_dispatch`, branch `fix/phone-test-delivery`). **There have been exactly three runs, all failed, none
+since 29 Sep** (`list_workflow_runs` returns 3).
+
+| Run | Dispatched | Operations SHA | Failed step | Final message in the log |
+| --- | --- | --- | --- | --- |
+| `36325849443` | 2026-09-27T14:25Z (28 Sep 00:55) | `a601410` | step 8 "Capture encrypted read-only export" (job 22:29:49-22:30:11Z, 28 Sep 07:59) | "Staging backup stopped; no raw diagnostic or backup content published. Check approved configuration and private recovery procedure." (no phase/category) |
+| `36422281209` | 2026-09-28T12:30Z (28 Sep 22:00) | `6a278b9` | same step (12:38:19-12:38:20Z, 28 Sep 23:08) | `SKYCAR_BACKUP_FAILURE phase=baseline-before category=command` |
+| `36601748743` | 2026-09-29T16:59Z (30 Sep 02:29) | `785d18b` | same step (20:59:50-20:59:51Z, 30 Sep 06:29) | `SKYCAR_BACKUP_FAILURE phase=baseline-before category=command` |
+
+What the logs prove:
+
+- Every step before capture succeeded: approved-SHA check, checkout, Node setup, locked CLI install,
+  PostgreSQL 17 client install (`pg_dump 17.11`), gate verification.
+- Run 1 failed in under 2 s inside capture with only the generic message. Runs 2 and 3 failed in about 1-2 s at
+  phase **`baseline-before`**, category **`command`**: the *first* `psql` call (`EMPTY_TARGET_SQL`) exited
+  non-zero. Per `STAGING_BACKUP_EXECUTION.md`, the category `baseline` is reserved for the query's exact
+  `Unexpected staging baseline`/`Unexpected migration history` exceptions; `command` means psql failed
+  some other way. So the project was **not** (provably) rejected as non-empty; the run never got a result.
+- In run 2 the environment lists no `STAGING_SUPABASE_DB_CA_*` secrets; run 3 lists both set, and fails the
+  same way. Runs 2-3 used the same host/user/ref secrets (values masked).
+- No dump, ciphertext or artifact was produced in any run; no later run exists.
+
+What they do **not** prove (cause **UNVERIFIED**; the stderr is deliberately suppressed): TLS/CA trust, wrong
+credentials, wrong host form, network reachability, a server-version mismatch, or a SQL/permission error. The
+review comments say the same ("proves the initial psql command failed, not why").
+
+### 8.3 Candidate causes to test in a diagnostics-only change (hypotheses, not findings)
+
+1. **Reachability:** GitHub-hosted runners are IPv4-oriented; a Supabase *direct* database host may require
+   IPv6 or an add-on, whereas the pooler host is IPv4. The host secret form is not visible. Test with a
+   non-secret `getaddrinfo`/TCP-connect probe that prints only success/failure per address family.
+2. **TLS:** verify-full against the project CA vs system trust (runs 1-2 had no CA secret; run 3 had one).
+3. **Authentication:** user/password mismatch for the chosen host (direct host uses `postgres`, the pooler
+   uses `postgres.<ref>`).
+4. **Privilege or server state:** the gate reads `auth.users`, `storage.buckets`, `storage.objects`; a role without
+   rights, or an INACTIVE (paused) project, fails the same way. The project was INACTIVE on 11 and 20 Oct
+   (before restoration), which proves it can be paused; its state on 27-29 Sep is **UNVERIFIED**.
+5. **Gate design:** independent of the above, the empty-only gate (G1/G2) would reject the populated baseline
+   now reported, so even a working connection would end in `category=baseline`.
+
+PR #45 (merged into `fix/phone-test-delivery` as `1192d74`) added finer failure categories for the baseline
+psql calls, but no run has used it, so the cause remains unproven.
+
+### 8.4 Required before another run
+
+Do not rerun the failed runs (they must stay immutable per the owner's rules); a new run needs a new reviewed
+disposition, the corrected gate (C1/C2), the diagnostics (C10), and a fresh read-only inventory (section 2.1).
