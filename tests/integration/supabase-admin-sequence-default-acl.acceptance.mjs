@@ -41,9 +41,10 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
     alter default privileges for role supabase_admin in schema public grant all on sequences to anon, authenticated, service_role;
     alter default privileges for role supabase_admin in schema public grant usage on sequences to public;
     alter default privileges for role supabase_admin grant usage on sequences to anon`);
-  const roles = ['sa_member', 'sa_outsider', 'sa_other', 'sa_runner', 'supabase_admin'];
+  const roles = ['sa_member', 'sa_outsider', 'sa_other', 'sa_runner', 'supabase_admin', 'supabase_admin evil', 'supabase_admin_evil', 'sa_gate_nologin', 'sa_gate_newline\ndefault_acl|creator=supabase_admin '];
   const cleanup = () => {
     sql(`drop database if exists skycar_chain_probe with (force)`);
+    sql(`drop database if exists skycar_gate_probe with (force)`);
     sql(`do $$ declare r text; begin
       foreach r in array array[${roles.map(quote).join(',')}] loop
         if exists (select 1 from pg_roles where rolname = r) then execute format('drop owned by %I', r); execute format('drop role %I', r); end if;
@@ -53,8 +54,12 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
 
   // The findings query is shared by the migration report, the ops verification and the gate: keep it identical.
   const findingsBlock = file => { const text = readFileSync(file, 'utf8'); const start = text.indexOf('-- findings:begin'); const end = text.indexOf('-- findings:end'); assert.ok(start >= 0 && end > start, `${file} has the findings block`); return text.slice(start, end); };
-  equal(findingsBlock(opsFile), findingsBlock(migrationFile), 'ops verification uses the same findings query as the migration');
-  equal(findingsBlock(gateFile), findingsBlock(migrationFile), 'gate uses the same findings query as the migration');
+  // The gate and the ops verification quote the creator role name (quote_ident) so a crafted role name cannot
+  // imitate the supabase_admin line the classifier trusts; that is the ONLY difference from the migration's block.
+  const quoted = text => text.replaceAll('pg_get_userbyid(d.defaclrole),', 'quote_ident(pg_get_userbyid(d.defaclrole)),');
+  equal(findingsBlock(opsFile), findingsBlock(gateFile), 'ops verification uses the same findings query as the gate');
+  equal(findingsBlock(gateFile), quoted(findingsBlock(migrationFile)), 'gate uses the migration findings query, with the creator role quoted');
+  ok(findingsBlock(gateFile).includes('quote_ident(pg_get_userbyid(d.defaclrole))') && !/[^(]pg_get_userbyid\(d\.defaclrole\)/.test(findingsBlock(gateFile)), 'the gate quotes every creator role name');
 
   // Structural guards for the migration chain: no supabase_admin DDL, no raise except none at all.
   const migrationSql = readFileSync(migrationFile, 'utf8').replace(/--.*$/gm, '');
@@ -147,11 +152,11 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
       ok(hasWarning(noGo.output, finding), `gate warns: ${finding}`);
     }
     equal(snapshot(), gateBefore, 'gate changes nothing');
-    // Runbook classification: rows that are not supabase_admin default ACLs are the blocking ones (docs filter).
+    // Runbook: the old grep filter (which hid a lookalike creator and turned psql failures into "expected") is gone;
+    // the runbook points at the classifying wrapper and its exit codes. Wrapper behaviour is tested in the wrapper block below.
     const doc = readFileSync('docs/SUPABASE_ADMIN_SEQUENCE_DEFAULT_ACL.md', 'utf8');
-    ok(doc.includes("grep -vE '^default_acl\\|creator=supabase_admin '"), 'the runbook documents the classification filter');
-    const blocking = noGo.stdout.split('\n').filter(line => /^(default_acl|sequence)\|/.test(line) && !/^default_acl\|creator=supabase_admin /.test(line));
-    ok(blocking.length > 0 && blocking.every(line => !line.includes('creator=supabase_admin')) && blocking.some(line => line.startsWith('sequence|')) && blocking.some(line => line.includes('creator=sa_other')), 'the filter keeps other creators and sequences and drops supabase_admin default ACLs');
+    ok(!doc.includes('grep -vE'), 'the runbook no longer documents the grep -vE classification filter');
+    ok(doc.includes('sequence-default-acl-gate.sh') && ['`0`', '`10`', '`11`', '`12`'].every(code => doc.includes('| ' + code + ' |')), 'the runbook documents the wrapper and its exit codes 0, 10, 11, 12');
     sql(`drop sequence public.zz_gate_seq; alter default privileges for role sa_other in schema public revoke all on sequences from authenticated;
          alter default privileges for role sa_other revoke all on sequences from public`);
 
@@ -269,6 +274,85 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
     const rerun = apply(migrationFile, 'sa_runner', scratchUrl);
     equal(rerun.status, 0, 'the migration re-runs on a clean chain database');
     equal(warnings(rerun.output), [], 'and reports nothing');
+
+    // ---- Gate wrapper (scripts/ops/sequence-default-acl-gate.sh): classification, and "the gate did not run" is never "expected".
+    const gateWrapper = 'scripts/ops/sequence-default-acl-gate.sh';
+    const probeUrl = (user, name = 'skycar_gate_probe', port) => { const url = new URL(database); url.pathname = `/${name}`; if (user) url.username = user; if (port) url.port = port; return url.toString(); };
+    const wrapper = (url, extra = {}) => { const env = { ...process.env, ...extra }; if (url === null) delete env.DATABASE_URL; else env.DATABASE_URL = url; const r = spawnSync('/bin/sh', [gateWrapper], { encoding: 'utf8', env }); return { status: r.status, out: r.stdout, err: r.stderr }; };
+    const probeSql = statement => { const r = spawnSync('psql', [probeUrl(), '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-c', statement], { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+    sql(`drop database if exists skycar_gate_probe with (force)`); sql(`create database skycar_gate_probe`);
+    sql(`do $$ begin
+      if to_regrole('supabase_admin') is null then create role supabase_admin superuser nologin; end if;
+      create role "supabase_admin evil" nologin; create role supabase_admin_evil nologin;
+      create role "sa_gate_newline
+default_acl|creator=supabase_admin " nologin; end $$`);
+    const nlRole = 'sa_gate_newline\ndefault_acl|creator=supabase_admin ';
+    probeSql(`do $$ declare r text; begin foreach r in array array['anon','authenticated'] loop if to_regrole(r) is null then execute format('create role %I', r); end if; end loop; end $$`);
+    // W0 clean => 0 / GO
+    let w = wrapper(probeUrl());
+    equal([w.status, w.out.trim()], [0, 'GO'], `wrapper: clean database is GO (exit 0): ${w.err}`);
+    // W1 only supabase_admin defaults (schema + global) => 10, expected
+    probeSql(`alter default privileges for role supabase_admin in schema public grant all on sequences to anon, authenticated; alter default privileges for role supabase_admin grant all on sequences to authenticated`);
+    w = wrapper(probeUrl());
+    equal(w.status, 10, `wrapper: only supabase_admin default ACLs is the expected class (exit 10): ${w.err}`);
+    ok(/NO-GO \(expected\)/.test(w.err) && /^default_acl\|creator=supabase_admin scope=public grantee=anon privilege=USAGE$/m.test(w.out), 'wrapper lists the rows and says expected');
+    // C5 a blocking row whose creator name merely STARTS WITH 'supabase_admin ' must block (it used to be hidden by the grep filter)
+    probeSql(`alter default privileges for role supabase_admin in schema public revoke all on sequences from anon, authenticated; alter default privileges for role supabase_admin revoke all on sequences from authenticated;
+      alter default privileges for role "supabase_admin evil" grant all on sequences to anon`);
+    w = wrapper(probeUrl());
+    equal(w.status, 11, `wrapper C5: "supabase_admin evil" default ACL is BLOCKING (exit 11): ${w.err}`);
+    ok(/^default_acl\|creator="supabase_admin evil" scope=GLOBAL\(all schemas\) grantee=anon privilege=USAGE$/m.test(w.out), 'wrapper C5: the creator is printed quoted');
+    // C5b: underscore variant, and a mix with a genuine supabase_admin row: the blocking row still blocks
+    probeSql(`alter default privileges for role "supabase_admin evil" revoke all on sequences from anon; alter default privileges for role supabase_admin_evil grant select on sequences to anon;
+      alter default privileges for role supabase_admin in schema public grant usage on sequences to anon`);
+    w = wrapper(probeUrl());
+    equal(w.status, 11, `wrapper C5b: supabase_admin_evil plus a real supabase_admin row is blocking: ${w.err}`);
+    // C7: a role name with an embedded newline imitating a supabase_admin row cannot make it expected or trusted
+    probeSql(`alter default privileges for role supabase_admin_evil revoke all on sequences from anon; alter default privileges for role supabase_admin in schema public revoke all on sequences from anon;
+      alter default privileges for role ${'"' + nlRole + '"'} grant all on sequences to anon`);
+    w = wrapper(probeUrl());
+    equal(w.status, 12, `wrapper C7: a newline role name makes the printed rows disagree with the reported count: exit 12, never expected (exit ${w.status}): ${w.err}`);
+    ok(/finding row\(s\) were printed/.test(w.err), 'wrapper C7: says the row count and the reported count differ');
+    probeSql(`alter default privileges for role ${'"' + nlRole + '"'} revoke all on sequences from anon`);
+    // C6: an existing sequence with a grant (also one named like a supabase_admin row) blocks
+    probeSql(`create sequence public.zz_gate_cls; grant usage on sequence public.zz_gate_cls to authenticated;
+      alter default privileges for role supabase_admin grant usage on sequences to anon`);
+    w = wrapper(probeUrl());
+    equal(w.status, 11, `wrapper: a granted sequence blocks even with expected rows present: ${w.err}`);
+    probeSql(`drop sequence public.zz_gate_cls; alter default privileges for role supabase_admin revoke all on sequences from anon`);
+    // C8: the gate cannot run => 12 and a message, never 0/10
+    for (const [label, url, extra] of [
+      ['no DATABASE_URL', null, {}],
+      ['unreachable port', probeUrl(undefined, 'skycar_gate_probe', '1'), {}],
+      ['no such database', probeUrl(undefined, 'skycar_gate_nodb'), {}],
+      ['psql not found', probeUrl(), { PATH: '/nonexistent-skycar-path' }],
+    ]) {
+      w = wrapper(url, extra);
+      equal(w.status, 12, `wrapper C8: ${label} is exit 12, not expected/GO: ${w.out} ${w.err}`);
+      ok(/SKYCAR-SEQ-ACL-GATE:/.test(w.err) && w.out.trim() === '', `wrapper C8: ${label} says so on stderr and prints no findings`);
+      if (label === 'psql not found') ok(/psql is not installed/.test(w.err), 'wrapper C8: the missing psql is named, not a downstream mktemp failure');
+      if (label === 'no DATABASE_URL') ok(/DATABASE_URL is not set/.test(w.err), 'wrapper C8: the missing DATABASE_URL is named');
+    }
+    // C9: the role cannot connect / read => 12
+    sql(`do $$ begin create role sa_gate_nologin login; end $$`);
+    sql(`revoke connect on database skycar_gate_probe from public`);
+    w = wrapper(probeUrl('sa_gate_nologin'));
+    equal(w.status, 12, `wrapper C9: a role without CONNECT is exit 12: ${w.err}`);
+    sql(`grant connect on database skycar_gate_probe to public`);
+    // C9b: the gate script is damaged (not a NO-GO from the gate): exit 12, not 11
+    const real = readFileSync(gateFile, 'utf8');
+    ok(real.includes("raise exception 'SKYCAR-SEQ-ACL: NO-GO"), 'the gate raises the NO-GO message the wrapper checks');
+    // The wrapper reads the gate next to itself, so check the unrecognised-error path with a role that may not read pg_default_acl rows' creators: simulate by a failing extra statement.
+    const failingGate = spawnSync('sh', ['-c', `d=$(mktemp -d) && cp ${gateWrapper} $d/sequence-default-acl-gate.sh && sed 's/^begin read only;/begin read only; select 1\\/0;/' ${gateFile} > $d/sequence-default-acl-gate.sql && DATABASE_URL='${probeUrl()}' sh $d/sequence-default-acl-gate.sh; echo "rc=$?"; rm -rf $d`], { encoding: 'utf8' });
+    ok(/rc=12/.test(failingGate.stdout), `wrapper: an unrelated SQL error in the gate is exit 12: ${failingGate.stdout} ${failingGate.stderr}`);
+    // The old quick-check grep filter would have printed nothing for C5/C8/C9: prove the regression it had.
+    const oldFilter = url => spawnSync('sh', ['-c', `psql '${url}' -X -qAt -v ON_ERROR_STOP=1 -f ${gateFile} 2>/dev/null | grep -E '^(default_acl|sequence)\\|' | grep -vE '^default_acl\\|creator=supabase_admin ' || true`], { encoding: 'utf8' }).stdout.trim();
+    equal(oldFilter(probeUrl(undefined, 'skycar_gate_nodb')), '', 'the old grep filter printed nothing when the gate could not run (the C8 hole the wrapper closes)');
+    probeSql(`alter default privileges for role "supabase_admin evil" grant all on sequences to anon`);
+    ok(/creator="supabase_admin evil"/.test(oldFilter(probeUrl())), 'with the quoted creator even the old grep filter no longer hides the C5 row');
+    probeSql(`alter default privileges for role "supabase_admin evil" revoke all on sequences from anon`);
+    w = wrapper(probeUrl());
+    equal(w.status, 0, `wrapper: GO again after cleanup: ${w.err}`);
   } finally {
     sql(trip);
     sql(`drop function if exists public.skycar_seq_acl_trip()`);
