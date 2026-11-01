@@ -23,11 +23,11 @@ Mutants are QA's `mutate_lock.py` LM1 to LM5. Result with the default 4 rounds (
 
 | Mutant | Stress gate | Injected-sleep test (QA, on 60a48da) |
 | --- | --- | --- |
-| LM1 journey takes the request lock before the vehicle lock | **killed** (6 of 20 iterations deadlocked) | survived |
-| LM2 `care_submit_request` locks the customer's requests before the vehicle | **killed** (13 of 20) | survived |
+| LM1 journey takes the request lock before the vehicle lock | **killed** (6 of 20 iterations deadlocked; counts vary per run) | survived |
+| LM2 `care_submit_request` locks the customer's requests before the vehicle | **killed** (12 to 13 of 20) | survived |
 | LM3 availability replace takes the capacity advisory lock under its schedule row lock | survived (the mix has no journey confirm) | **killed** |
 | LM4 journey takes the journey row before the request row | survived, also with 15 rounds | survived |
-| LM5 `care_record_request_photos` locks the vehicle after the request | **killed** (14 of 20) | survived |
+| LM5 `care_record_request_photos` locks the vehicle after the request | **killed** (13 to 14 of 20) | survived |
 | clean chain | 0 deadlocks | pass |
 
 LM3 is covered by the injected-sleep test. LM4 is behaviourally equivalent today, not a gap in the harness: every function that
