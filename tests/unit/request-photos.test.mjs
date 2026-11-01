@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { photoKind } from "../../src/domain/care/photo-types.ts";
-import { PhotoUploadError, uploadRequestPhotos } from "../../src/domain/care/request-photos.ts";
+import { PhotoUploadError, formatCountdown, parseRetryAfter, uploadRequestPhotos } from "../../src/domain/care/request-photos.ts";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const file = (name = "a.jpg", type = "image/jpeg") => new File([new Uint8Array(200)], name, { type });
@@ -57,4 +57,30 @@ test("upload maps failures to retryable or terminal outcomes", async () => {
   }
   const unknown = await failure(uploadRequestPhotos(id, [file()], reply(400, { error: {} })));
   assert.equal(unknown.message, "We could not save the photos.");
+});
+
+const limited = (headers, message = "Too many photo uploads. Wait a little, then retry the same photos.") => async () => new Response(JSON.stringify({ error: { code: "RATE_LIMITED", message, retryable: true } }), { status: 429, headers });
+
+test("429 RATE_LIMITED keeps the server message, is retryable and carries Retry-After seconds", async () => {
+  const error = await failure(uploadRequestPhotos(id, [file()], limited({ "Retry-After": "1800" })));
+  assert.deepEqual([error.status, error.code, error.retryable, error.retryAfter], [429, "RATE_LIMITED", true, 1800]);
+  assert.equal(error.message, "Too many photo uploads. Wait a little, then retry the same photos.");
+  const missing = await failure(uploadRequestPhotos(id, [file()], limited({})));
+  assert.deepEqual([missing.retryable, missing.retryAfter], [true, undefined]);
+  const odd = await failure(uploadRequestPhotos(id, [file()], async () => new Response(JSON.stringify({ error: { code: "RATE_LIMITED", message: "m" } }), { status: 429, headers: { "Retry-After": "soon" } })));
+  assert.deepEqual([odd.retryable, odd.retryAfter], [true, undefined], "429 is retryable even if the body omits the flag");
+});
+
+test("Retry-After is only read from a 429 and only as whole seconds", async () => {
+  const other = await failure(uploadRequestPhotos(id, [file()], async () => new Response(JSON.stringify({ error: { code: "E", message: "m" } }), { status: 503, headers: { "Retry-After": "30" } })));
+  assert.equal(other.retryAfter, undefined);
+  for (const [value, expected] of [["30", 30], [" 3600 ", 3600], ["0", undefined], ["-5", undefined], ["1.5", undefined], ["Wed, 21 Oct 2026 07:28:00 GMT", undefined], ["", undefined], [null, undefined], ["1234567", undefined]]) assert.equal(parseRetryAfter(value), expected, String(value));
+});
+
+test("countdown is formatted m:ss without negative values", () => {
+  assert.equal(formatCountdown(3600), "60:00");
+  assert.equal(formatCountdown(61), "1:01");
+  assert.equal(formatCountdown(9), "0:09");
+  assert.equal(formatCountdown(0.2), "0:01");
+  assert.equal(formatCountdown(-4), "0:00");
 });
