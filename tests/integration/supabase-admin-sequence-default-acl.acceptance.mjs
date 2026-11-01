@@ -147,6 +147,11 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
       ok(hasWarning(noGo.output, finding), `gate warns: ${finding}`);
     }
     equal(snapshot(), gateBefore, 'gate changes nothing');
+    // Runbook classification: rows that are not supabase_admin default ACLs are the blocking ones (docs filter).
+    const doc = readFileSync('docs/SUPABASE_ADMIN_SEQUENCE_DEFAULT_ACL.md', 'utf8');
+    ok(doc.includes("grep -vE '^default_acl\\|creator=supabase_admin '"), 'the runbook documents the classification filter');
+    const blocking = noGo.stdout.split('\n').filter(line => /^(default_acl|sequence)\|/.test(line) && !/^default_acl\|creator=supabase_admin /.test(line));
+    ok(blocking.length > 0 && blocking.every(line => !line.includes('creator=supabase_admin')) && blocking.some(line => line.startsWith('sequence|')) && blocking.some(line => line.includes('creator=sa_other')), 'the filter keeps other creators and sequences and drops supabase_admin default ACLs');
     sql(`drop sequence public.zz_gate_seq; alter default privileges for role sa_other in schema public revoke all on sequences from authenticated;
          alter default privileges for role sa_other revoke all on sequences from public`);
 
@@ -212,7 +217,11 @@ export function verifySupabaseAdminSequenceDefaultAcl({ sql, quote }) {
       const again = apply(file, role);
       equal(again.status, 0, `re-run of ${file} as ${role ?? 'postgres'} on a clean state passes: ${again.output}`);
       equal(snapshot(), settled, `re-run of ${file} as ${role ?? 'postgres'} changes nothing`);
-      if (file === migrationFile) equal(warnings(again.output), [], 'a clean state produces no warning');
+      if (file === migrationFile) {
+        equal(warnings(again.output), [], 'a clean state produces no warning');
+        // A runner that cannot act as another owner also gets one skip NOTICE per such sequence; the standard runner gets exactly the clean one.
+        if (role === null) equal(again.output.split('\n').filter(line => /NOTICE:\s+00000:\s+SKYCAR-SEQ-ACL/.test(line)).length, 1, 'a clean re-run as the migration runner prints exactly one SKYCAR-SEQ-ACL NOTICE');
+      }
     }
 
     // ---- supabase_admin absent: the ops script skips the revoke, still verifies (and fails on a leak).

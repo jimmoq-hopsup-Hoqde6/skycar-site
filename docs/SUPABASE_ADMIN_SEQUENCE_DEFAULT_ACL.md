@@ -40,7 +40,7 @@ The risk is future sequences, so the gate matters more than the fix.
    `authenticated`.
 3. Reports every remaining finding as `WARNING` (SQLSTATE `01000`, message prefix
    `SKYCAR-SEQ-ACL`) or one `NOTICE` saying it is clean. Findings are listed below. It exits 0
-   either way, so a re-run on a clean database passes and is silent.
+   either way, so a re-run on a clean database passes (it prints one clean NOTICE and no WARNING).
 
 It is one transaction and idempotent. It is safe to re-run in any state and for any runner.
 
@@ -55,12 +55,41 @@ It is one transaction and idempotent. It is safe to re-run in any state and for 
 
 ## Runbook for the hosted project (requires the project owner's approval; not part of any migration)
 
-1. Gate before (read only; run as any role that can read the catalogs):
-   `psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f scripts/ops/sequence-default-acl-gate.sql`
+Order matters: **apply the migration chain first, including `20261101133000` and
+`20261101140000`, and only then run the ops script.** The ops script verifies the whole database,
+and the migration is what clears the migration runner's own sequence grants and default ACL. If the
+ops script runs first while the runner's (`postgres`) default ACL still grants `anon` or
+`authenticated`, its verification finds that, reports `NO-GO` and **rolls everything back** (nothing
+changes, but the run is wasted).
+
+1. Apply the migration chain, including `20261101140000`, as the normal migration runner. It cannot
+   fail because of `supabase_admin`. A re-run on an already clean database passes and prints exactly
+   one `NOTICE: SKYCAR-SEQ-ACL: clean, ...` and no `WARNING`; it is not silent.
+2. Gate (read only; run as any role that can read the catalogs). Always pass `-v ON_ERROR_STOP=1`:
+   without it `psql` exits 0 even on `NO-GO` and a script cannot tell.
+   `psql "$DATABASE_URL" -X -qAt -v ON_ERROR_STOP=1 -f scripts/ops/sequence-default-acl-gate.sql`
    - exit 0 and a `GO` row: nothing to do.
-   - `NO-GO`: the output lists each finding as a row and as a `WARNING`. Record it.
-2. For findings on `supabase_admin` (schema or global default ACLs), the party that can act as
-   `supabase_admin` (Supabase support, or a supabase_admin connection if one is available) runs:
+   - `NO-GO` (exit 3 with `ON_ERROR_STOP`, SQLSTATE `P0001`): the output lists each finding as a row
+     (`kind|detail`) and as a `WARNING`. Record it and classify it as below.
+3. Classify a `NO-GO`:
+   - **Expected, `supabase_admin` default ACLs only.** Every finding row starts with
+     `default_acl|creator=supabase_admin ` (schema `public` or `GLOBAL(all schemas)`). Customers cannot
+     change these (hosted `postgres` is not a member of `supabase_admin`); they need Supabase support
+     to run the ops script (step 4). Record it as an expected finding awaiting support. **It does not
+     block the staging install.**
+   - **Anything else blocks.** Any other creator role's default ACL, any existing sequence with a
+     grant (including one owned by `supabase_admin`), or any other `NO-GO` cause is a real finding:
+     do not proceed until it is decided and fixed with a normal, reviewed REVOKE.
+   Quick check; it prints nothing when the only findings are `supabase_admin` default ACLs, and prints
+   every blocking finding otherwise (the gate prints findings before it fails, so `|| true`):
+   ```sh
+   psql "$DATABASE_URL" -X -qAt -v ON_ERROR_STOP=1 -f scripts/ops/sequence-default-acl-gate.sql 2>/dev/null \
+     | grep -E '^(default_acl|sequence)\|' | grep -vE '^default_acl\|creator=supabase_admin ' || true
+   ```
+   Also confirm the gate itself ran: a connection error, or no `kind|detail` rows with a failing exit,
+   is not the "expected" case.
+4. Only for the expected class: the party that can act as `supabase_admin` (Supabase support, or a
+   `supabase_admin` connection if one is available) runs:
    `psql "$SUPABASE_ADMIN_URL" -X -v ON_ERROR_STOP=1 -f scripts/ops/supabase-admin-sequence-default-acl.sql`
    It revokes `ALL` on sequences from `anon`, `authenticated`, `PUBLIC` for `supabase_admin` IN SCHEMA
    `public` **and** the global entry, then verifies with the same query as the gate. Any remaining
@@ -68,10 +97,11 @@ It is one transaction and idempotent. It is safe to re-run in any state and for 
    **rolls everything back**, so a partial result never remains. If a non-member runs it, it fails
    with SQLSTATE `42501` and the message `SKYCAR-SEQ-ACL: <role> cannot change the default privileges
    of supabase_admin`.
-3. Gate after. Required result: exit 0 and `GO`.
-4. Findings that are not `supabase_admin`'s (another creator role, or an existing sequence) are not
-   fixed by the script; they need an explicit decision and a normal, reviewed REVOKE. The
-   migration already clears them where the running role owns them.
+5. Gate again after the ops script. Required result: exit 0 and `GO`. Until support has run it, the
+   hosted gate stays `NO-GO` for the expected class; the staging checklist must expect that.
+6. Findings that are not `supabase_admin` default ACLs are not fixed by the script; they need an
+   explicit decision and a normal, reviewed REVOKE. The migration already clears them where the
+   running role owns them.
 
 If `supabase_admin` cannot be used at all, the mitigation is to keep `supabase_admin`-created
 objects out of `public` (extensions belong in the `extensions` schema) and to keep the gate in the
