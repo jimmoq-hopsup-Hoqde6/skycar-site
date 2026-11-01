@@ -1,5 +1,6 @@
 // Mocked API/browser regressions. These do not prove hosted authorization or saves.
 import assert from 'node:assert/strict';
+import { guardSignedUrls } from './support/signed-url-guard.mjs';
 import {spawn} from 'node:child_process';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const origin='http://127.0.0.1:3194';
@@ -11,6 +12,7 @@ try {
  for(let i=0;i<150;i++){try{if((await fetch(origin)).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}
  assert.ok(ready,'server started');
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+ const signedUrlGuard = guardSignedUrls(browser);
  const page=await browser.newPage({viewport:{width:390,height:844}});page.setDefaultTimeout(10000);
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  let account='account-a',deny=false,postFails=false,postDenial=0,responseAccount=null;
@@ -77,5 +79,5 @@ try {
  }
  for(const width of [320,390,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);}
  assert.deepEqual(errors,[]);
- console.log('PASS: same-account preservation, account-switch clearing, late photo decoding, denied reads/writes, changed-account write response, exact command retry, three viewport widths, no browser errors');
+ signedUrlGuard.assertNone();console.log('PASS: same-account preservation, account-switch clearing, late photo decoding, denied reads/writes, changed-account write response, exact command retry, three viewport widths, no browser errors');
 } finally {if(browser)await browser.close();server.kill('SIGTERM');}

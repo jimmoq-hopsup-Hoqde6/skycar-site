@@ -1,5 +1,6 @@
 // Mocked browser/API acceptance for the private operations workspace; not hosted authorization proof.
 import assert from 'node:assert/strict';
+import { guardSignedUrls } from './support/signed-url-guard.mjs';
 import {mkdir} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
@@ -12,6 +13,7 @@ let browser;
 try{
  let ready=false;for(let i=0;i<150;i++){try{if((await fetch(origin)).ok){ready=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,100));}assert.ok(ready,'server started');
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+ const signedUrlGuard = guardSignedUrls(browser);
  const page=await browser.newPage({viewport:{width:390,height:844}});page.setDefaultTimeout(10000);
  const errors=[];page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error'&&!/^Failed to load resource: (net::ERR_FAILED|the server responded with a status of (401|403|404))/.test(message.text()))errors.push(message.text());});
  let account='admin-a';let state='review';let completion=[];let quotePublished=false;let failConfirm=true;let postDenial=0,responseAccount=null,failUpload=false;const commands=[];const uploads=[];
@@ -77,5 +79,5 @@ try{
   assert.equal(await page.getByRole('button',{name:'Remove photo 1'}).count(),0,'same-admin re-entry must not recover denied evidence');
  }
  assert.deepEqual(errors,[]);
- console.log('PASS: private review, manual quote, explicit confirmation, exact retry, account-switch and denied-write clearing, completion evidence, completion, responsive layout');
+ signedUrlGuard.assertNone();console.log('PASS: private review, manual quote, explicit confirmation, exact retry, account-switch and denied-write clearing, completion evidence, completion, responsive layout');
 }finally{if(browser)await browser.close();server.kill('SIGTERM');}

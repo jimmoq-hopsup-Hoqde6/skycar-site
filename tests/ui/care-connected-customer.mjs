@@ -1,5 +1,6 @@
 // Mocked connected customer/operations story; not hosted authorization or persistence proof.
 import assert from 'node:assert/strict';
+import { guardSignedUrls } from './support/signed-url-guard.mjs';
 import { spawn } from 'node:child_process';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const origin = 'http://127.0.0.1:3196';
@@ -19,6 +20,7 @@ try {
   }
   assert.ok(ready, 'server started');
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--no-zygote', '--single-process', '--use-gl=angle', '--use-angle=swiftshader'] });
+  const signedUrlGuard = guardSignedUrls(browser);
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   page.setDefaultTimeout(10000);
   const errors = [];
@@ -150,7 +152,7 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.deepEqual(commands, ['select_quote', 'confirm', 'start', 'complete']);
   assert.deepEqual(errors, []);
-  console.log('PASS: stale My Jobs → quote → requested appointment → operations confirmation → completion evidence → receipt/journey → Garage history');
+  signedUrlGuard.assertNone();console.log('PASS: stale My Jobs → quote → requested appointment → operations confirmation → completion evidence → receipt/journey → Garage history');
 } finally {
   if (browser) await browser.close();
   server.kill('SIGTERM');

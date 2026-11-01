@@ -1,5 +1,6 @@
 // Synthetic intercepted API fixtures: not live authentication, storage or database verification.
 import assert from "node:assert/strict";
+import { guardSignedUrls } from './support/signed-url-guard.mjs';
 import { spawn } from "node:child_process";
 
 const playwright = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
@@ -22,6 +23,7 @@ try {
   }
   assert.ok(ready, "test server must start");
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  const signedUrlGuard = guardSignedUrls(browser);
   const noOverflow = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
 
   // 1. My Jobs: photo hint from photo_count / has_photos; absent, zero and malformed values show nothing.
@@ -117,5 +119,5 @@ try {
     assert.equal(await page.getByRole("heading", { name: "Photos you sent" }).count(), 0, mode);
     await context.close();
   }
-  console.log("PASS: My Jobs photo hint (present, absent, zero, malformed), request-page proxy thumbnails >=44px at 320/390/1440, 404/503 states with retry, no signed-URL calls, absent section without photos/access");
+  signedUrlGuard.assertNone();console.log("PASS: My Jobs photo hint (present, absent, zero, malformed), request-page proxy thumbnails >=44px at 320/390/1440, 404/503 states with retry, no signed-URL calls, absent section without photos/access");
 } finally { if (browser) await browser.close(); server.kill("SIGTERM"); }
