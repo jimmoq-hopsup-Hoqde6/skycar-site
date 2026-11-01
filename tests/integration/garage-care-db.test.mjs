@@ -10,6 +10,7 @@ import { verifyCustomerCompletionReview } from "./customer-completion-review.acc
 import { verifyCompletionLockReview } from "./completion-lock-review.acceptance.mjs";
 import { verifyCompletionLockOrder } from "./completion-lock-order.acceptance.mjs";
 import { verifyCustomerTechnicianRace } from "./customer-technician-race.acceptance.mjs";
+import { verifyCareJourneyLockOrder } from "./care-journey-lock-order.acceptance.mjs";
 import { verifyTechnicianWorkStart } from "./technician-work-start.acceptance.mjs";
 import { verifyTechnicianQuotes } from "./technician-quotes.acceptance.mjs";
 import { verifyTechnicianInbox } from "./technician-inbox.acceptance.mjs";
@@ -116,6 +117,7 @@ before(() => {
     '20261101024732_completion_review_final_lock_authority.sql',
     '20261101062300_technician_availability.sql',
     '20261101062400_my_jobs_journey_status.sql',
+    '20261101120000_care_journey_command_lock_order.sql',
   ], 'combined verification must include every public migration in filename order');
   for (const migration of migrations) file(`supabase/migrations/${migration}`);
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
@@ -297,6 +299,9 @@ test('Customer review and technician completion serialize on the same journey',a
 test('Fresh completion review rejects roles changed during the final journey lock wait',async()=>{await verifyCompletionLockReview({sql,quote,result});});
 test('Technician availability is private and does not take booking locks', async () => {
   await verifyTechnicianAvailability({ sql, quote, result, waitForQuery });
+});
+test('care_journey_command takes locks in the canonical order for every action and never deadlocks', async () => {
+  await verifyCareJourneyLockOrder({ sql, quote, result });
 });
 test('My Jobs exposes the caller journey state without private issue text', () => {
   verifyMyJobsJourneyState({ sql, auth, quote, garageCreate, carePayload });
