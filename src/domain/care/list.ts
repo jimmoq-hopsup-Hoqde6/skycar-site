@@ -11,6 +11,8 @@ export type CareListQuery = {
 export type CareRequestSummary = Omit<CareReceipt, "description" | "preferred_window" | "events"> & {
   vehicle_archived: boolean;
   is_overdue: boolean;
+  journey_state?: "review" | "quotes_ready" | "booking_requested" | "scheduled" | "in_progress" | "completed" | "cancellation_requested" | "cancelled" | null;
+  completion_review_state?: "awaiting_review" | "confirmed" | "issue_reported" | null;
 };
 export type CareListRows = {
   items: CareRequestSummary[];

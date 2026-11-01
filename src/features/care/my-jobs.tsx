@@ -4,7 +4,7 @@ import Link from "next/link";
 import { AppIcon } from "@/components/app-icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CareRequestSummary } from "@/domain/care/list";
-import { careJobAction, careJobSummary, readCareJobsPage, type CareJobsPage } from "@/domain/care/my-jobs";
+import { careJobAction, careJobLink, careJobSummary, journeyStateLabel, readCareJobsPage, type CareJobsPage } from "@/domain/care/my-jobs";
 import { connectedCareStage } from "@/domain/care/presentation";
 import { JourneyTimeline } from "./journey-timeline";
 import { garageApi, type Vehicle } from "@/features/garage/types";
@@ -173,8 +173,8 @@ export function MyJobs() {
           <JourneyTimeline progress={item} />
           <div className="job-next-action"><AppIcon name={item.responsible_role === "customer" ? "arrow" : "jobs"}/><div><span>WHAT HAPPENS NEXT</span><strong>{careJobAction(item)}</strong></div></div>
           {item.vehicle_archived && <span className="job-archived">Archived vehicle history</span>}
-          <dl><div><dt>Responsible</dt><dd>{connected === "appointment_requested" ? "Skycar availability team" : item.responsible_role === "customer" ? "You" : "Skycar operations"}</dd></div><div><dt>{connected ? "Journey updated" : item.is_overdue ? "Overdue since" : "Next update"}</dt><dd>{connected ? displayDate(item.updated_at) : item.next_update_at ? displayDate(item.next_update_at) : "No update time committed"}</dd></div><div><dt>Submitted</dt><dd>{displayDate(item.created_at)}</dd></div></dl>
-          <Link className="job-detail-link" href={`/care/journey/${encodeURIComponent(item.id)}`}>{connected === "completed" ? "View completion record" : connected === "quote_ready" ? "Review quotes" : "Open service journey"} <span aria-hidden="true">→</span></Link>
+          <dl><div><dt>Responsible</dt><dd>{item.journey_state === "cancellation_requested" ? "Skycar operations" : connected === "appointment_requested" ? "Skycar availability team" : item.responsible_role === "customer" ? "You" : "Skycar operations"}</dd></div>{journeyStateLabel(item) && <div><dt>Journey</dt><dd>{journeyStateLabel(item)}</dd></div>}<div><dt>{connected || item.journey_state ? "Journey updated" : item.is_overdue ? "Overdue since" : "Next update"}</dt><dd>{connected || item.journey_state ? displayDate(item.updated_at) : item.next_update_at ? displayDate(item.next_update_at) : "No update time committed"}</dd></div><div><dt>Submitted</dt><dd>{displayDate(item.created_at)}</dd></div></dl>
+          <Link className="job-detail-link" href={`/care/journey/${encodeURIComponent(item.id)}`}>{careJobLink(item)} <span aria-hidden="true">→</span></Link>
         </article>;
       })}
     </section>}

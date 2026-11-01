@@ -77,7 +77,7 @@ export function TechnicianInbox({id}:{id?:string}){
   const profile=inbox?.profile||detail?.profile;const job=detail?.job;
   const next=id?`/technician/jobs/${id}`:'/technician/jobs';
   return <main className="technician-shell">
-    <nav className="technician-nav" aria-label="Technician navigation"><Link className="technician-wordmark" href="/technician/jobs">skycar<span>●</span></Link><Link href="/technician/jobs">My work</Link><Link href="/auth/sign-out">Sign out</Link></nav>
+    <nav className="technician-nav" aria-label="Technician navigation"><Link className="technician-wordmark" href="/technician/jobs">skycar<span>●</span></Link><Link href="/technician/jobs" aria-current={id ? undefined : 'page'}>My work</Link><Link href="/technician/availability">Availability</Link><Link href="/auth/sign-out">Sign out</Link></nav>
     <header><p className="technician-eyebrow">TECHNICIAN WORKSPACE</p><h1>{id?'Job review':'Your job inbox'}</h1><p>Review the work Skycar has shared with your account.</p></header>
     <div className="technician-toolbar"><span role="status">{loading?'Verifying your account and jobs…':profile?'Latest saved status':'Access not verified'}</span><button type="button" disabled={loading||busy} onClick={()=>void load()}>Refresh jobs</button></div>
     {error&&<section className="technician-error" role="alert"><h2>{status===403?'Technician access required':status===404?'Job unavailable':'Unable to load technician jobs'}</h2><p>{error}</p>{[401,403].includes(status)&&<Link href={`/auth/sign-in?next=${encodeURIComponent(next)}`}>Sign in as a technician</Link>}{status===404&&<Link href="/technician/jobs">Return to your inbox</Link>}</section>}
