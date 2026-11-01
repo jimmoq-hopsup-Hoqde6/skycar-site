@@ -168,43 +168,110 @@ export async function verifyTechnicianAvailabilityDelta({ sql, quote, result, wa
   equal(await verdict(d.expert, off('2027-04-04 02:30:00', '+10:30'), off('2027-04-04 02:45:00', '+09:30')), 'AVAILABLE', 'window spanning the repeated hour covers its real 1h15m');
   equal(await verdict(d.expert, off('2027-04-04 02:50:00', '+10:30'), off('2027-04-04 02:10:00', '+09:30')), 'AVAILABLE', 'sub-slot inside it');
 
-  // ---- Authority is re-checked after the locks (#76 checked the role only before them). ----------------
+  // ---- Authority: FOR SHARE on expert + account before the advisory waits, role re-checked after. -------
   {
     const lockSql = (name, hold) => `begin; select pg_advisory_xact_lock(hashtextextended(${quote(name)}, 0)); select pg_sleep(${hold}); commit`;
-    const blockedBehindLock = async tag => {
+    const waitingOnLock = async tag => {
       for (let attempt = 0; attempt < 100; attempt++) {
         if (await run(`select count(*) from pg_stat_activity where pid <> pg_backend_pid() and wait_event_type='Lock' and query like ${quote(`%${tag}%`)}`) === '1') { checks += 1; return; }
         await new Promise(resolve => setTimeout(resolve, 30));
       }
-      throw new Error(`replace ${tag} never blocked on its advisory lock`);
+      throw new Error(`${tag} never waited on a lock`);
     };
-    const scenario = async ({ lock, revoke, expected }) => {
+    const tagFor = label => `availability_delta_${label}_${randomUUID().replaceAll('-', '')}`;
+    const writeWith = (tech, key, tag) => result(replaceSql(tech.user, body([{ weekday: 1, starts_at: '09:00', ends_at: '12:00' }]), 0, key).replace(/; commit;$/, `; commit; /* ${tag} */`));
+    // lock: which advisory lock the holder parks the write behind. change: the authority change committed during the wait.
+    const scenario = async ({ label, lock, change, blocked, expected }) => {
       const tech = await seedTechnician();
       const key = randomUUID();
-      const tag = `availability_delta_authority_${randomUUID().replaceAll('-', '')}`;
+      const tag = tagFor(label);
       const lockName = lock === 'schedule' ? `care:technician-availability-schedule:${tech.expert}` : `care:technician-availability:${tech.user}:${key}`;
       const holder = result(lockSql(lockName, 1.5) + `; select '${tag}_holder'`);
       await waitForQuery(`${tag}_holder`);
       await new Promise(resolve => setTimeout(resolve, 200));
-      const write = result(replaceSql(tech.user, body([{ weekday: 1, starts_at: '09:00', ends_at: '12:00' }]), 0, key).replace(/; commit;$/, `; commit; /* ${tag} */`));
-      await blockedBehindLock(tag);
-      if (revoke) await run(revoke(tech));
-      const [heldResult, writeResult] = await Promise.all([holder, write]);
+      const write = writeWith(tech, key, tag);
+      await waitingOnLock(tag);
+      let changed = null;
+      if (change) {
+        changed = result(`${change(tech)} /* ${tag}_change */`);
+        if (blocked) {
+          await waitingOnLock(`${tag}_change`);   // the revoker is queued behind the write's FOR SHARE
+          assert.equal(await run(`select count(*) from public.care_technician_availability where expert_id=${quote(tech.expert)}`), '0'); checks += 1;
+        }
+      }
+      const [heldResult, writeResult, changeResult] = await Promise.all([holder, write, changed]);
       assert.equal(heldResult.error, undefined, heldResult.output); checks += 1;
+      if (changeResult) { assert.equal(changeResult.error, undefined, changeResult.output); checks += 1; }
       const rows = await run(`select count(*) from public.care_technician_availability where expert_id=${quote(tech.expert)}`);
       if (expected) {
-        assert.ok(`${writeResult.error || ''}${writeResult.output || ''}`.includes(expected), `${lock}: ${writeResult.output}`); checks += 1;
-        equal(rows, '0', `${lock}: nothing written after authority was revoked during the wait`);
+        assert.ok(`${writeResult.error || ''}${writeResult.output || ''}`.includes(expected), `${label}: ${writeResult.output}`); checks += 1;
+        equal(rows, '0', `${label}: nothing written`);
       } else {
-        assert.equal(writeResult.error, undefined, writeResult.output); checks += 1;
-        equal(rows, '1', `${lock}: control write succeeds`);
+        assert.equal(writeResult.error, undefined, `${label}: ${writeResult.output}`); checks += 1;
+        equal(rows, '1', `${label}: write committed before the queued authority change`);
       }
+      return tech;
     };
-    await scenario({ lock: 'schedule', revoke: null, expected: null });
-    await scenario({ lock: 'schedule', revoke: tech => `delete from public.user_roles where user_id=${quote(tech.user)}`, expected: 'FORBIDDEN' });
-    await scenario({ lock: 'schedule', revoke: tech => `update public.care_technician_accounts set active=false where user_id=${quote(tech.user)}`, expected: 'NOT_FOUND' });
-    await scenario({ lock: 'schedule', revoke: tech => `update public.care_experts set active=false where id=${quote(tech.expert)}`, expected: 'NOT_FOUND' });
-    await scenario({ lock: 'idempotency', revoke: tech => `delete from public.user_roles where user_id=${quote(tech.user)}`, expected: 'FORBIDDEN' });
+    const roleDelete = tech => `delete from public.user_roles where user_id=${quote(tech.user)}`;
+    await scenario({ label: 'control', lock: 'schedule' });
+    // The role is not row-locked: it is re-checked after the advisory locks and the write is refused.
+    await scenario({ label: 'role_schedule', lock: 'schedule', change: roleDelete, expected: 'FORBIDDEN' });
+    await scenario({ label: 'role_idempotency', lock: 'idempotency', change: roleDelete, expected: 'FORBIDDEN' });
+    // Account and expert rows are share-locked before the wait: the change queues until the write ends.
+    const deactivated = await scenario({ label: 'account_deactivate', lock: 'schedule', blocked: true,
+      change: tech => `update public.care_technician_accounts set active=false where user_id=${quote(tech.user)}` });
+    equal(await run(`select active from public.care_technician_accounts where user_id=${quote(deactivated.user)}`), 'f', 'queued account deactivation applied after the write');
+    await scenario({ label: 'expert_deactivate', lock: 'schedule', blocked: true,
+      change: tech => `update public.care_experts set active=false where id=${quote(tech.expert)}` });
+    const deleted = await scenario({ label: 'account_delete', lock: 'idempotency', blocked: true,
+      change: tech => `delete from public.care_technician_accounts where user_id=${quote(tech.user)}` });
+    equal(await run(`select count(*) from public.care_technician_accounts where user_id=${quote(deleted.user)}`), '0', 'queued account deletion applied after the write');
+    // Already-revoked authority is refused before any lock, new key or replay.
+    {
+      const tech = await seedTechnician();
+      const key = randomUUID();
+      await run(replaceSql(tech.user, body(), 0, key));
+      await run(`update public.care_technician_accounts set active=false where user_id=${quote(tech.user)}`);
+      await fail(replaceSql(tech.user, body(), 0, key), 'NOT_FOUND');
+      await fail(replaceSql(tech.user, body(), 1), 'NOT_FOUND');
+    }
+
+    // ---- No deadlock with care_technician_admin_command (expert KEY SHARE, then advisory care:technician-link). ----
+    const admin = randomUUID();
+    await run(`insert into auth.users(id) values (${quote(admin)}); insert into public.user_roles(user_id, role) values (${quote(admin)}, 'admin')`);
+    const bind = tech => service(`select public.care_technician_admin_command(${quote(admin)}::uuid, ${quote(randomUUID())}::uuid, 'bind_technician', null, ${quote(JSON.stringify({ expert_id: tech.expert, user_id: tech.user }))}::jsonb)`);
+    // (a) admin bind parked while holding expert KEY SHARE + the global link advisory lock: the availability write is not blocked.
+    {
+      const tech = await seedTechnician();
+      const tag = tagFor('admin_first');
+      const parked = result(bind(tech).replace(/; commit;$/, `; select pg_sleep(1.5); commit; /* ${tag} */`));
+      await waitForQuery(tag);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      const started = Date.now();
+      const written = await result(replaceSql(tech.user, body([{ weekday: 2, starts_at: '09:00', ends_at: '12:00' }]), 0));
+      assert.equal(written.error, undefined, written.output); checks += 1;
+      assert.ok(Date.now() - started < 1200, 'availability write must not wait behind the admin bind'); checks += 1;
+      const parkedResult = await parked;
+      assert.equal(parkedResult.error, undefined, parkedResult.output); checks += 1;
+    }
+    // (b) availability write parked behind its schedule advisory lock while holding FOR SHARE on expert + account: the admin bind is not blocked.
+    {
+      const tech = await seedTechnician();
+      const tag = tagFor('availability_first');
+      const holder = result(lockSql(`care:technician-availability-schedule:${tech.expert}`, 1.5) + `; select '${tag}_holder'`);
+      await waitForQuery(`${tag}_holder`);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      const write = writeWith(tech, randomUUID(), tag);
+      await waitingOnLock(tag);
+      const started = Date.now();
+      const bound = await result(bind(tech));
+      assert.equal(bound.error, undefined, bound.output); checks += 1;
+      assert.ok(Date.now() - started < 1200, 'admin bind must not wait behind the availability write'); checks += 1;
+      const [heldResult, writeResult] = await Promise.all([holder, write]);
+      assert.equal(heldResult.error, undefined, heldResult.output); checks += 1;
+      assert.equal(writeResult.error, undefined, writeResult.output); checks += 1;
+      assert.ok(!/deadlock/i.test(`${bound.output}${writeResult.output}`)); checks += 1;
+    }
   }
 
   // ---- Forward-only, on a scratch database that already holds data written under #76. -------------------

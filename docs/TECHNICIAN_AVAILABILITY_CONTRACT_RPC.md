@@ -67,18 +67,36 @@ whole migration rolls back, if any stored row would violate a new constraint. Th
 forward-only and creates no sequences. #76 created none (no identity or serial columns), so there is
 nothing to revoke; the test asserts that.
 
-## `care_technician_replace_availability`: authority re-check
+## `care_technician_replace_availability`: authority locking and re-check
 
 #76 (`20261101062300_technician_availability.sql`) checks `current_user` and the `technician` role at
-lines 189-192, before it takes any lock. The idempotency advisory lock is taken at line 200 and the
-expert link is read at lines 203-206. The schedule advisory lock (281) and row lock (282) follow,
-and nothing is re-checked after them. A role revoked, or an account or expert deactivated, while a
-request waits on either lock still wrote the schedule.
+lines 189-192 and reads the expert link at lines 203-207, all before the schedule advisory lock (281)
+and row lock (282), without locking anything, and never re-checks. A role revoked, or an account or
+expert deactivated or deleted, while a write waited on an advisory lock still wrote the schedule and
+its audit/command rows (QA repro: 4 of 4).
 
-The delta does a forward-only `create or replace` with the same signature, body and grants, adding two
-re-checks: the role after the idempotency lock, and role plus active expert link (same expert) after the
-schedule locks. A revoke that commits after the final re-check but before the transaction commits is
-not excluded (no row lock is taken, so `service_role` needs no extra privilege).
+The delta does a forward-only `create or replace` (same signature, grants and body) with these changes:
+
+1. After the cheap input checks and **before any advisory wait**, `select ... for share of e, a` on the
+   active `care_experts` + `care_technician_accounts` rows (the pattern
+   `care_technician_work_command` and the quote/completion commands already use). A deactivation or
+   deletion of either row now queues behind the write instead of committing in the middle of it, so the
+   write is serialised before the revocation. If the link is already inactive the call fails
+   `NOT_FOUND` (new key or replay).
+2. The `technician` role is re-checked after the idempotency advisory lock and again after the schedule
+   advisory/row lock. `user_roles` is not row-locked here, so a role revoked while waiting is refused
+   `FORBIDDEN`; a revoke that commits after the last re-check but before this transaction commits is not
+   excluded.
+
+Deadlock analysis against `care_technician_admin_command` (expert `KEY SHARE`, then advisory
+`care:technician-link`, then an insert into `care_technician_accounts`): `FOR SHARE` does not conflict with
+`KEY SHARE`; the availability write never takes `care:technician-link` or `care:technician-command:*`, and
+the admin command never takes the availability or schedule advisory locks or updates the expert/account
+rows (it only inserts, `on conflict do nothing`). There is no shared lock pair that can be acquired in
+opposite orders. The acceptance test runs both directions (admin bind parked while an availability write
+runs, and an availability write parked on its schedule lock while an admin bind runs): neither blocks nor
+deadlocks. Out-of-band tooling that deactivates an account/expert will now wait for an in-flight
+availability write, as it already does for the technician work commands.
 
 ## Open questions / follow-ups
 

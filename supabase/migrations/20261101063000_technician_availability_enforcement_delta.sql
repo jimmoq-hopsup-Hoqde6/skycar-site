@@ -7,7 +7,8 @@ begin;
 --      selection / confirmation commands can call later;
 --   3. nothing for sequences: #76 created no identity/serial columns, so there is
 --      no sequence to revoke (asserted in tests/integration/technician-availability-delta.acceptance.mjs);
---   4. care_technician_replace_availability re-checks role and expert link after its locks.
+--   4. care_technician_replace_availability takes FOR SHARE on the expert + account rows before
+--      its advisory waits and re-checks the technician role after them.
 -- care_journey_command and every existing migration are untouched. The check never
 -- reads or locks care_journeys: confirmed-booking overlap stays with the existing
 -- atomic confirmation check and the care:expert-capacity advisory lock.
@@ -179,8 +180,9 @@ end;
 $$;
 
 -- #76's care_technician_replace_availability checks the technician role before taking its
--- advisory locks and reads the expert link before the schedule lock, and never re-checks.
--- Same signature, same body, same grants; the only change is the two re-checks marked "Delta".
+-- advisory locks and reads the expert link without locking it before the schedule lock, and
+-- never re-checks. Same signature, same grants, same body; the only changes are marked "Delta":
+-- FOR SHARE on expert+account before the advisory waits, and two role re-checks after them.
 create or replace function public.care_technician_replace_availability(
   p_actor uuid,
   p_key uuid,
@@ -221,6 +223,18 @@ begin
   if octet_length(p_payload::text) > 393216 then
     raise exception using errcode = 'P0001', message = 'PAYLOAD_TOO_LARGE';
   end if;
+  -- Delta: lock the active expert + account rows FOR SHARE BEFORE any advisory wait (the
+  -- care_technician_work_command pattern). A deactivation or deletion of the account or expert
+  -- now waits for this transaction instead of committing in the middle of it, and a replay or
+  -- write after such a change finds no active link and fails NOT_FOUND. FOR SHARE does not
+  -- conflict with the KEY SHARE that care_technician_admin_command takes on the expert, and
+  -- this function takes neither 'care:technician-link' nor 'care:technician-command:*', so it
+  -- cannot form a cycle with it (asserted in the acceptance test, both directions).
+  select a.expert_id into linked_expert
+  from public.care_technician_accounts a
+  join public.care_experts e on e.id = a.expert_id
+  where a.user_id = p_actor and a.active and e.active for share of e, a;
+  if not found then raise exception using errcode = 'P0001', message = 'NOT_FOUND'; end if;
   perform pg_advisory_xact_lock(hashtextextended('care:technician-availability:' || p_actor::text || ':' || p_key::text, 0));
   -- Delta: re-check the role after the idempotency lock (a concurrent request with the same
   -- key may have held it while the role was revoked). #76 only checked before the lock.
@@ -229,11 +243,6 @@ begin
   end if;
   select * into prior from public.care_technician_availability_commands
   where actor_id = p_actor and idempotency_key = p_key;
-  select a.expert_id into linked_expert
-  from public.care_technician_accounts a
-  join public.care_experts e on e.id = a.expert_id
-  where a.user_id = p_actor and a.active and e.active;
-  if not found then raise exception using errcode = 'P0001', message = 'NOT_FOUND'; end if;
   if found and prior.actor_id is not null then
     if prior.expert_id <> linked_expert or prior.expected_revision <> p_expected_revision or prior.payload <> p_payload then
       raise exception using errcode = 'P0001', message = 'IDEMPOTENCY_CONFLICT';
@@ -310,17 +319,10 @@ begin
   perform pg_advisory_xact_lock(hashtextextended('care:technician-availability-schedule:' || linked_expert::text, 0));
   select revision into current_revision from public.care_technician_availability where expert_id = linked_expert for update;
   if not found then current_revision := 0; end if;
-  -- Delta: re-check authority AFTER the schedule advisory lock and row lock. Waiting on either
-  -- can take arbitrarily long; role revocation or account/expert deactivation committed during
-  -- the wait must stop the write (each statement sees a fresh READ COMMITTED snapshot).
+  -- Delta: re-check the role AFTER the schedule advisory lock and row lock. Waiting on either
+  -- can take arbitrarily long, and user_roles is not row-locked (see the FOR SHARE note above).
   if not exists(select 1 from public.user_roles where user_id = p_actor and role = 'technician') then
     raise exception using errcode = 'P0001', message = 'FORBIDDEN';
-  end if;
-  if not exists(
-    select 1 from public.care_technician_accounts a
-    join public.care_experts e on e.id = a.expert_id
-    where a.user_id = p_actor and a.expert_id = linked_expert and a.active and e.active) then
-    raise exception using errcode = 'P0001', message = 'NOT_FOUND';
   end if;
   if current_revision <> p_expected_revision then
     raise exception using errcode = 'P0001', message = 'REVISION_CONFLICT';
