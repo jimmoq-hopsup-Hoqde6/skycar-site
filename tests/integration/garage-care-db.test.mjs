@@ -10,6 +10,7 @@ import { verifyCustomerCompletionReview } from "./customer-completion-review.acc
 import { verifyCompletionLockReview } from "./completion-lock-review.acceptance.mjs";
 import { verifyCompletionLockOrder } from "./completion-lock-order.acceptance.mjs";
 import { verifyCustomerTechnicianRace } from "./customer-technician-race.acceptance.mjs";
+import { verifyCareJourneyLockOrder } from "./care-journey-lock-order.acceptance.mjs";
 import { verifyTechnicianWorkStart } from "./technician-work-start.acceptance.mjs";
 import { verifyTechnicianQuotes } from "./technician-quotes.acceptance.mjs";
 import { verifyTechnicianInbox } from "./technician-inbox.acceptance.mjs";
@@ -124,6 +125,7 @@ before(() => {
     '20261101062300_technician_availability.sql',
     '20261101062400_my_jobs_journey_status.sql',
     '20261101063000_technician_availability_enforcement_delta.sql',
+    '20261101120000_care_journey_command_lock_order.sql',
     '20261101130000_request_photo_flag_and_upload_quota.sql',
     '20261101133000_revoke_public_sequence_grants.sql',
     '20261101140000_revoke_supabase_admin_sequence_default_acl.sql',
@@ -313,6 +315,9 @@ test('Technician availability is private and does not take booking locks', async
 });
 test('Server-side service-area enforcement rejects out-of-area requests for signed-in and guest bypass attempts', async () => {
   await verifyCoverageEnforcement({ sql, auth, quote, garageCreate, result });
+});
+test('care_journey_command takes locks in the canonical order for every action and never deadlocks', async () => {
+  await verifyCareJourneyLockOrder({ sql, quote, result });
 });
 test('My Jobs exposes the caller journey state without private issue text', () => {
   verifyMyJobsJourneyState({ sql, auth, quote, garageCreate, carePayload });
