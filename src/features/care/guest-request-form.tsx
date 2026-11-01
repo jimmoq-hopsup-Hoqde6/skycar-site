@@ -33,6 +33,9 @@ export function GuestRequestForm({ initialService = 'repair', supportContact = n
   const [coverage, setCoverage] = useState<Extract<CoverageOutcome, { kind: 'out_of_area' | 'unknown' }> | null>(null);
   const [areaStatus, setAreaStatus] = useState<{ postcode: string } | null>(null);
   const checkingNow = useRef(false);
+  // The service the customer has selected right now. State read inside an async check is the value from the
+  // render that started it, so a late answer is compared against this ref instead.
+  const serviceNow = useRef(initialService);
   const decided = useRef(new Set<string>());
   const postcodeInput = useRef<HTMLInputElement>(null);
   const attempt = useRef<{ key: string; body: string; photos: File[] } | null>(null);
@@ -66,7 +69,7 @@ export function GuestRequestForm({ initialService = 'repair', supportContact = n
     return true;
   }
   // The cache key carries the service as well as the postcode: an answer for repair says nothing about cleaning.
-  function areaKey() { return `${service}:${normalisePostcode(postcodeInput.current?.value)}`; }
+  function areaKey() { return `${serviceNow.current}:${normalisePostcode(postcodeInput.current?.value)}`; }
   function clearArea() { setCoverage(null); setPostcodeError(false); setAreaStatus(null); }
   // Runs when the customer continues from the Location step. Only an in-area decision moves on; out of area
   // and unknown (unavailable) both stop here with their own message.
@@ -74,11 +77,13 @@ export function GuestRequestForm({ initialService = 'repair', supportContact = n
     if (checkingNow.current) return;
     const postcode = normalisePostcode(postcodeInput.current?.value);
     if (!isPostcodeShape(postcode)) { setPostcodeError(true); postcodeInput.current?.focus(); return; }
+    const checkedService = serviceNow.current;
     const key = areaKey();
     if (decided.current.has(key)) { setAreaStatus({ postcode }); moveTo(2); return; }
     checkingNow.current = true; setChecking(true); setCoverage(null); setPostcodeError(false);
-    const outcome = await checkCoverage({ service, postcode });
+    const outcome = await checkCoverage({ service: checkedService, postcode });
     checkingNow.current = false; setChecking(false);
+    // Ignore an answer for a service or postcode that is no longer the one selected, whatever the answer says.
     if (areaKey() !== key) return;
     if (outcome.kind === 'invalid_input') { setPostcodeError(true); postcodeInput.current?.focus(); return; }
     if (outcome.kind === 'out_of_area' || outcome.kind === 'unknown') { setCoverage(outcome); return; }
@@ -132,7 +137,7 @@ export function GuestRequestForm({ initialService = 'repair', supportContact = n
       <ol className="guest-steps" aria-label="Request progress">{steps.map((label, index) => <li key={label} aria-current={index === step ? 'step' : undefined} data-complete={index < step}><span>{index < step ? <AppIcon name="check"/> : index + 1}</span>{label}</li>)}</ol>
       <div className="guest-step-heading"><p className="eyebrow">STEP {step + 1} OF 3</p><h2 ref={stepTitle} tabIndex={-1}>{['What needs attention?', 'Where is your car?', 'How can we reach you?'][step]}</h2><p>{['Choose the care you need and tell us about your car.', 'We’ll check service coverage for your area.', 'Your details are used to follow up on this request.'][step]}</p></div>
       <fieldset data-step="0" hidden={step !== 0} disabled={busy || uncertain}><legend className="sr-only">Service and vehicle</legend>
-        <div className="guest-service-options">{(['repair', 'cleaning'] as const).map(value => <label key={value} className="guest-service-choice"><input type="radio" name="service" value={value} checked={service === value} onChange={() => { setService(value); clearArea(); }}/><AppIcon name={value === 'repair' ? 'garage' : 'care'}/><strong>{value === 'repair' ? 'Repair' : 'Cleaning'}</strong><span>{value === 'repair' ? 'Scratches & dents' : 'Detail & refresh'}</span><span className="guest-choice-check"><AppIcon name="check"/></span></label>)}</div>
+        <div className="guest-service-options">{(['repair', 'cleaning'] as const).map(value => <label key={value} className="guest-service-choice"><input type="radio" name="service" value={value} checked={service === value} onChange={() => { serviceNow.current = value; setService(value); clearArea(); }}/><AppIcon name={value === 'repair' ? 'garage' : 'care'}/><strong>{value === 'repair' ? 'Repair' : 'Cleaning'}</strong><span>{value === 'repair' ? 'Scratches & dents' : 'Detail & refresh'}</span><span className="guest-choice-check"><AppIcon name="check"/></span></label>)}</div>
         <div className="booking-vehicle-choice"><div><p className="eyebrow">CHOOSE YOUR CAR</p><strong>Enter your car below</strong><span>Get started without an account</span></div><Link href="/care/request/garage"><AppIcon name="garage"/><strong>Choose from Garage</strong><span>Use a saved vehicle · sign-in required</span></Link></div><label className="care-field">Your car<input name="vehicle" required minLength={3} maxLength={160} placeholder="Make, model and year" autoComplete="off"/></label>
         <label className="care-field">What would you like done?<textarea name="description" required minLength={10} maxLength={2000} rows={4} placeholder={service === 'repair' ? 'e.g. A scratch on the rear bumper and a small dent on the door.' : 'e.g. A full interior clean and an exterior detail.'}/></label>
         <DamagePhotos files={photos} disabled={busy || uncertain} onChange={setPhotos} onProcessing={setPreparing}/><label className="care-field">When suits you?<select name="preferred_window" defaultValue="flexible"><option value="flexible">I’m flexible</option><option value="one_to_two_business_days">Within 1–2 business days</option><option value="seven_to_fourteen_days">Within 7–14 days</option></select></label><p className="care-help">Your preferred timing helps us review the request in Australia/Adelaide. It isn’t a reserved appointment.</p>
