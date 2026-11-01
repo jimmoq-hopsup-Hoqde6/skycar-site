@@ -48,6 +48,11 @@ export function GuestRequestForm({ initialService = 'repair', supportContact = n
     if (form.current) setSummary(Object.fromEntries([...new FormData(form.current)].filter((entry): entry is [string,string] => typeof entry[1] === 'string')));
     setStep(next);
     requestAnimationFrame(() => {
+      // Move focus to the new step's title only if the customer has not already moved into a field on the new step: the frame
+      // runs after the step is shown, and taking focus then would swallow what they are typing.
+      const active = document.activeElement;
+      const typing = (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement) && !active.closest('fieldset[hidden]');
+      if (typing) return;
       stepTitle.current?.focus({ preventScroll: true });
       stepTitle.current?.scrollIntoView({ block: 'start', behavior: 'instant' });
     });
