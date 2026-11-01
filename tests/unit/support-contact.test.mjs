@@ -1,12 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { hasSupportContact, readSupportContact, telHref } from '../../src/domain/care/support-contact.ts';
+import { DEFAULT_SUPPORT_EMAIL, hasSupportContact, readSupportContact, telHref } from '../../src/domain/care/support-contact.ts';
 
-test('unset or blank config yields no contact (no hardcoded fallback)', () => {
-  assert.deepEqual(readSupportContact({}), { email: null, phone: null });
-  assert.deepEqual(readSupportContact({ SKYCAR_SUPPORT_EMAIL: '  ', SKYCAR_SUPPORT_PHONE: '' }), { email: null, phone: null });
-  assert.equal(hasSupportContact(readSupportContact({})), false);
+test('email defaults to info@skycar.au when unset or blank; the phone has no default', () => {
+  assert.equal(DEFAULT_SUPPORT_EMAIL, 'info@skycar.au');
+  for (const env of [{}, { SKYCAR_SUPPORT_EMAIL: '' }, { SKYCAR_SUPPORT_EMAIL: '  ', SKYCAR_SUPPORT_PHONE: '' }, { SKYCAR_SUPPORT_EMAIL: undefined, SKYCAR_SUPPORT_PHONE: undefined }]) {
+    assert.deepEqual(readSupportContact(env), { email: 'info@skycar.au', phone: null }, JSON.stringify(env));
+  }
+  assert.equal(hasSupportContact(readSupportContact({})), true);
   assert.equal(hasSupportContact(null), false);
+  assert.equal(hasSupportContact({ email: null, phone: null }), false);
+});
+
+test('phone stays hidden unless SKYCAR_SUPPORT_PHONE is set to a valid number', () => {
+  assert.equal(readSupportContact({}).phone, null);
+  assert.equal(readSupportContact({ SKYCAR_SUPPORT_EMAIL: 'help@example.test' }).phone, null);
+  assert.equal(readSupportContact({ SKYCAR_SUPPORT_PHONE: '   ' }).phone, null);
+  assert.equal(readSupportContact({ SKYCAR_SUPPORT_PHONE: 'not a number' }).phone, null);
+  assert.equal(readSupportContact({ SKYCAR_SUPPORT_PHONE: '+61 8 5550 0100' }).phone, '+61 8 5550 0100');
 });
 
 test('valid values are trimmed and kept', () => {
@@ -16,8 +27,8 @@ test('valid values are trimmed and kept', () => {
   assert.equal(hasSupportContact({ email: 'a@b.test', phone: null }), true);
 });
 
-test('invalid values are ignored rather than rendered', () => {
-  for (const email of ['nope', 'a@b', 'a b@c.test', '<script>@x.test', `${'a'.repeat(250)}@x.test`]) assert.equal(readSupportContact({ SKYCAR_SUPPORT_EMAIL: email }).email, null, email);
+test('invalid values are never rendered: a bad email falls back to the default, a bad phone is hidden', () => {
+  for (const email of ['nope', 'a@b', 'a b@c.test', '<script>@x.test', `${'a'.repeat(250)}@x.test`]) assert.equal(readSupportContact({ SKYCAR_SUPPORT_EMAIL: email }).email, DEFAULT_SUPPORT_EMAIL, email);
   for (const phone of ['abc', '12', 'javascript:1', '+61 (8) 5550-0100 ext', '1'.repeat(40)]) assert.equal(readSupportContact({ SKYCAR_SUPPORT_PHONE: phone }).phone, null, phone);
 });
 

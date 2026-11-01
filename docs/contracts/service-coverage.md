@@ -115,8 +115,8 @@ The forms never decide coverage; they read the existing response shape (`docs/CA
 | State | Trigger | Customer sees | Can continue? |
 |-------|---------|---------------|---------------|
 | **In area** | `200 coverage:"available"`, echoing the same service and postcode | Guest form moves on; the review step shows "Skycar covers {postcode}. A quote, expert and appointment still need confirmation." Signed-in form creates the request. | Yes |
-| **Out of area** | `200 coverage:"unavailable"` | Friendly alert: "We don’t cover {postcode} yet. Skycar is starting in Adelaide and the Adelaide Hills… Nothing has been submitted." **Change postcode** button, contact line if configured. | No |
-| **Unavailable / unknown** | `503 COVERAGE_UNAVAILABLE`, other 5xx, network failure or 10 s timeout, unreadable body, `200` with an unexpected or mismatched body | Separate alert: "We can’t check your area right now… nothing has been submitted. Please try again in a moment." **Try again** button, contact line if configured. Not worded as out of area. | **No. Fail-closed; there is no "continue anyway".** |
+| **Out of area** | `200 coverage:"unavailable"` | Friendly alert: "We don’t cover {postcode} yet. Skycar is starting in Adelaide and the Adelaide Hills… Nothing has been submitted." **Change postcode** button, contact line (default email, plus phone if configured). | No |
+| **Unavailable / unknown** | `503 COVERAGE_UNAVAILABLE`, other 5xx, network failure or 10 s timeout, unreadable body, `200` with an unexpected or mismatched body | Separate alert: "We can’t check your area right now… nothing has been submitted. Please try again in a moment." **Try again** button, contact line (default email, plus phone if configured). Not worded as out of area. | **No. Fail-closed; there is no "continue anyway".** |
 | **Invalid input** | Not exactly 4 digits (browser, no request) or server `400 VALIDATION_FAILED` | Field error "Enter your 4-digit postcode, for example 5000." with `aria-invalid`. | No |
 
 Rules:
@@ -128,14 +128,17 @@ Rules:
 
 ### Contact fallback
 
-No support phone or email exists in the repository config, so none is hardcoded. A marked slot is in `.env.example`:
+| Channel | Default | Override | Shown when |
+|---|---|---|---|
+| Email | `info@skycar.au` (public, non-secret; constant `DEFAULT_SUPPORT_EMAIL` in `src/domain/care/support-contact.ts`) | `SKYCAR_SUPPORT_EMAIL` | Always (default or valid override) |
+| Phone | **none** | `SKYCAR_SUPPORT_PHONE` | Only when set to a valid number |
 
-```
-SKYCAR_SUPPORT_EMAIL=
-SKYCAR_SUPPORT_PHONE=
-```
+`.env.example` documents both variables (commented out). The two request pages read them on the server per request, validate them (email shape ≤254 chars; phone digits and `+ ( ) -` space) and pass the result to the forms as props.
 
-The two request pages read them on the server per request, validate them (email shape ≤254 chars; phone digits and `+ ( ) -` space), and pass them to the forms as props. Unset or invalid values are ignored and **no contact line is shown**; the message, the reason and the buttons still appear. **The slot is unset: Marcel must set the values in the deployment environment.** Until then an out-of-area customer sees the friendly message and "Change postcode" but no way to reach Skycar.
+- Email: a `mailto:` link, at least 44px tall. A valid env value overrides the default; a blank or invalid value keeps the default, so the contact never disappears because of a bad setting.
+- Phone: no default and no phone number is hardcoded. With `SKYCAR_SUPPORT_PHONE` unset or invalid there is no `tel:` link and no phone text. When valid it is shown as a `tel:` link, at least 44px tall, next to the email.
+- No Vercel or Supabase environment or secret is read or changed by this: the default lives in committed code, and the env variables are optional overrides.
+- The notice's `data-contact` attribute reports `email`, `email-phone`, `phone` or `none` (tests use it).
 
 ## 6. Backend needs
 
@@ -146,16 +149,16 @@ The two request pages read them on the server per request, validate them (email 
 | 3 | Resolver backed by `coverage-areas.json` | NEW, **done in this PR** | File-based, no database, no migration. Lives in `src/server/care/` (server code, bundled with the app). |
 | 4 | Server-side enforcement when a request is created (`/api/v1/care/requests`, `/api/v1/care/guest-requests`) | **NEW, not done** | Creation never consults coverage, so a scripted client can still submit an out-of-area postcode. The form check is a customer courtesy, not enforcement. If enforcement is wanted, the backend owner should call the same `resolveCoverage` in those handlers and reject out-of-area with a defined error; the UI would then also need that error mapped. |
 | 5 | Optional: move the list to a database table (`service`, `postcode`, `active`, `updated_at`) | NEW, optional | Only if ops want to edit coverage without a deploy. Needs a migration and RLS (backend-owned, not done). The route and UI would not change. |
-| 6 | Support contact values | NEW (config only) | `SKYCAR_SUPPORT_EMAIL` / `SKYCAR_SUPPORT_PHONE` from Marcel. |
+| 6 | Support contact values | NEW (config only) | Email defaults to `info@skycar.au` in code. `SKYCAR_SUPPORT_PHONE` (and an email override, if wanted) from Marcel; the phone stays hidden until set. |
 | 7 | Store the signed-in postcode with the request | NEW, optional | Needs a payload/column change; not done. |
 | 8 | Refresh process for ABS data (Edition 4 POA→GCCSA/LGA files) | NEW (process) | Re-run the generator, review the diff, ship. |
 
 ## 7. Tests
 
 - Unit `tests/unit/coverage-resolver.test.mjs`: in-area, out-of-area, borderline (included and excluded), invalid input at the route (400), unavailable (503 for broken data), data provenance, every flag re-derived from ratios, tamper/empty/duplicate/bad-ratio/unknown-service data all fail closed.
-- Unit `tests/unit/care-coverage.test.mjs`, `tests/unit/support-contact.test.mjs`: the browser reader, strictness, no bypass, contact validation.
+- Unit `tests/unit/care-coverage.test.mjs`, `tests/unit/support-contact.test.mjs`: the browser reader, strictness, no bypass, contact validation, default email, phone hidden when unset.
 - API `tests/api/care-smoke.test.mjs`, `tests/api/origin-regression.test.mjs`: the real built route returns `200` available for 5000 and `200` unavailable for an out-of-area postcode.
-- Browser `tests/ui/care-coverage.mjs` (synthetic intercepted API plus the real route and real data for in-area, out-of-area and borderline postcodes): both forms, all four states, retry, no bypass, contact line absent and present, size and overflow checks at 320/390/1440.
+- Browser `tests/ui/care-coverage.mjs` (synthetic intercepted API plus the real route and real data for in-area, out-of-area and borderline postcodes): both forms, all four states, retry, no bypass, default email present and phone hidden when unset, env override showing email and phone, size and overflow checks at 320/390/1440.
 - Existing form tests intercept the coverage route with `tests/ui/support/coverage-fixture.mjs`.
 
 ## 8. Regenerating the data

@@ -1,6 +1,9 @@
-// Optional customer support contact, read from server environment by the page and passed to the
-// forms as props. Nothing is hardcoded: when neither value is configured the forms show no
-// contact line. Configure SKYCAR_SUPPORT_EMAIL and/or SKYCAR_SUPPORT_PHONE (see .env.example).
+// Customer support contact, read from server environment by the page and passed to the forms as
+// props. The email has a public, non-secret default (the Skycar info mailbox); SKYCAR_SUPPORT_EMAIL
+// overrides it when set to a valid address. The phone has NO default: it is shown only when
+// SKYCAR_SUPPORT_PHONE is set to a valid number (see .env.example).
+
+export const DEFAULT_SUPPORT_EMAIL = "info@skycar.au";
 
 export type SupportContact = { email: string | null; phone: string | null };
 
@@ -11,7 +14,8 @@ export function readSupportContact(env: Record<string, string | undefined>): Sup
   const email = env.SKYCAR_SUPPORT_EMAIL?.trim() ?? "";
   const phone = env.SKYCAR_SUPPORT_PHONE?.trim() ?? "";
   return {
-    email: email.length <= 254 && EMAIL.test(email) ? email : null,
+    // A blank or invalid override falls back to the default rather than hiding the contact.
+    email: email.length <= 254 && EMAIL.test(email) ? email : DEFAULT_SUPPORT_EMAIL,
     phone: PHONE.test(phone) ? phone : null,
   };
 }

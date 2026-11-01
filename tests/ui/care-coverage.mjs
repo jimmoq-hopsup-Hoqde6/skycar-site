@@ -65,7 +65,7 @@ try {
   const withContact = await start(CONTACT);
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
 
-  // 1. Out of area: blocked, clear message, no contact line when none is configured, accessible at three widths.
+  // 1. Out of area: blocked, clear message, default email only (no phone) when nothing is configured, accessible at three widths.
   for (const width of [320, 390, 1440]) {
     const { page, coverage, guestCalls, errors } = await newGuest(width, () => 'unavailable');
     await fillLocation(page, plain, '5999');
@@ -73,9 +73,13 @@ try {
     const box = page.locator('.coverage-notice');
     await box.waitFor();
     assert.equal(await box.getAttribute('data-coverage'), 'out_of_area');
-    assert.equal(await box.getAttribute('data-contact'), 'unconfigured');
+    assert.equal(await box.getAttribute('data-contact'), 'email', 'default email only, no phone');
     await page.getByRole('heading', { name: 'We don’t cover 5999 yet' }).waitFor();
-    assert.equal(await page.getByText('Contact Skycar').count(), 0, 'no contact is invented when none is configured');
+    const mail = box.getByRole('link', { name: 'info@skycar.au' });
+    assert.equal(await mail.getAttribute('href'), 'mailto:info@skycar.au');
+    assert.ok((await mail.boundingBox()).height >= 44, 'mailto link is at least 44px tall');
+    assert.equal(await box.locator('a[href^="tel:"]').count(), 0, 'phone line stays hidden while SKYCAR_SUPPORT_PHONE is unset');
+    assert.equal(await box.getByText('+61').count(), 0);
     assert.equal(await nameField(page).isVisible(), false, 'out of area cannot reach the details step');
     assert.equal(await page.getByRole('button', { name: /Continue —/ }).count(), 0, 'out of area offers no bypass');
     assert.deepEqual(coverage.calls, [{ service: 'repair', postcode: '5999' }]);
@@ -89,14 +93,15 @@ try {
     await page.close();
   }
 
-  // 2. Contact fallback appears only from config, with real links.
+  // 2. Env values override the default email and add the phone line, with real links.
   {
     const { page } = await newGuest(390, () => 'unavailable');
     await fillLocation(page, withContact, '5999');
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     const box = page.locator('.coverage-notice');
     await box.waitFor();
-    assert.equal(await box.getAttribute('data-contact'), 'configured');
+    assert.equal(await box.getAttribute('data-contact'), 'email-phone');
+    assert.equal(await box.getByRole('link', { name: 'info@skycar.au' }).count(), 0, 'env email overrides the default');
     assert.equal(await box.getByRole('link', { name: '+61 8 5550 0100' }).getAttribute('href'), 'tel:+61855500100');
     assert.equal(await box.getByRole('link', { name: 'support@example.test' }).getAttribute('href'), 'mailto:support@example.test');
     await assertAccessible(page, '.coverage-notice', 'contact links');
@@ -201,7 +206,8 @@ try {
     const box = page.locator('.coverage-notice');
     await box.waitFor();
     assert.equal(await box.getAttribute('data-coverage'), 'out_of_area');
-    assert.equal(await page.getByText('Contact Skycar').count(), 0);
+    assert.equal(await page.locator('.coverage-notice a[href="mailto:info@skycar.au"]').count(), 1);
+    assert.equal(await page.locator('.coverage-notice a[href^="tel:"]').count(), 0);
     assert.equal(creates.length, 0, 'out of area creates nothing');
     await assertAccessible(page, '.coverage-notice', `signed-in out of area ${width}px`);
     mode = 'down';
