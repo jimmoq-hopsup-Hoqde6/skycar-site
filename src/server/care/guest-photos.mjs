@@ -25,14 +25,39 @@ async function immutableUpload(bucket, path, photo) {
   const hash = createHash('sha256').update(Buffer.from(await existing.data.arrayBuffer())).digest('hex');
   if (hash !== photo.hash) throw new GuestError('IDEMPOTENCY_CONFLICT');
 }
+// The manifest is a pure function of the validated photos, so its hash can be
+// computed from an incoming body without touching Storage. The DB marker keeps
+// this hash; an identical replay is recognised before any Storage call.
+export function manifestBytes(photos) {
+  return Buffer.from(JSON.stringify(photos.map((photo,index) => ({slot:index+1,mime_type:photo.mimeType,size_bytes:photo.bytes.length,sha256:photo.hash}))));
+}
+export function manifestDigest(photos) {
+  return {count:photos.length,manifestSha256:createHash('sha256').update(manifestBytes(photos)).digest('hex')};
+}
 export async function storeCarePhotos(bucket, prefix, photos) {
-  if (!photos.length) return;
-  const bytes = Buffer.from(JSON.stringify(photos.map((photo,index) => ({slot:index+1,mime_type:photo.mimeType,size_bytes:photo.bytes.length,sha256:photo.hash}))));
+  if (!photos.length) return null;
+  const bytes = manifestBytes(photos);
   // Write-once manifest binds order, count and content across partial retries.
   await immutableUpload(bucket,`${prefix}/manifest.json`,{bytes,mimeType:'application/json',hash:createHash('sha256').update(bytes).digest('hex')});
   for (const [index, photo] of photos.entries()) {
     await immutableUpload(bucket,`${prefix}/photo-${index + 1}`,photo);
   }
+  return manifestDigest(photos);
+}
+
+// Read-only check that a complete, identical set already sits in Storage (manifest
+// and every slot). Used only to heal a missing marker, never to write anything.
+export async function verifyStoredCarePhotos(bucket, prefix, photos) {
+  if (!photos.length) return null;
+  const expected = manifestDigest(photos);
+  const hashOf = async path => {
+    const result = await bucket.download(path);
+    if (result.error || !result.data) return null;
+    return createHash('sha256').update(Buffer.from(await result.data.arrayBuffer())).digest('hex');
+  };
+  if (await hashOf(`${prefix}/manifest.json`) !== expected.manifestSha256) return null;
+  for (const [index, photo] of photos.entries()) if (await hashOf(`${prefix}/photo-${index + 1}`) !== photo.hash) return null;
+  return expected;
 }
 
 export async function storeGuestPhotos(bucket,requestId,photos) {return storeCarePhotos(bucket,`guest-requests/${requestId}`,photos);}

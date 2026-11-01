@@ -1,5 +1,6 @@
-import { isTrustedWriteOrigin } from '@/server/http/request-origin.mjs';
-export class JourneyError extends Error { constructor(public code: string) {super(code);} }
+import { isTrustedWriteOrigin } from '../../http/request-origin.mjs';
+import { PhotoError } from './photo-service.mjs';
+export class JourneyError extends Error { code: string; retryAfter?: number; constructor(code: string, retryAfter?: number) {super(code);this.code=code;this.retryAfter=retryAfter;} }
 const errors: Record<string,[number,string]> = {
  UNAUTHENTICATED:[401,'Sign in, or open your guest request in the browser used to submit it.'],
  FORBIDDEN:[403,'An authorised Skycar operations account is required.'],
@@ -15,14 +16,17 @@ const errors: Record<string,[number,string]> = {
  LINK_CONFLICT:[409,'This technician account or expert already has a different link.'],
  DETAILS_REQUIRED:[409,'The customer must save a service postcode before a technician is invited.'],
  PAYLOAD_TOO_LARGE:[413,'Choose up to three smaller photos.'],
+ RATE_LIMITED:[429,'Too many photo uploads. Wait a little, then retry the same photos.'],
  UNAVAILABLE:[503,'We could not confirm the result. Retry the same action safely.'],
 };
 export function journeyJson(data:unknown,status=200,account?:string) {return Response.json({data},{status,headers:{'Cache-Control':'private, no-store','Vary':'Cookie','X-Content-Type-Options':'nosniff',...(account ? {'X-Skycar-Account':account} : {})}});}
 export async function journeyBoundary(action:()=>Promise<Response>) {
  try{return await action();}catch(error){
-  const code=error instanceof JourneyError && error.code in errors ? error.code : 'UNAVAILABLE';
+  const known=error instanceof JourneyError || error instanceof PhotoError;
+  const code=known && error.code in errors ? error.code : 'UNAVAILABLE';
   const [status,message]=errors[code];
-  return Response.json({error:{code,message,retryable:status>=500}},{status,headers:{'Cache-Control':'private, no-store','Vary':'Cookie','X-Content-Type-Options':'nosniff'}});
+  const retryAfter:Record<string,string>=known && code==='RATE_LIMITED' && Number.isInteger(error.retryAfter) ? {'Retry-After':String(error.retryAfter)} : {};
+  return Response.json({error:{code,message,retryable:status>=500||status===429}},{status,headers:{'Cache-Control':'private, no-store','Vary':'Cookie','X-Content-Type-Options':'nosniff',...retryAfter}});
  }
 }
 export async function boundedBody(request:Request,limit=16384) {

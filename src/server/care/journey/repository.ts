@@ -5,7 +5,7 @@ import { featureEnabled,requireSupabaseSecretConfig } from '@/server/env';
 import { verifyGuestCookie } from './access.mjs';
 import { JourneyError,identifier } from './http';
 import {verifyCompletionEvidence} from '@/server/care/completion-evidence.mjs';
-import { storeCarePhotos } from '@/server/care/guest-photos.mjs';
+import { PhotoError,reservePhotoSlot,releasePhotoSlot,recordedPhotoSet,savePhotoSet,healPhotoMarker } from './photo-service.mjs';
 
 type Photo = {bytes:Buffer;mimeType:string;hash:string};
 type ManifestEntry = {slot:number;mime_type:string;size_bytes:number;sha256:string};
@@ -70,9 +70,14 @@ export async function saveJourneyPhotos(access:JourneyAccess,photos:Photo[],comp
  const journey=await access.db.from('care_journeys').select('state').eq('id',access.id).maybeSingle();
  if(journey.error)throw new JourneyError('UNAVAILABLE');
  if(completion){if(!access.admin)throw new JourneyError('FORBIDDEN');if(journey.data?.state!=='in_progress')throw new JourneyError('INVALID_TRANSITION');}
- else if(journey.data && !['review','quotes_ready'].includes(journey.data.state))throw new JourneyError('INVALID_TRANSITION');
- try{await storeCarePhotos(access.db.storage.from('private-media'),photoPrefix(access,completion),photos);}catch(error){throw new JourneyError(error instanceof Error && 'code' in error ? String(error.code) : 'UNAVAILABLE');}
+ const stateOpen=completion || !journey.data || ['review','quotes_ready'].includes(journey.data.state);
+ return savePhotoSet({db:access.db,bucket:access.db.storage.from('private-media'),prefix:photoPrefix(access,completion),photos,requestId:access.id,kind:access.kind,completion,stateOpen});
 }
+export async function reserveJourneyPhotoSlot(access:JourneyAccess){return reservePhotoSlot(access.db,access);}
+export async function releaseJourneyPhotoSlot(access:JourneyAccess,reservation:{subject:string;windowStart:string}){return releasePhotoSlot(access.db,reservation);}
+export async function journeyRecordedPhotoSet(access:JourneyAccess){return recordedPhotoSet(access.db,access.id,access.kind);}
+export async function healJourneyPhotoMarker(access:JourneyAccess){return healPhotoMarker(access.db,access.id,access.kind);}
+export {PhotoError};
 export async function journeySnapshot(access:JourneyAccess) {
  const results=await Promise.all([
   access.db.from('care_journeys').select('state,customer_details,selected_quote_id,starts_at,ends_at,completion_review_state,completion_issue_details,revision,updated_at').eq('id',access.id).maybeSingle(),
