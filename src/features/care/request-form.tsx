@@ -6,7 +6,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CareInput } from "@/domain/care/request";
 import { readCareSubmission } from "@/domain/care/submission";
 import { unreadableResponseIsUncertain } from "@/domain/care/submission-recovery";
+import { checkCoverage, isPostcodeShape, normalisePostcode, type CoverageOutcome } from "@/domain/care/coverage";
+import type { SupportContact } from "@/domain/care/support-contact";
+import { rememberCheckedPostcode } from "./checked-postcode";
 import { ApiError, garageApi, type Page, type Vehicle } from "@/features/garage/types";
+import { CoverageConfirmed, CoverageNotice, CoveragePostcodeError } from "./coverage-notice";
 import "./request-form.css";
 
 type AccessState = "ready" | "session" | "access" | "vehicle" | "conflict" | "error";
@@ -88,7 +92,7 @@ function settleValidation(run: ValidationRun, outcome: ValidationOutcome) {
   run.settle(outcome);
 }
 
-export function CareRequestForm() {
+export function CareRequestForm({ supportContact = null }: { supportContact?: SupportContact | null }) {
   const router = useRouter();
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [vehicleId, setVehicleId] = useState("");
@@ -100,8 +104,18 @@ export function CareRequestForm() {
   const [access, setAccess] = useState<AccessState>("ready");
   const [error, setError] = useState<SubmitError | null>(null);
   const [uncertain, setUncertain] = useState(false);
+  const [postcode, setPostcode] = useState("");
+  const [postcodeError, setPostcodeError] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [coverage, setCoverage] = useState<Extract<CoverageOutcome, { kind: "out_of_area" | "unknown" }> | null>(null);
+  const [areaStatus, setAreaStatus] = useState<"in_area" | null>(null);
+  const checkingNow = useRef(false);
+  const decided = useRef(new Set<string>());
+  const latestArea = useRef({ service: "repair" as CareInput["service"], postcode: "" });
   const selectedVehicle = useRef("");
   const pending = useRef<Pending | null>(null);
+  // The postcode that passed the area check for the attempt in `pending`; handed to the journey page on success.
+  const attemptPostcode = useRef("");
   const controller = useRef<AbortController | null>(null);
   const accountEpoch = useRef(0);
   const validation = useRef<ValidationRun | null>(null);
@@ -118,6 +132,9 @@ export function CareRequestForm() {
     setVehicles([]);
     selectVehicle("");
     setService("repair");
+    latestArea.current = { service: "repair", postcode: "" };
+    setPostcode(""); setPostcodeError(false); setCoverage(null); setAreaStatus(null);
+    checkingNow.current = false; setChecking(false);
     setDescription("");
     setPreferredWindow("flexible");
     setError(null);
@@ -195,12 +212,47 @@ export function CareRequestForm() {
     };
   }, [loadVehicles]);
 
-  async function submit(event: React.FormEvent) {
+  function changeService(next: CareInput["service"]) {
+    setService(next);
+    latestArea.current = { ...latestArea.current, service: next };
+    setCoverage(null); setAreaStatus(null);
+  }
+
+  function changePostcode(value: string) {
+    const next = value.replace(/[^0-9]/g, "").slice(0, 4);
+    setPostcode(next);
+    latestArea.current = { ...latestArea.current, postcode: next };
+    setPostcodeError(false); setCoverage(null); setAreaStatus(null);
+  }
+
+  function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (saving || !vehicleId) return;
+    void startSubmit();
+  }
+
+  async function startSubmit() {
+    if (saving || checkingNow.current || !vehicleId) return;
     if (!pending.current) {
+      // A new request must pass the area check. A repeat of an already-sent request
+      // (uncertain retry) never re-checks: it must resolve the earlier attempt as it was.
+      const code = normalisePostcode(postcode);
+      if (!isPostcodeShape(code)) { setPostcodeError(true); document.getElementById("care-postcode")?.focus(); return; }
+      const areaKey = `${service}:${code}`;
+      if (!decided.current.has(areaKey)) {
+        const checkedEpoch = accountEpoch.current;
+        checkingNow.current = true; setChecking(true); setCoverage(null); setError(null);
+        const outcome = await checkCoverage({ service, postcode: code });
+        if (checkedEpoch !== accountEpoch.current) return;
+        checkingNow.current = false; setChecking(false);
+        if (`${latestArea.current.service}:${latestArea.current.postcode}` !== areaKey) return;
+        if (outcome.kind === "invalid_input") { setPostcodeError(true); return; }
+        if (outcome.kind === "out_of_area" || outcome.kind === "unknown") { setCoverage(outcome); return; }
+        decided.current.add(areaKey);
+      }
+      setAreaStatus("in_area");
       const input: CareInput = { vehicle_id: vehicleId, service, description: description.trim(), preferred_window: preferredWindow };
       pending.current = { key: crypto.randomUUID(), body: JSON.stringify(input) };
+      attemptPostcode.current = code;
     }
     const attempt = pending.current;
     const epoch = accountEpoch.current;
@@ -212,6 +264,7 @@ export function CareRequestForm() {
         return;
       }
       pending.current = null; setUncertain(false);
+      rememberCheckedPostcode(result.request.id, attemptPostcode.current);
       router.push(`/care/requests/${encodeURIComponent(result.request.id)}`);
     } catch (caught) {
       if (!(await latestValidationAllows(epoch))) {
@@ -236,7 +289,7 @@ export function CareRequestForm() {
     }
   }
 
-  const disabled = saving || uncertain;
+  const disabled = saving || uncertain || checking;
   return <main className="care-entry-shell" aria-busy={loading || saving}>
     <nav className="care-entry-nav" aria-label="Main navigation"><Link className="care-entry-wordmark" href="/">skycar<span>●</span></Link><div><Link href="/garage">Garage</Link><Link href="/garage/jobs">My Jobs</Link><span aria-current="page">Request care</span></div></nav>
     <header className="care-entry-header"><p className="eyebrow">REPAIR &amp; CLEANING</p><h1>What does your car<br /><span>need today?</span></h1><p>Start with the outcome you need. Skycar records your request for review—this is not an instant quote or confirmed booking.</p></header>
@@ -251,14 +304,17 @@ export function CareRequestForm() {
 
     {!loading && access === "ready" && !!vehicles.length && <form className="care-entry-form" onSubmit={submit}>
       <fieldset disabled={disabled}><legend>1. Choose the service</legend><div className="service-options">
-        <label><input type="radio" name="service" value="repair" checked={service === "repair"} onChange={() => setService("repair")} /><span><strong>Fix scratches or dents</strong><small>Cosmetic repair request for review</small></span></label>
-        <label><input type="radio" name="service" value="cleaning" checked={service === "cleaning"} onChange={() => setService("cleaning")} /><span><strong>Detail or clean my car</strong><small>Interior, exterior or full detailing need</small></span></label>
+        <label><input type="radio" name="service" value="repair" checked={service === "repair"} onChange={() => changeService("repair")} /><span><strong>Fix scratches or dents</strong><small>Cosmetic repair request for review</small></span></label>
+        <label><input type="radio" name="service" value="cleaning" checked={service === "cleaning"} onChange={() => changeService("cleaning")} /><span><strong>Detail or clean my car</strong><small>Interior, exterior or full detailing need</small></span></label>
       </div></fieldset>
       <fieldset disabled={disabled}><legend>2. Select your vehicle</legend><label className="care-field" htmlFor="care-vehicle">Active Garage vehicle<select id="care-vehicle" required value={vehicleId} onChange={event => selectVehicle(event.target.value)}>{vehicles.map(vehicle => <option value={vehicle.id} key={vehicle.id}>{vehicleName(vehicle)}</option>)}</select></label><p className="care-help">Archived vehicles are history-only and cannot receive a new request.</p></fieldset>
       <fieldset disabled={disabled}><legend>3. Tell us what you need</legend><label className="care-field" htmlFor="care-description">Describe the damage or cleaning work<textarea id="care-description" required minLength={10} maxLength={2000} rows={6} value={description} onChange={event => setDescription(event.target.value)} placeholder={service === "repair" ? "Example: Scratch on the left rear door and a small dent near the handle." : "Example: Full interior detail with attention to the rear seats."} /></label><span className="care-count">{[...description].length} / 2000</span></fieldset>
       <fieldset disabled={disabled}><legend>4. Preferred timing</legend><label className="care-field" htmlFor="care-window">When would you prefer the work?<select id="care-window" value={preferredWindow} onChange={event => setPreferredWindow(event.target.value as CareInput["preferred_window"])}><option value="one_to_two_business_days">Within 1–2 business days</option><option value="seven_to_fourteen_days">Within 7–14 days</option><option value="flexible">I’m flexible</option></select></label><p className="care-help">This is a preference only, reviewed in Australia/Adelaide. It does not reserve a technician or a time.</p></fieldset>
+      <fieldset disabled={disabled}><legend>5. Check your service area</legend><div className="care-field coverage-field"><label htmlFor="care-postcode">Where will the work happen? Postcode</label><input id="care-postcode" name="postcode" inputMode="numeric" autoComplete="postal-code" maxLength={4} placeholder="4-digit postcode" value={postcode} onChange={event => changePostcode(event.target.value)} aria-invalid={postcodeError} aria-describedby={postcodeError ? "care-postcode-error" : "care-postcode-help"} /></div>{postcodeError ? <CoveragePostcodeError id="care-postcode-error" /> : <p className="care-help" id="care-postcode-help">Used only to check that Skycar services your area. It is not saved with this request.</p>}</fieldset>
+      {areaStatus === "in_area" && <CoverageConfirmed postcode={normalisePostcode(postcode)} />}
+      {coverage && <CoverageNotice outcome={coverage} contact={supportContact} busy={checking} onRetry={() => void startSubmit()} onChangePostcode={() => document.getElementById("care-postcode")?.focus()} />}
       {error && <div className="care-entry-warning" role="alert"><strong>{uncertain ? "Submission not confirmed" : "Request not submitted"}</strong><p>{error.message}</p>{uncertain && <p>Use “Check same request” to safely repeat the exact attempt. Do not change the details yet.</p>}{error.status === 404 && <button type="button" onClick={() => void loadVehicles()}>Reload active vehicles</button>}</div>}
-      <div className="care-entry-actions"><button className="care-entry-button" type="submit" disabled={saving}>{saving ? "Submitting…" : uncertain ? "Check same request" : "Submit for review"}</button><Link href="/garage">Back to Garage</Link></div>
+      <div className="care-entry-actions"><button className="care-entry-button" type="submit" disabled={saving || checking}>{checking ? "Checking your area…" : saving ? "Submitting…" : uncertain ? "Check same request" : "Submit for review"}</button><Link href="/garage">Back to Garage</Link></div>
       <p className="care-entry-boundary">Submission records a request and next-update deadline. It does not confirm coverage, a price, technician, appointment or payment.<br /><Link href="/auth/sign-out">Sign out on this device</Link></p>
     </form>}
   </main>;

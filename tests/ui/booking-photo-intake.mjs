@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { coverageRoute } from './support/coverage-fixture.mjs';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const origin = 'http://127.0.0.1:3193';
 const server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '-p', '3193'], { stdio: 'ignore' });
@@ -29,6 +30,7 @@ try {
     if(calls.length===1) return route.abort('failed');
     return route.fulfill({status:201,json:{data:{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',stage:'request_received',created_at:new Date().toISOString()}}});
   });
+  const coverage=coverageRoute();await page.route(coverage.pattern,coverage.handler);
   await page.goto(`${origin}/care/request`);
   await page.getByLabel('Your car',{exact:true}).fill('Toyota Corolla 2020');
   await page.getByLabel('What would you like done?',{exact:true}).fill('Synthetic damage photo workflow test.');
