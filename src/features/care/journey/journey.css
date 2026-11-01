@@ -13,7 +13,7 @@
   align-items: center;
 }
 .journey-nav > a:last-child {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
   text-decoration: none;
 }
@@ -37,7 +37,7 @@
   justify-content: space-between;
   gap: 16px;
   margin: 12px 0 24px;
-  font-size: 12px;
+  font-size: 14px;
   color: var(--muted);
 }
 .journey-toolbar button,
@@ -69,7 +69,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  font-size: 14px;
   color: var(--muted);
 }
 .journey-progress li > span {
@@ -118,7 +118,7 @@
   font-size: 19px;
 }
 .journey-appointment span {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--muted);
 }
 .journey-section {
@@ -148,7 +148,7 @@
 }
 .journey-quote > p:not(.eyebrow) {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 .journey-price {
   display: block;
@@ -159,7 +159,7 @@
   color: var(--accent);
 }
 .journey-quote > span {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--muted);
 }
 .journey-scope {
@@ -168,14 +168,14 @@
   flex: 1;
 }
 .journey-quote dt {
-  font-size: 10px;
+  font-size: 14px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--muted);
   margin-top: 12px;
 }
 .journey-quote dd {
-  font-size: 12px;
+  font-size: 14px;
   margin: 6px 0;
 }
 .journey-quote button {
@@ -200,7 +200,7 @@
   font-weight: 500;
 }
 .journey-panel p {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
 }
 .journey-columns {
@@ -213,12 +213,12 @@
   margin: 0;
 }
 .journey-shell .eyebrow {
-  font-size: 10px;
+  font-size: 14px;
   color: var(--accent);
   letter-spacing: 0.13em;
 }
 .journey-shell .care-field {
-  font-size: 12px;
+  font-size: 14px;
   margin: 16px 0;
 }
 .journey-shell .care-field input {
@@ -257,7 +257,7 @@
   display: block;
 }
 .journey-private-photos figcaption {
-  font-size: 11px;
+  font-size: 14px;
   padding: 12px;
 }
 .journey-description {
@@ -270,10 +270,10 @@
   margin: 24px 0 0;
 }
 .journey-review-note strong {
-  font-size: 13px;
+  font-size: 14px;
 }
 .journey-review-note p {
-  font-size: 12px;
+  font-size: 14px;
 }
 .journey-events {
   padding: 0;
@@ -286,10 +286,10 @@
   gap: 20px;
   padding: 14px 0;
   border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  font-size: 14px;
 }
 .journey-events time {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--muted);
 }
 .journey-footer {
@@ -298,7 +298,7 @@
   align-items: center;
   gap: 20px;
   margin-top: 24px;
-  font-size: 11px;
+  font-size: 14px;
   color: var(--muted);
 }
 .journey-footer span {
@@ -333,11 +333,11 @@
   background: #193841;
 }
 .operations-queue strong {
-  font-size: 13px;
+  font-size: 14px;
 }
 .operations-queue span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 14px;
   overflow-wrap: anywhere;
 }
 .operations-experts {
@@ -347,7 +347,7 @@
 .operations-experts > div {
   border-bottom: 1px solid var(--line);
   padding-bottom: 12px;
-  font-size: 13px;
+  font-size: 14px;
 }
 .operations-actions {
   display: flex;
@@ -358,7 +358,7 @@
 .operations-integrations {
   display: grid;
   gap: 8px;
-  font-size: 12px;
+  font-size: 14px;
   color: var(--muted);
 }
 .operations-form-grid {
@@ -388,7 +388,7 @@
   border-radius: 12px;
   padding: 14px 18px;
   margin: 16px 0;
-  font-size: 13px;
+  font-size: 14px;
 }
 .operations-registry {
   margin-top: 24px;
@@ -396,7 +396,7 @@
 .operations-experts span {
   display: block;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 14px;
   margin-top: 4px;
 }
 .operations-registry textarea,
@@ -410,7 +410,7 @@
   margin: 16px 0 !important;
 }
 .operations-checks legend {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--muted);
   margin-bottom: 8px;
 }
@@ -419,7 +419,7 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  font-size: 13px;
+  font-size: 14px;
 }
 .operations-checks input,
 .operations-confirm input {
@@ -449,10 +449,13 @@
   .operations-layout {
     grid-template-columns: 1fr;
   }
-  .journey-progress li {
+  .journey-progress {
     flex-direction: column;
-    font-size: 9px;
-    gap: 7px;
+    gap: 6px;
+  }
+  .journey-progress li {
+    font-size: 14px;
+    gap: 10px;
   }
   .journey-status,
   .journey-panel {
