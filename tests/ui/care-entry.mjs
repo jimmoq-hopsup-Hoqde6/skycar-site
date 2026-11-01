@@ -112,7 +112,7 @@ try {
   assert.equal(keys.length, 2);
   assert.equal(keys[0], keys[1]);
   assert.equal(bodies[0], bodies[1]);
-  assert.deepEqual(JSON.parse(bodies[0]), { vehicle_id: vehicle.id, service: "repair", description: received.description, preferred_window: "flexible" });
+  assert.deepEqual(JSON.parse(bodies[0]), { vehicle_id: vehicle.id, service: "repair", description: received.description, preferred_window: "flexible", postcode: "5000" });
 
   submissionMode = "malformed400";
   const validationPage = await context.newPage();

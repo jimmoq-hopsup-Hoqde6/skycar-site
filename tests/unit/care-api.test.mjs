@@ -4,7 +4,7 @@ import { careInput, CareError, uuid } from "../../src/domain/care/request.ts";
 import { careHandlers } from "../../src/server/care/http.ts";
 
 const id = "11111111-1111-4111-8111-111111111111";
-const input = { vehicle_id: id, service: "repair", description: "Scratch on rear bumper", preferred_window: "flexible" };
+const input = { vehicle_id: id, service: "repair", description: "Scratch on rear bumper", preferred_window: "flexible", postcode: "5000" };
 const request = (body = input, headers = {}) => new Request("https://skycar.test/api/v1/care/requests", {
   method: "POST", headers: { origin: "https://skycar.test", "content-type": "application/json", "idempotency-key": id, ...headers },
   body: typeof body === "string" ? body : JSON.stringify(body),
@@ -27,7 +27,10 @@ test("strict normalized input rejects authoritative client fields and malformed 
   }
   for (const body of [null, [], {}, { ...input, vehicle_id: "invalid" }, { ...input, service: "magic" },
     { ...input, description: "short" }, { ...input, description: "x".repeat(2001) },
-    { ...input, description: "null\u0000character" }, { ...input, preferred_window: "confirmed" }]) {
+    { ...input, description: "null\u0000character" }, { ...input, preferred_window: "confirmed" },
+    // the postcode is required and exactly four digits (same rule as /api/v1/care/coverage and the database)
+    { vehicle_id: id, service: "repair", description: input.description, preferred_window: "flexible" },
+    ...[5000, null, "", " 5000", "5000 ", "500", "50000", "5OOO", "٥٠٠٠", ["5000"], { v: "5000" }].map(postcode => ({ ...input, postcode }))]) {
     assert.throws(() => careInput(body), /VALIDATION_FAILED/);
   }
   assert.equal(uuid(id.toUpperCase()), id);
@@ -82,7 +85,7 @@ test("read and explicit retry contract reject bad identifiers and non-empty bodi
   assert.deepEqual(calls, [[id], [id, id]]);
 });
 
-for (const [code, status] of [["NOT_FOUND", 404], ["FORBIDDEN", 403], ["IDEMPOTENCY_CONFLICT", 409], ["INVALID_TRANSITION", 409], ["POLICY_UNAVAILABLE", 503], ["TEMPORARILY_UNAVAILABLE", 503]]) {
+for (const [code, status] of [["NOT_FOUND", 404], ["FORBIDDEN", 403], ["IDEMPOTENCY_CONFLICT", 409], ["INVALID_TRANSITION", 409], ["POLICY_UNAVAILABLE", 503], ["OUT_OF_AREA", 422], ["COVERAGE_UNAVAILABLE", 503], ["TEMPORARILY_UNAVAILABLE", 503]]) {
   test(`maps ${code} without leaking internals`, async () => {
     const { handlers } = setup({ submit: async () => { throw new CareError(code); } });
     const response = await handlers.submit(request());

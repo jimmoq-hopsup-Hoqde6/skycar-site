@@ -6,6 +6,8 @@ const replies = {
   CSRF_FAILED: [403,'Submit this request from Skycar.'],
   PAYLOAD_TOO_LARGE: [413,'Your photos and details are too large. Choose up to three smaller images.'],
   UNSUPPORTED_MEDIA_TYPE: [415,'Use JSON or a photo upload.'],
+  OUT_OF_AREA: [422,'Skycar does not cover that postcode yet. Nothing was submitted.'],
+  COVERAGE_UNAVAILABLE: [503,"We can't check your service area right now. Nothing was submitted. Please try again in a moment."],
   RATE_LIMITED: [429,'Too many requests. Please try again later.'],
   IDEMPOTENCY_CONFLICT: [409,'This request key was already used for different details.'],
   UNAVAILABLE: [503,'Guest requests are temporarily unavailable. Your request has not been confirmed.'],
@@ -49,7 +51,7 @@ export function guestHandler({enabled, save, receiptHeaders = (key,receipt) => {
       const code = error instanceof GuestError && error.code in replies ? error.code : 'UNAVAILABLE';
       const [status,message] = replies[code];
       if (status>=500) console.error(JSON.stringify({event:'guest_request_failed',code}));
-      return json({error:{code,message,retryable:status===503 && code!=='CONFIGURATION_UNAVAILABLE'}},status);
+      return json({error:{code,message,retryable:status===503 && !['CONFIGURATION_UNAVAILABLE','COVERAGE_UNAVAILABLE'].includes(code)}},status);
     }
   };
 }

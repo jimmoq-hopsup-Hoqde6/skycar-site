@@ -3,7 +3,12 @@ export type CareInput = {
   service: "repair" | "cleaning";
   description: string;
   preferred_window: "one_to_two_business_days" | "seven_to_fourteen_days" | "flexible";
+  // Four digits. Checked against the service area by care_submit_request (OUT_OF_AREA), not stored on the request.
+  postcode: string;
 };
+
+// What a request looks like once created: the postcode is only used for the area check.
+export type CareRequestFields = Omit<CareInput, "postcode">;
 
 export type CareEvent = {
   id: string;
@@ -12,7 +17,7 @@ export type CareEvent = {
   occurred_at: string;
 };
 
-export type CareReceipt = CareInput & {
+export type CareReceipt = CareRequestFields & {
   id: string;
   quote_state: "draft" | "in_review" | "issued" | "accepted" | "declined" | "expired" | "superseded";
   assignment_state: "none" | "offered" | "reserved" | "accepted" | "cancelled" | "expired";
@@ -46,7 +51,7 @@ export function object(value: unknown): Record<string, unknown> {
 
 export function careInput(value: unknown): CareInput {
   const input = object(value);
-  const fields = ["vehicle_id", "service", "description", "preferred_window"];
+  const fields = ["vehicle_id", "service", "description", "preferred_window", "postcode"];
   if (Object.keys(input).length !== fields.length || Object.keys(input).some(key => !fields.includes(key))) {
     throw new CareError("VALIDATION_FAILED");
   }
@@ -62,5 +67,7 @@ export function careInput(value: unknown): CareInput {
   if (preferred_window !== "one_to_two_business_days" && preferred_window !== "seven_to_fourteen_days" && preferred_window !== "flexible") {
     throw new CareError("VALIDATION_FAILED");
   }
-  return { vehicle_id, service: input.service, description, preferred_window };
+  // Same shape as the coverage route and the database: exactly four digits, no trimming.
+  if (typeof input.postcode !== "string" || !/^[0-9]{4}$/.test(input.postcode)) throw new CareError("VALIDATION_FAILED");
+  return { vehicle_id, service: input.service, description, preferred_window, postcode: input.postcode };
 }

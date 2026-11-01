@@ -26,8 +26,8 @@ it. Care does not expose private media or allow clients to edit states/events.
 
 Success/error envelopes follow FOUNDATION_ARCHITECTURE.md, with requestId.
 Codes: 400 VALIDATION_FAILED, 401 UNAUTHENTICATED, 403 FORBIDDEN or CSRF_FAILED,
-404 NOT_FOUND, 409 IDEMPOTENCY_CONFLICT, 413 PAYLOAD_TOO_LARGE, 415 UNSUPPORTED_MEDIA_TYPE,
-503 CARE_UNAVAILABLE / POLICY_UNAVAILABLE / TEMPORARILY_UNAVAILABLE,
+404 NOT_FOUND, 409 IDEMPOTENCY_CONFLICT, 422 OUT_OF_AREA, 413 PAYLOAD_TOO_LARGE, 415 UNSUPPORTED_MEDIA_TYPE,
+503 CARE_UNAVAILABLE / POLICY_UNAVAILABLE / COVERAGE_UNAVAILABLE / TEMPORARILY_UNAVAILABLE,
 500 INTERNAL_ERROR. Internal database/provider details are not returned.
 
 ## Submit
@@ -38,13 +38,27 @@ Required `Idempotency-Key`: UUID, scoped to verified actor + submit operation.
 Body (maximum 16 KiB, strict fields):
 
 ```json
-{"vehicle_id":"11111111-1111-4111-8111-111111111111","service":"repair","description":"Scratch on rear bumper","preferred_window":"flexible"}
+{"vehicle_id":"11111111-1111-4111-8111-111111111111","service":"repair","description":"Scratch on rear bumper","preferred_window":"flexible","postcode":"5000"}
 ```
 
 Service: `repair | cleaning`; preferred_window:
 `one_to_two_business_days | seven_to_fourteen_days | flexible`. These are
 preferences, never confirmed appointment availability. Description: 10–2000
-trimmed characters. No price, owner, state, media or slot fields are accepted.
+trimmed characters. `postcode` is required: exactly four digits (no spaces).
+No price, owner, state, media or slot fields are accepted.
+
+**Service area is enforced here, not only in the form.** `care_submit_request`
+checks `(service, postcode)` against `public.care_service_coverage` (a generated
+mirror of `src/server/care/coverage-areas.json`, the list behind
+`POST /api/v1/care/coverage`) after the idempotency lookup and before any lock or
+write. `422 OUT_OF_AREA` (not retryable) means nothing was created.
+`503 COVERAGE_UNAVAILABLE` (not retryable here; the customer can try again later)
+means the list is missing or empty for that service: creation fails closed. The
+postcode is used for this decision only and is not stored on the request. An
+exact retry of an already created request replays it without a new area decision.
+Guest intake (`POST /api/v1/care/guest-requests`) applies the same check inside
+`care_submit_guest_request`, before the rate limits and before any photo is
+written to Storage, and returns the same two codes.
 
 Returns 201 on creation or 200 on exact retry, with
 `data: { request: <status below>, replayed: boolean }`. The database transaction

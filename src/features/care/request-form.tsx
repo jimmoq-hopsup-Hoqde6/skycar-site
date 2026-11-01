@@ -67,7 +67,7 @@ async function submitCare(body: string, key: string) {
     const error = envelope.error as Record<string, unknown> | undefined;
     const code = typeof error?.code === "string" ? error.code : "INTERNAL_ERROR";
     const message = typeof error?.message === "string" ? error.message : "We could not save your request.";
-    const uncertain = error?.retryable === true || (response.status >= 500 && !["CARE_UNAVAILABLE", "POLICY_UNAVAILABLE"].includes(code));
+    const uncertain = error?.retryable === true || (response.status >= 500 && !["CARE_UNAVAILABLE", "POLICY_UNAVAILABLE", "COVERAGE_UNAVAILABLE"].includes(code));
     throw new SubmitError(code, message, response.status, uncertain);
   }
   try { return readCareSubmission(envelope.data); }
@@ -250,7 +250,7 @@ export function CareRequestForm({ supportContact = null }: { supportContact?: Su
         decided.current.add(areaKey);
       }
       setAreaStatus("in_area");
-      const input: CareInput = { vehicle_id: vehicleId, service, description: description.trim(), preferred_window: preferredWindow };
+      const input: CareInput = { vehicle_id: vehicleId, service, description: description.trim(), preferred_window: preferredWindow, postcode: code };
       pending.current = { key: crypto.randomUUID(), body: JSON.stringify(input) };
       attemptPostcode.current = code;
     }
