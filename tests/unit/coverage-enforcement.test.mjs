@@ -80,6 +80,14 @@ test('the migration is forward-only, definer-with-empty-search_path, lock-ordere
   assert.equal(guestOrder.every(position => position > 0), true);
 });
 
+test('the compatibility switch is a locked-down singleton, open by default, read as closed when missing, and checked only for legacy creates', () => {
+  const sql = read(latest);
+  assert.match(sql, /create table public\.care_service_coverage_compat \(\s*singleton boolean primary key default true check \(singleton\),\s*accept_legacy_create boolean not null default true\s*\);/);
+  assert.match(sql, /insert into public\.care_service_coverage_compat\(singleton, accept_legacy_create\) values \(true, true\);/);
+  assert.match(sql, /alter table public\.care_service_coverage_compat enable row level security;\s*revoke all on public\.care_service_coverage_compat from public, anon, authenticated, service_role;/);
+  assert.match(sql, /coalesce\(\(select accept_legacy_create from public\.care_service_coverage_compat\), false\)/);
+});
+
 test('frozen migrations that define the two functions are untouched', () => {
   const text = read('202609200002_care_requests.sql');
   assert.equal(text.includes('postcode'), false, 'the original submit function has no postcode: the change is a new forward-only migration');
@@ -174,12 +182,51 @@ test('authenticated API: the postcode is forwarded to the database, OUT_OF_AREA 
   const body = await response.json();
   assert.equal(body.error.code, 'OUT_OF_AREA');
   assert.equal(body.error.retryable, false);
+  assert.equal(seen.length, 1, 'OUT_OF_AREA is a decision, not retried');
   assert.equal(seen[0].postcode, '5290');
-  // A scripted client cannot omit the postcode to skip the check: the route rejects it before the database.
-  const { postcode, ...withoutPostcode } = careBody; void postcode;
-  const missing = await handlers.submit(careRequest(withoutPostcode));
-  assert.equal(missing.status, 400);
+  // A malformed postcode never reaches the database.
+  const malformed = await handlers.submit(careRequest({ ...careBody, postcode: '52900' }));
+  assert.equal(malformed.status, 400);
   assert.equal(seen.length, 1);
+});
+
+test('deploy window, stale form: the legacy four-key payload is forwarded without a postcode; the database decides replay or create', async () => {
+  const { postcode, ...legacy } = careBody; void postcode;
+  const seen = [];
+  const handlers = careHandlers({ enabled: () => true, connect: async () => ({ submit: async (k, input) => { seen.push(input); return { request: { id }, replayed: true }; } }) });
+  const response = await handlers.submit(careRequest(legacy));
+  assert.equal(response.status, 200);
+  assert.deepEqual(seen, [legacy], 'exactly the legacy keys, no invented postcode');
+  // Once the database has closed the compatibility switch it answers VALIDATION_FAILED for a legacy create; that is final.
+  const closed = careHandlers({ enabled: () => true, connect: async () => ({ submit: async input => { seen.push(input); throw new CareError('VALIDATION_FAILED'); } }) });
+  const rejected = await closed.submit(careRequest(legacy));
+  assert.equal(rejected.status, 400);
+});
+
+test('deploy window, app first: a database without the migration rejects five keys; the route retries once with the legacy four under the same key', async () => {
+  const calls = [];
+  const oldDatabase = { submit: async (k, input) => { calls.push([k, Object.keys(input)]); if ('postcode' in input) throw new CareError('VALIDATION_FAILED'); return { request: { id }, replayed: false }; } };
+  const response = await careHandlers({ enabled: () => true, connect: async () => oldDatabase }).submit(careRequest(careBody));
+  assert.equal(response.status, 201);
+  assert.deepEqual(calls, [[id, ['vehicle_id', 'service', 'description', 'preferred_window', 'postcode']], [id, ['vehicle_id', 'service', 'description', 'preferred_window']]]);
+  // Only VALIDATION_FAILED on a payload that had a postcode is retried; decisions and outages are not.
+  for (const code of ['OUT_OF_AREA', 'COVERAGE_UNAVAILABLE', 'IDEMPOTENCY_CONFLICT', 'NOT_FOUND', 'TEMPORARILY_UNAVAILABLE']) {
+    let count = 0;
+    const handlers = careHandlers({ enabled: () => true, connect: async () => ({ submit: async () => { count += 1; throw new CareError(code); } }) });
+    await handlers.submit(careRequest(careBody));
+    assert.equal(count, 1, code);
+  }
+  // A legacy-shaped call that fails is not retried (nothing to strip).
+  let count = 0;
+  const { postcode, ...legacy } = careBody; void postcode;
+  const handlers = careHandlers({ enabled: () => true, connect: async () => ({ submit: async () => { count += 1; throw new CareError('VALIDATION_FAILED'); } }) });
+  await handlers.submit(careRequest(legacy));
+  assert.equal(count, 1);
+  // A second failure of the legacy retry is returned as is.
+  count = 0;
+  const failing = careHandlers({ enabled: () => true, connect: async () => ({ submit: async () => { count += 1; throw new CareError('VALIDATION_FAILED'); } }) });
+  assert.equal((await failing.submit(careRequest(careBody))).status, 400);
+  assert.equal(count, 2);
 });
 
 test('the signed-in form sends the checked postcode with the request', () => {

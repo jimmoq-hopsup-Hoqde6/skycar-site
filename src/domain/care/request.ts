@@ -4,7 +4,9 @@ export type CareInput = {
   description: string;
   preferred_window: "one_to_two_business_days" | "seven_to_fourteen_days" | "flexible";
   // Four digits. Checked against the service area by care_submit_request (OUT_OF_AREA), not stored on the request.
-  postcode: string;
+  // Absent only in the legacy four-key shape sent by a form that predates the check (a stale tab, or a retry of
+  // a request it created): the database replays those and, while its compatibility switch is on, creates them.
+  postcode?: string;
 };
 
 // What a request looks like once created: the postcode is only used for the area check.
@@ -51,8 +53,9 @@ export function object(value: unknown): Record<string, unknown> {
 
 export function careInput(value: unknown): CareInput {
   const input = object(value);
-  const fields = ["vehicle_id", "service", "description", "preferred_window", "postcode"];
-  if (Object.keys(input).length !== fields.length || Object.keys(input).some(key => !fields.includes(key))) {
+  const required = ["vehicle_id", "service", "description", "preferred_window"];
+  const fields = [...required, "postcode"];
+  if (Object.keys(input).some(key => !fields.includes(key)) || required.some(key => !(key in input))) {
     throw new CareError("VALIDATION_FAILED");
   }
   const vehicle_id = uuid(input.vehicle_id);
@@ -67,6 +70,8 @@ export function careInput(value: unknown): CareInput {
   if (preferred_window !== "one_to_two_business_days" && preferred_window !== "seven_to_fourteen_days" && preferred_window !== "flexible") {
     throw new CareError("VALIDATION_FAILED");
   }
+  // Legacy four-key shape: forwarded as is, never given an invented postcode.
+  if (!("postcode" in input)) return { vehicle_id, service: input.service, description, preferred_window };
   // Same shape as the coverage route and the database: exactly four digits, no trimming.
   if (typeof input.postcode !== "string" || !/^[0-9]{4}$/.test(input.postcode)) throw new CareError("VALIDATION_FAILED");
   return { vehicle_id, service: input.service, description, preferred_window, postcode: input.postcode };

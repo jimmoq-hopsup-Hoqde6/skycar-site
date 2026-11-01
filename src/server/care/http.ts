@@ -90,7 +90,19 @@ export function careHandlers(deps: Dependencies) {
     }),
     submit: (request: Request) => run(async repo => {
       const body = await readBody(request);
-      const result = await repo.submit(uuid(request.headers.get("idempotency-key")), careInput(body));
+      const key = uuid(request.headers.get("idempotency-key"));
+      const input = careInput(body);
+      let result;
+      try { result = await repo.submit(key, input); }
+      catch (error) {
+        // Deploy window, app first: a database that predates the service-area migration rejects the
+        // five-key payload as VALIDATION_FAILED and has stored nothing. Retry once with the legacy
+        // four-key shape under the same key (the form has already checked the area). A migrated database
+        // never reaches this: the input passed careInput, which applies the same field rules as the database.
+        if (!(error instanceof CareError) || error.code !== "VALIDATION_FAILED" || input.postcode === undefined) throw error;
+        const { postcode: _postcode, ...legacy } = input; void _postcode;
+        result = await repo.submit(key, legacy);
+      }
       return { data: result, status: result.replayed ? 200 : 201 };
     }),
     get: (id: string) => run(async repo => ({ data: await repo.get(uuid(id)), status: 200 })),
