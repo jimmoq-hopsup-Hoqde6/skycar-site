@@ -14,6 +14,7 @@ import { verifyTechnicianWorkStart } from "./technician-work-start.acceptance.mj
 import { verifyTechnicianQuotes } from "./technician-quotes.acceptance.mjs";
 import { verifyTechnicianInbox } from "./technician-inbox.acceptance.mjs";
 import { verifyTechnicianAvailability } from "./technician-availability.acceptance.mjs";
+import { verifyTechnicianAvailabilityDelta } from "./technician-availability-delta.acceptance.mjs";
 import { verifyMyJobsJourneyState } from "./my-jobs-journey-state.acceptance.mjs";
 import { verifySequenceGrantRevoke } from "./sequence-grant-revoke.acceptance.mjs";
 import { verifySupabaseAdminSequenceDefaultAcl } from "./supabase-admin-sequence-default-acl.acceptance.mjs";
@@ -122,6 +123,7 @@ before(() => {
     '20261101024732_completion_review_final_lock_authority.sql',
     '20261101062300_technician_availability.sql',
     '20261101062400_my_jobs_journey_status.sql',
+    '20261101063000_technician_availability_enforcement_delta.sql',
     '20261101130000_request_photo_flag_and_upload_quota.sql',
     '20261101133000_revoke_public_sequence_grants.sql',
     '20261101140000_revoke_supabase_admin_sequence_default_acl.sql',
@@ -327,4 +329,7 @@ test('Request photo marker is set only by the trusted route and the upload quota
 
 test('Legacy photo markers heal quota-free, backfill without fabricated hashes and are removed with their request', async () => {
   await verifyRequestPhotoMarker({ sql, auth, quote, run, carePayload, garageCreate });
+});
+test('Technician availability delta rejects overlaps and provides a DST-aware, lock-free enforcement check', async () => {
+  await verifyTechnicianAvailabilityDelta({ sql, quote, result, waitForQuery });
 });
