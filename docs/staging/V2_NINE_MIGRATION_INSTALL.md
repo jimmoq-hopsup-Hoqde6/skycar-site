@@ -1,6 +1,6 @@
 # V2 nine-migration install: manifest, pre-migration checklist, post-migration verification, backup gap review
 
-> **Revision 2 (adds sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed).**
+> **Revision 3 (adds section 9: pre-launch ops for request-photo uploads). Revision 2 added sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed.**
 >
 > **Status: documentation only. Nothing in this document has been executed against any hosted
 > database.** No migration has been applied, no workflow has been dispatched, and no secret or
@@ -815,3 +815,246 @@ psql calls, but no run has used it, so the cause remains unproven.
 
 Do not rerun the failed runs (they must stay immutable per the owner's rules); a new run needs a new reviewed
 disposition, the corrected gate (C1/C2), the diagnostics (C10), and a fresh read-only inventory (section 2.1).
+
+## 9. Pre-launch ops: request-photo uploads (monitoring, rollback, edge rate limiting)
+
+Scope: the request-photo feature on `feature/request-photos-backend` (head `950a17c452a012ffb37604f33261920b1f8a2f97` when
+this was written). It adds the server upload route `POST /api/v1/care/journey/{id}/photos`, the Storage layout (manifest + up to
+three photos per request), and migration `20261101130000_request_photo_flag_and_upload_quota.sql` (final blob
+`848ca31e0d610e990ebf98ab5e1542150a29e2b1`). **That migration is not one of the nine files in section 1 and is not approved,
+applied or scheduled by this document.** Facts below come from the branch contents; anything about hosted staging, Vercel or
+Supabase configuration is **UNVERIFIED** unless it says otherwise. Nothing here has been run against a hosted system. The SQL
+was exercised only against a local throwaway PostgreSQL with the migration applied (synthetic, empty tables).
+
+What the code and migration actually bound (from the branch):
+
+- The application quota is `PHOTO_UPLOAD_LIMIT = 10` successful uploads per subject per `PHOTO_UPLOAD_WINDOW_SECONDS = 3600`
+  (`src/server/care/journey/photo-service.mjs`). The route replies `429` with `Retry-After` when exhausted.
+- Per-photo cap `PHOTO_MAX_BYTES = 900_000`, up to three photos per request (`src/server/care/guest-photos.mjs`); a request
+  that is too large gets `413`; a Storage or database fault gets `503`.
+- By design **rejected bodies, retries after a 503 and identical replays never consume quota** (migration header comment): the
+  server reserves a slot before storing and releases it on any failure or reject. The consequence for ops is that the
+  database quota does **not** limit how many rejected or invalid requests a client can send. Every one of them still costs a
+  serverless invocation, body parsing and bandwidth. That is the gap section 9.3 closes at the edge.
+
+### 9.1 Monitoring
+
+The application emits no metrics, traces or structured logs for this feature. A grep of `src/`, `ops/`, `.github/` and
+`package.json` at the branch head for Sentry, Datadog, OpenTelemetry, metrics, `console.*` and similar found only UI
+`role="alert"` elements and the backup CLI's own stderr. So the only server-side evidence is whatever the hosting platform
+records per request (status code, path, time, IP; UNVERIFIED which of these the project's plan keeps and for how long); error
+codes such as `RATE_LIMITED` exist only in response bodies. The alerts below are therefore status-code based. Adding one
+structured log line per upload outcome (code, subject hash, byte counts, no photo data) is a code change this document does not make.
+Minimum set before real users upload photos. Each item needs a named owner and a place where the alert lands; neither exists yet.
+
+| Signal | Where | Alert condition (starting values, tune after the first week) | Why |
+| --- | --- | --- | --- |
+| Route status mix for `POST /api/v1/care/journey/*/photos` (2xx, 400, 401/403, 413, 429, 503, other 5xx) | Vercel runtime logs / log drain (UNVERIFIED which plan retains logs and for how long) | 5xx or 503 above 2% of requests over 15 minutes with at least 20 requests; any sustained 5xx other than the mapped 503 | 503 means Storage or the quota/marker RPC failed; other 5xx means an unmapped fault |
+| 429 volume and distinct subjects | same logs | more than 20 `429` in 10 minutes, or one subject receiving 429 repeatedly | abuse or a client retry loop; 429 only appears for the authenticated quota |
+| 413 and 400 volume per IP | same logs | more than 30 per IP in 10 minutes | the flood the quota cannot see (section 9.3) |
+| RPC missing or not callable | Supabase API logs (UNVERIFIED access) | any `PGRST202` or "function ... does not exist" for `care_reserve_photo_upload_slot`, `care_release_photo_upload_slot`, `care_record_request_photos` | the app was deployed before the migration, or the migration was rolled back; uploads fail closed |
+| Quota slot leak | SQL M3 below, run daily by hand until automated | `gap` greater than 0 on any closed window | releases are failing, so honest users hit 429 early |
+| Quota table growth | SQL M1 | `rows_older_than_2h` rising day over day | rows are pruned only when the same subject opens a new window; abandoned subjects are never pruned |
+| Storage growth | Supabase dashboard storage usage (UNVERIFIED which bucket and quota) | bucket size above 50% of the plan allowance, or growth above 3x the 7-day average | free-plan limits and cost; a photo set is at most 3 x 900,000 bytes plus a manifest |
+| Marker without a request (orphan) | SQL M4 | any row | marker has no foreign key by design |
+| Edge firewall hits | Vercel Firewall dashboard (section 9.3) | any rule trigger on the photo route | confirms the rule is live and shows its false-positive rate |
+
+Read-only SQL (run in a read-only transaction; every statement is a SELECT):
+
+```sql
+-- M1 quota-table growth and staleness (rows are pruned only when a subject opens a new window; abandoned subjects are never pruned)
+select count(*) as rows_total,
+       count(*) filter (where window_start < now() - interval '2 hours') as rows_older_than_2h,
+       min(window_start) as oldest_window_start,
+       coalesce(sum(uploads) filter (where window_start >= now() - interval '1 hour'), 0) as slots_held_last_hour
+from public.care_photo_upload_quota;
+-- M2 markers recorded per day and photos per marker (successful uploads)
+select date_trunc('day', recorded_at) as day, request_kind, count(*) as markers, sum(photo_count) as photos
+from public.care_request_photo_sets
+where recorded_at >= now() - interval '14 days'
+group by 1, 2 order by 1 desc, 2;
+-- M3 slot-leak check for closed one-hour windows (PHOTO_UPLOAD_WINDOW_SECONDS = 3600 on the branch): only a call that creates a
+-- marker keeps its slot, so slots_kept should equal markers_recorded in the same window. slots_kept > markers_recorded means
+-- releases are failing (quota is being consumed by uploads that did not succeed). Expected: gap = 0 on every row.
+select q.window_start, q.slots_kept, coalesce(m.markers_recorded, 0) as markers_recorded,
+       q.slots_kept - coalesce(m.markers_recorded, 0) as gap
+from (select window_start, sum(uploads) as slots_kept from public.care_photo_upload_quota
+      where window_start < date_trunc('hour', now()) group by window_start) q
+left join lateral (select count(*) as markers_recorded from public.care_request_photo_sets s
+      where s.recorded_at >= q.window_start and s.recorded_at < q.window_start + interval '1 hour') m on true
+order by q.window_start desc limit 24;
+-- M4 markers whose request no longer exists (orphans; marker has no FK by design)
+select s.request_id, s.request_kind, s.recorded_at
+from public.care_request_photo_sets s
+where (s.request_kind = 'account' and not exists (select 1 from public.care_requests r where r.id = s.request_id))
+   or (s.request_kind = 'guest'   and not exists (select 1 from public.care_guest_requests g where g.id = s.request_id))
+limit 50;
+```
+
+### 9.2 Rollback
+
+The migration is additive: two new tables, three new functions, and a `CREATE OR REPLACE` of
+`public.care_list_requests(integer, uuid, timestamptz, uuid)` (same signature and grants, two extra JSON fields). The rollback
+therefore has two parts, in this order, and the order matters because the app calls the new functions.
+
+1. **Stop traffic to the feature first.** Roll the application back to the last good deployment (Vercel: promote or redeploy
+   the previous deployment) or disable the route at the edge (section 9.3 block rule). I found no photo-specific feature flag: the
+   flags visible in `staging-readiness.yml` are `FEATURE_GARAGE`, `FEATURE_CARE`, `FEATURE_BENEFITS`, `FEATURE_SELL`, so turning
+   the feature off in the app means a redeploy (UNVERIFIED that no other flag exists elsewhere). Do this before touching the database.
+2. **Revert the database objects only if needed.** Leaving the additive objects in place is safe and is the default: the older
+   application ignores the two extra fields and never calls the new functions. Revert only if a defect in the objects themselves
+   is the cause. Before the install, capture the current definition and keep it with the change record:
+
+   ```sql
+   -- run BEFORE the install; store the output outside the database
+   select pg_get_functiondef('public.care_list_requests(integer,uuid,timestamptz,uuid)'::regprocedure);
+   select version, name from supabase_migrations.schema_migrations order by version desc limit 5;
+   ```
+
+   Revert script (to be reviewed; destructive: it deletes every photo marker and quota row; the Storage objects stay):
+
+   ```sql
+   begin;
+   -- 1. restore care_list_requests from the definition captured before the install (paste it here, unchanged)
+   --    <output of pg_get_functiondef from the pre-install capture>
+   -- 2. then drop the new objects
+   drop function if exists public.care_record_request_photos(uuid, integer, text, text);
+   -- superseded revisions of the same file (054e5d8, 538ccca), if one of them was ever applied:
+   drop function if exists public.care_record_request_photos(uuid, integer, text);
+   drop function if exists public.care_consume_photo_upload_quota(text, integer, integer);
+   drop function if exists public.care_reserve_photo_upload_slot(text, integer, integer);
+   drop function if exists public.care_release_photo_upload_slot(text, timestamptz);
+   drop table if exists public.care_request_photo_sets;
+   drop table if exists public.care_photo_upload_quota;
+   -- 3. remove the history row ONLY after step 1 and 2 succeeded, matching on the name AND the recorded version
+   --    delete from supabase_migrations.schema_migrations where version = '<recorded version>' and name = 'request_photo_flag_and_upload_quota';
+   commit;
+   ```
+
+   Then re-run the absence check in 9.4: the expected verdict is `ABSENT`.
+3. **Data and Storage.** Photos already written to private Storage are not removed by the revert. Decide separately whether to
+   delete them; do not delete without a recorded owner decision. Without the markers the photos stay orphaned but private.
+4. **Backup.** A rollback that drops tables needs the populated-project backup from section 7 taken first. Today the backup
+   workflow cannot back up a populated project (finding F3), so the revert script above must not be run on hosted staging until
+   that is fixed or an equivalent dump exists (UNVERIFIED: no such dump is evidenced in the repository).
+5. **Who and when.** Decision owner for a rollback: the founder (UNVERIFIED who is on call). Practise the application rollback and the revert script on a throwaway database before launch; the local rehearsal behind this section covered only the apply and the absence check, not a revert.
+
+### 9.3 Edge or platform rate limiting for rejected photo-upload requests
+
+Problem: the database quota reserves a slot only for a request that is accepted far enough to store, and releases it for any
+failure, so unauthenticated floods, oversized bodies (413), malformed bodies (400) and replays are not limited by the database
+at all, and they can reach the serverless function. The limit must sit in front of the function.
+
+Proposed rule (starting values; none of this is configured, and whether the project plan supports platform rate limiting,
+custom WAF rules and log retention is UNVERIFIED):
+
+| Setting | Proposal |
+| --- | --- |
+| Match | method `POST`, path pattern `/api/v1/care/journey/*/photos` (and the guest photo path if one is exposed; confirm the guest route list before launch) |
+| Key | client IP; if the platform supports it, add the session cookie or `Authorization` presence as a second key so that shared NAT users are not blocked together |
+| Counts | every response, including 4xx and 5xx, not only successes; this is the point of the rule |
+| Limit | 20 requests per minute per IP on the path, with a stricter 5 per minute for requests the platform can see failing (4xx), if the platform supports conditional counting |
+| Action | rate limit with `429` and a `Retry-After`, then a temporary block (for example 10 minutes) after repeated violations |
+| Body size | reject above 2,800,000 bytes at the edge if the platform allows (3 x 900,000 plus form overhead); a code comment in `src/domain/garage/photo.mjs` cites Vercel's 4.5 MB request payload limit, which is above the app limit, so only an edge rule stops a body between 2.8 MB and 4.5 MB from reaching the function |
+| Staging first | deploy in log-only mode for a week, review false positives against the monitoring in 9.1, then enforce |
+| Kill switch | a pre-written block-all rule for the path (section 9.2 step 1), owned by the founder |
+
+Acceptance for this item before launch: the rule exists and is enforced in staging; a scripted burst of invalid requests
+from one IP is answered `429` at the edge (confirmed in the platform's firewall log, not only by the app); a normal user doing
+three uploads in a minute is not blocked; and the app quota still returns its own `429` for an authenticated user
+after ten successful uploads. None of that has been tested.
+
+### 9.4 Absence check for migration 20261101130000 (read-only)
+
+Use before the install (expected verdict `ABSENT`) and after a rollback. Hosted versions can differ from filenames, so history
+is matched by version, by name and by statement text. Run inside `begin read only; ... rollback;`. Validated only against a
+local throwaway PostgreSQL: it returned `ABSENT` on a database without the objects, and `PRESENT_OR_PARTIAL` when only the
+migration was applied, when only a history row with the name existed, when only the superseded function
+`care_consume_photo_upload_quota` existed, and when only a history row with different version and name but matching
+statement text existed. It has never been run against hosted staging.
+
+Revision history of the file on the branch (all by `jimmoq-hopsup-Hoqde6`, committer time Australia/Adelaide, +10:30):
+
+| Commit | Time | Blob | Bytes | Objects |
+| --- | --- | --- | --- | --- |
+| `054e5d8` (also the content at `5ac91d7`) | 1 Nov 17:41 | `2bba66d7a818ccb06b97382408b2c9731aa4e9e3` | 9,019 | two tables; `care_record_request_photos(uuid,integer,text)`; `care_consume_photo_upload_quota` |
+| `538ccca` (also on `feat/request-photos-display`) | 1 Nov 17:57 | `8e38bcbc813571d24260d8aac5a88ea3c9579baf` | 10,586 | two tables; `care_record_request_photos(uuid,integer,text)`; reserve and release functions replace consume |
+| `dc2eddc` (current at `950a17c`) | 1 Nov 18:17 | `848ca31e0d610e990ebf98ab5e1542150a29e2b1` | 11,235 | `care_request_photo_sets` gains the `request_kind` column; `care_record_request_photos` gains `p_kind` (4 arguments) |
+
+```sql
+-- READ-ONLY. Confirms that migration 20261101130000 (request_photo_flag_and_upload_quota) is ABSENT.
+-- Run as: begin read only; <this file>; rollback;   (SELECTs only; nothing is created or changed.)
+-- Pinned to the file at feature/request-photos-backend dc2eddc and 950a17c, blob 848ca31e0d610e990ebf98ab5e1542150a29e2b1.
+-- Earlier revisions (blob 2bba66d7… at 054e5d8 and 5ac91d7; blob 8e38bcbc… at 538ccca) created the same tables and care_consume_photo_upload_quota; those are covered too.
+-- Hosted versions can differ from filenames, so history is checked by version, by name AND by statement text.
+
+-- Q1. Migration history. Expected: 0 rows. Any row means something with this version, name or content is recorded.
+select 'schema_migrations' as source, version, name,
+       case when version = '20261101130000' then 'version match' end as by_version,
+       case when name ilike '%request_photo%' or name ilike '%photo_flag%' or name ilike '%upload_quota%' then 'name match' end as by_name,
+       case when array_to_string(statements, E'\n') ~* '(care_request_photo_sets|care_photo_upload_quota|care_record_request_photos|care_reserve_photo_upload_slot|care_release_photo_upload_slot|care_consume_photo_upload_quota)'
+            then 'statement text match' end as by_content
+from supabase_migrations.schema_migrations
+where version = '20261101130000'
+   or name ilike '%request_photo%' or name ilike '%photo_flag%' or name ilike '%upload_quota%'
+   or array_to_string(statements, E'\n') ~* '(care_request_photo_sets|care_photo_upload_quota|care_record_request_photos|care_reserve_photo_upload_slot|care_release_photo_upload_slot|care_consume_photo_upload_quota)'
+order by version;
+
+-- Q2. Latest recorded versions (context; compare with the inventory taken before the install).
+select version, name from supabase_migrations.schema_migrations order by version desc limit 5;
+
+-- Q3. Objects the file CREATES must not exist (2 tables, 3 functions; plus care_consume_photo_upload_quota from the superseded revision 054e5d8). Expected: 0 rows.
+select 'table' as kind, c.oid::regclass::text as object
+from pg_class c
+where c.relnamespace = 'public'::regnamespace
+  and c.relname in ('care_request_photo_sets', 'care_photo_upload_quota')
+union all
+select 'function', p.oid::regprocedure::text
+from pg_proc p
+where p.pronamespace = 'public'::regnamespace
+  and p.proname in ('care_record_request_photos', 'care_reserve_photo_upload_slot', 'care_release_photo_upload_slot', 'care_consume_photo_upload_quota')
+union all
+-- implicit objects created with the tables (primary-key indexes, constraints, row type)
+select 'index/constraint/type', x.name
+from (
+  select i.relname as name from pg_class i where i.relnamespace = 'public'::regnamespace
+    and i.relname in ('care_request_photo_sets_pkey', 'care_photo_upload_quota_pkey')
+  union all
+  select t.typname from pg_type t where t.typnamespace = 'public'::regnamespace
+    and t.typname in ('care_request_photo_sets', 'care_photo_upload_quota')
+) x;
+
+-- Q3b. If either table exists, which revision shaped it? request_kind exists only from dc2eddc (blob 848ca31e...). Expected: 0 rows.
+select table_name, column_name, data_type
+from information_schema.columns
+where table_schema = 'public' and table_name in ('care_request_photo_sets', 'care_photo_upload_quota')
+order by table_name, ordinal_position;
+
+-- Q4. The file also REPLACES public.care_list_requests(integer, uuid, timestamptz, uuid) to add photo_count/has_photos.
+--     The replaced body must NOT reference the new marker table or fields. Expected: 1 row, replaced_by_this_migration = false.
+select p.oid::regprocedure::text as function,
+       p.prosrc ~* '(care_request_photo_sets|photo_count|has_photos)' as replaced_by_this_migration,
+       p.prosecdef as security_definer,
+       md5(p.prosrc) as body_md5
+from pg_proc p
+where p.pronamespace = 'public'::regnamespace and p.proname = 'care_list_requests';
+
+-- Q5. Any grant or privilege that would only exist if the file ran. Expected: 0 rows.
+select grantee, table_name, privilege_type
+from information_schema.role_table_grants
+where table_schema = 'public' and table_name in ('care_request_photo_sets', 'care_photo_upload_quota');
+
+-- Q6. One-line verdict. Expected: ABSENT.
+select case when
+         not exists (select 1 from supabase_migrations.schema_migrations
+                     where version = '20261101130000'
+                        or name ilike '%request_photo%' or name ilike '%photo_flag%' or name ilike '%upload_quota%'
+                        or array_to_string(statements, E'\n') ~* '(care_request_photo_sets|care_photo_upload_quota|care_record_request_photos|care_reserve_photo_upload_slot|care_release_photo_upload_slot|care_consume_photo_upload_quota)')
+         and to_regclass('public.care_request_photo_sets') is null
+         and to_regclass('public.care_photo_upload_quota') is null
+         and not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace
+                         and p.proname in ('care_record_request_photos', 'care_reserve_photo_upload_slot', 'care_release_photo_upload_slot', 'care_consume_photo_upload_quota'))
+         and not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace
+                         and p.proname = 'care_list_requests' and p.prosrc ~* '(care_request_photo_sets|has_photos)')
+       then 'ABSENT' else 'PRESENT_OR_PARTIAL: investigate before any install' end as migration_20261101130000;
+```
