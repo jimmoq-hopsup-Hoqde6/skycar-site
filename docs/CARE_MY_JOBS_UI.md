@@ -7,8 +7,13 @@ navigation exposes My Jobs without changing authoritative Care state.
 
 ## Display boundary
 
-- Shows only the implemented request-received, delayed/overdue and no-match
-  states returned by the server.
+- Shows the request-received, delayed/overdue and no-match states, and when the
+  list includes `journey_state` it uses that recorded journey instead: review,
+  quotes, requested and confirmed appointments, paused work, in-progress work,
+  cancellation requested, cancelled, and completion review
+  (awaiting, confirmed, or issue reported).
+- A cancellation request stays visibly held. It is not shown as a confirmed
+  appointment, and the private issue text is not included in the list.
 - Shows the server-owned next action, responsible role, next-update deadline,
   overdue result and archived-vehicle history label.
 - Uses the Garage API to label owned vehicles and to filter by active or archived

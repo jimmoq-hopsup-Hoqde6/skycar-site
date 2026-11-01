@@ -1,6 +1,44 @@
 # Skycar V2 — Project Status
 
-Last updated: 2026-09-21
+Last updated: 2026-11-01
+
+## Latest verified checkpoint — 2026-11-01
+
+Phase 1 security gate: PASS. Independent review on PR #74, exact head `18240dc137a66660ef9251101df906159ffae9a4`, submitted 2026-11-01T05:18:11Z by `jimmoq-hopsup-Hoqde6`. The review states the role recheck now happens after the journey row lock, closing the race that blocked PR #72. PR #74 was open, mergeable, and not merged when this checkpoint was written.
+
+Exact-head CI observed green on that revision: Skycar CI run `41266842783`, Care database `41266842778`, Garage PostgreSQL `41266842692`, Garage Care integration `41266842656`, Care entry UI `41266842658`, and the Vercel preview check. `main` remained `7912bc9c3375b713fa2e879ba66387d5a8f79feb` (foundation scaffold plus the protected staging-backup merge). Feature work, including this slice, is not on `main`.
+
+The accepted journey install is nine forward migrations, in filename order, after the eight earlier foundation/Garage/Care files. Do not install the previous eight-file journey manifest unchanged:
+
+1. `20261003064126_care_connected_journey.sql`
+2. `20261004090000_technician_inbox.sql`
+3. `20261004124000_technician_quotes.sql`
+4. `20261004133000_technician_work_start.sql`
+5. `20261004140000_technician_completion.sql`
+6. `20261004150000_customer_completion_review.sql`
+7. `20261020183000_completion_review_security_fix.sql`
+8. `20261020183001_completion_review_replay_authority.sql`
+9. `20261101024732_completion_review_final_lock_authority.sql`
+
+This branch starts at that exact head because availability and My Jobs have to sit next to those booking locks. Branching from `main` would not contain the journey, the locks, or the My Jobs reader.
+
+App-developer slice on this branch, not yet independently reviewed:
+
+- Technician availability contract, `PUT`/`GET /api/v1/technician/availability`, forward migration `20261101062300_technician_availability.sql`, and `/technician/availability`. Schedules use their own advisory locks. They do not lock `care_journeys` or `care:expert-capacity`. Confirmed jobs stay on the journey ledger.
+- My Jobs reads `journey_state` and `completion_review_state` from the existing journey row via forward migration `20261101062400_my_jobs_journey_status.sql`. Cancellation requested, paused work, and completion review are visible. Private issue text is not added to the list.
+- Service-request copy now says the preferred window is an Australia/Adelaide preference and not a reserved appointment. No staging secret was used.
+
+Quote and confirmation commands still do not consult the saved hours. That wiring is a later reviewed change to the journey command, not part of this slice.
+
+### Next handoff
+
+- BLOCKED BY: independent review of this draft branch. The author does not approve or merge it.
+- BLOCKED BY: staging migration install. The protected `skycar-staging` environment secrets are not available here and were not requested. Do not apply the two new migrations to staging until review accepts them. The cleared Phase 1 install remains the nine journey migrations above, on top of the earlier eight files, in filename order.
+- WHY: Phase 1 acceptance explicitly left staging installation and hosted/device proof outside the security verdict. This availability slice is additional unreviewed schema.
+- OWNER: independent QA/security reviewer for the draft; founder or DevOps for staging credentials and any later install.
+- REQUIRED ACTION: record PASS or a reproducible block on the exact commit. Do not treat local disposable PostgreSQL results as hosted Supabase, Auth, private-storage, or physical-device proof. Issue #8 remains open for those gates.
+
+No production change, protected-environment change, merge, or self-approval is included.
 
 ## Current product direction
 Skycar V2 uses services as the acquisition engine and the Garage as the retention engine. Public entry is service-led around immediate cosmetic Care needs; after acquisition, the free Garage becomes the persistent customer home and must remain useful even when the customer is not booking a technician.

@@ -13,7 +13,26 @@ const roles = new Set(["operations", "customer"]);
 const quoteStates = new Set(["draft", "in_review", "issued", "accepted", "declined", "expired", "superseded"]);
 const assignmentStates = new Set(["none", "offered", "reserved", "accepted", "cancelled", "expired"]);
 const fulfilmentStates = new Set(["scheduled", "ready", "in_progress", "paused", "completed", "validated", "closed"]);
+const journeyStates = new Set(["review", "quotes_ready", "booking_requested", "scheduled", "in_progress", "completed", "cancellation_requested", "cancelled"]);
+const completionReviews = new Set(["awaiting_review", "confirmed", "issue_reported"]);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const journeyLabels: Record<string, string> = {
+  review: "Under review",
+  quotes_ready: "Quotes ready",
+  booking_requested: "Appointment requested",
+  scheduled: "Appointment confirmed",
+  in_progress: "In progress",
+  completed: "Completed",
+  cancellation_requested: "Cancellation requested",
+  cancelled: "Cancelled",
+};
+
+function optionalToken(item: CareRequestSummary, key: "journey_state" | "completion_review_state", allowed: Set<string>) {
+  if (!Object.hasOwn(item, key) || item[key] === null || item[key] === undefined) return null;
+  if (typeof item[key] !== "string" || !allowed.has(item[key])) throw new Error("Unsupported jobs response");
+  return item[key];
+}
 
 function validDate(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
@@ -38,11 +57,38 @@ export function readCareJobsPage(value: unknown): CareJobsPage {
       || (item.customer_stage !== "no_match" && item.responsible_role !== "operations")) {
       throw new Error("Unsupported jobs response");
     }
+    const journey = optionalToken(item, "journey_state", journeyStates);
+    const review = optionalToken(item, "completion_review_state", completionReviews);
+    if ((review !== null && journey !== "completed") || (journey !== "completed" && Object.hasOwn(item, "completion_review_state") && item.completion_review_state !== null && item.completion_review_state !== undefined && journey === null)) {
+      throw new Error("Unsupported jobs response");
+    }
   }
   return page;
 }
 
+export function journeyStateLabel(item: CareRequestSummary) {
+  const journey = item.journey_state ?? null;
+  if (!journey) return null;
+  if (journey === "completed" && item.completion_review_state === "issue_reported") return "Completion issue reported";
+  if (journey === "completed" && item.completion_review_state === "confirmed") return "Completion confirmed";
+  if (journey === "completed" && item.completion_review_state === "awaiting_review") return "Awaiting your completion review";
+  return journeyLabels[journey] ?? null;
+}
+
 export function careJobSummary(item: CareRequestSummary) {
+  const journey = item.journey_state ?? null;
+  const review = item.completion_review_state ?? null;
+  if (journey === "cancellation_requested") return { status: "Cancellation requested", detail: "Skycar still holds the recorded appointment until the cancellation is confirmed.", tone: "delayed" as const };
+  if (journey === "cancelled") return { status: "Request cancelled", detail: "This service journey is closed and no appointment is confirmed.", tone: "delayed" as const };
+  if (journey === "completed" && review === "issue_reported") return { status: "Completion issue reported", detail: "Your private completion issue is saved with this service journey.", tone: "action" as const };
+  if (journey === "completed" && review === "confirmed") return { status: "Service complete", detail: "You confirmed completion. The record stays in this journey and your Garage history.", tone: "received" as const };
+  if (journey === "completed") return { status: "Service complete", detail: "Completion evidence is saved. Confirm the work or report a private issue in the service journey.", tone: "action" as const };
+  if (item.fulfilment_state === "paused") return { status: "Service paused", detail: "Recorded work is paused. The appointment remains on this journey until Skycar updates it.", tone: "delayed" as const };
+  if (journey === "in_progress") return { status: "Service in progress", detail: "The expert has started the recorded work.", tone: "received" as const };
+  if (journey === "scheduled") return { status: "Appointment confirmed", detail: "Skycar has confirmed the expert and appointment details.", tone: "received" as const };
+  if (journey === "booking_requested") return { status: "Appointment requested", detail: "Your preferred time is recorded, but expert availability is not confirmed yet.", tone: "delayed" as const };
+  if (journey === "quotes_ready") return { status: "Quote ready", detail: "A human-reviewed quote is ready for your decision.", tone: "action" as const };
+  if (journey === "review") return { status: "Request in review", detail: "Your request is in the service journey. A technician and appointment are not confirmed.", tone: "received" as const };
   const connected = connectedCareStage(item);
   if (connected === "completed") return { status: "Service complete", detail: "Completion evidence is saved in the service journey and your Garage history.", tone: "received" as const };
   if (connected === "in_progress") return { status: "Service in progress", detail: "The expert has started the recorded work.", tone: "received" as const };
@@ -73,6 +119,19 @@ export function careJobSummary(item: CareRequestSummary) {
 }
 
 export function careJobAction(item: CareRequestSummary) {
+  const journey = item.journey_state ?? null;
+  const review = item.completion_review_state ?? null;
+  if (journey === "cancellation_requested") return "Skycar cancellation review";
+  if (journey === "cancelled") return "No further action";
+  if (journey === "completed" && review === "issue_reported") return "Skycar reviewing your issue";
+  if (journey === "completed" && review === "confirmed") return "View completion record";
+  if (journey === "completed") return "Confirm completion or report an issue";
+  if (item.fulfilment_state === "paused") return "Waiting for Skycar to resume";
+  if (journey === "in_progress") return "Expert completing the work";
+  if (journey === "scheduled") return "Attend confirmed appointment";
+  if (journey === "booking_requested") return "Skycar availability check";
+  if (journey === "quotes_ready") return "Review your quotes";
+  if (journey === "review") return "Skycar review";
   const connected = connectedCareStage(item);
   if (connected === "completed") return "View completion record";
   if (connected === "in_progress") return "Expert completing the work";
@@ -83,4 +142,16 @@ export function careJobAction(item: CareRequestSummary) {
   if (item.next_action === "choose_recovery") return "Your decision";
   if (item.next_action === "review_overdue_request") return "Skycar follow-up";
   return "Skycar review";
+}
+
+export function careJobLink(item: CareRequestSummary) {
+  const journey = item.journey_state ?? null;
+  const review = item.completion_review_state ?? null;
+  const connected = connectedCareStage(item);
+  if (journey === "cancellation_requested") return "View cancellation request";
+  if (journey === "completed" && review === "issue_reported") return "View completion issue";
+  if (journey === "completed" && review !== "confirmed") return "Review completion";
+  if (journey === "completed" || connected === "completed") return "View completion record";
+  if (journey === "quotes_ready" || connected === "quote_ready") return "Review quotes";
+  return "Open service journey";
 }
