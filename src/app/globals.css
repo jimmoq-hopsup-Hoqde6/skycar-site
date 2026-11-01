@@ -5,3 +5,7 @@
 :where(.garage-shell,.jobs-shell,.care-entry-shell,.journey-shell,.auth-shell) :where(button,summary,select,input:not([type=checkbox],[type=radio],[type=file],[type=hidden]),a:not(p a,li a,dd a,small a,h1 a,h2 a,h3 a)){min-height:44px}
 :where(.garage-shell,.jobs-shell,.care-entry-shell,.journey-shell,.auth-shell) a:where(:not(p a,li a,dd a,small a,h1 a,h2 a,h3 a)){display:inline-flex;align-items:center}
 :where(.garage-shell,.jobs-shell,.care-entry-shell,.journey-shell,.auth-shell) label:where(:has(>input[type=checkbox],>input[type=radio])){min-height:44px;align-items:center}
+/* Standalone sign-out / nav-style links: explicit selectors (the :not(p a …) floor above deliberately skips prose links). */
+body :is(.auth-boundary,.auth-help,.garage-footer,.care-entry-boundary,.jobs-boundary) a,body .auth-shell a[href^="/auth/"],body .care-entry-nav a,body .journey-nav a{display:inline-flex;align-items:center;min-height:44px}
+body .care-entry-nav a,body .journey-nav a{min-width:44px;white-space:nowrap}
+body .care-entry-nav>div{flex-wrap:wrap;gap:0 20px}
