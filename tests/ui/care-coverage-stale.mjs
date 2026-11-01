@@ -88,6 +88,31 @@ try {
     await page.close();
   }
 
+  // 1b. Guest focus: the frame that follows a step change must not take focus from a field the customer has
+  // already moved into (it swallowed typing and made the flow intermittent), but must still move focus to the new
+  // step's title when they used the keyboard on the previous step.
+  {
+    const { page } = await guest(answerFor('out_of_area'));
+    await back(page).click();
+    const frames = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))));
+    const activeName = () => page.evaluate(() => document.activeElement?.getAttribute('name') ?? document.activeElement?.tagName);
+    // Focus the postcode field the moment the step is shown (a microtask after the DOM change, before the next frame).
+    await page.evaluate(() => new Promise(resolve => {
+      const field = document.querySelector('input[name="postcode"]');
+      const watcher = new MutationObserver(() => { if (!field.closest('fieldset[hidden]')) { field.focus(); watcher.disconnect(); resolve(true); } });
+      watcher.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['hidden'] });
+      [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Continue').click();
+    }));
+    await frames();
+    assert.equal(await activeName(), 'postcode', 'guest: focus stays in the postcode field once the customer is in it');
+    await back(page).click();
+    await page.getByLabel('Your car', { exact: true }).press('Enter');
+    await page.getByLabel('Suburb', { exact: true }).waitFor();
+    await frames();
+    assert.equal(await activeName(), 'H2', 'guest: after Enter on the previous step, focus moves to the new step title');
+    await page.close();
+  }
+
   // 2. Guest in flight: the answer for the OLD service arrives after the customer switched service.
   for (const late of ['out_of_area', 'unknown', 'available']) {
     let release; const gate = new Promise(resolve => (release = resolve));
