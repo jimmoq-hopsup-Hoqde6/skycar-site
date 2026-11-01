@@ -341,6 +341,16 @@ export async function verifyTechnicianAvailability({sql,auth,quote,result,waitFo
     equal(await json(replace(techA,body(rev,[w(1,'09:00','10:00')]),key)),{revision:rev+1,replayed:false},'same key can be retried after rollback');
   }
 
+  // ---- Sequence privileges: browser roles get nothing on the identity sequence. ----------------------
+  {
+    const seq='public.care_technician_availability_windows_id_seq';
+    for(const role of ['anon','authenticated'])
+      for(const privilege of ['USAGE','SELECT','UPDATE'])
+        equal(await run(`select has_sequence_privilege('${role}','${seq}','${privilege}')`),'f',`${role} has no ${privilege} on the windows sequence`);
+    equal(await run(`select count(*) from pg_class c,aclexplode(c.relacl) a where c.oid='${seq}'::regclass and a.grantee=0`),'0','PUBLIC has no privilege on the windows sequence');
+    equal(await run(`select has_sequence_privilege('service_role','${seq}','USAGE')`),'t','service_role keeps USAGE on the windows sequence');
+  }
+
   // ---- Forward-only: applying the new migration only adds objects. -----------------------------------
   {
     const migrations=readdirSync('supabase/migrations').filter(name=>name.endsWith('.sql')).sort();

@@ -111,6 +111,9 @@ grant select,insert,update on public.care_technician_availability,
   public.care_technician_availability_commands to service_role;
 grant select,insert,delete on public.care_technician_availability_exceptions,
   public.care_technician_availability_windows to service_role;
+-- Identity inserts need no sequence privilege; Supabase default privileges would otherwise
+-- leave this sequence usable/updatable by browser roles, so close it explicitly.
+revoke all on sequence public.care_technician_availability_windows_id_seq from public,anon,authenticated;
 grant usage,select on sequence public.care_technician_availability_windows_id_seq to service_role;
 -- Read-only access for the owning technician; there is deliberately no write grant
 -- or write policy for any browser role, and the command ledger is never exposed.
