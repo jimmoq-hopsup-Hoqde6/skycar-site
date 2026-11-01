@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 // DB acceptance for migration 20261101150000: the explicit 'legacy_unknown' marker state, the
 // quota-free heal, the storage backfill, the legacy -> recorded upgrade and marker cleanup on
 // request delete. Disposable database only.
 export async function verifyRequestPhotoMarker({ sql, auth, quote, run, carePayload, garageCreate }) {
   let checks = 0;
+  const ok_ = (value, label) => { assert.ok(value, label); checks += 1; };
   const equal = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks += 1; };
   const service = statement => `begin; set local role service_role; ${statement}; commit;`;
   const anon = statement => `begin; set local role anon; ${statement}; commit;`;
@@ -190,6 +192,35 @@ export async function verifyRequestPhotoMarker({ sql, auth, quote, run, carePayl
   const skipped = sql('begin; alter schema storage rename to storage_hidden; select public.care_backfill_legacy_photo_markers(); alter schema storage_hidden rename to storage; commit;');
   assert.ok(first(skipped).startsWith('0'), skipped); checks += 1;
   equal(sql("select to_regclass('storage.objects') is not null"), 't');
+
+  // Prerequisite: the migration role needs USAGE on schema storage. Without it, to_regclass and
+  // has_table_privilege raise 42501; the backfill (the last statement of the migration) must
+  // skip with a NOTICE instead of aborting the whole migration. Simulated by giving the backfill and the
+  // observation function an owner with no privilege on schema storage (rolled back afterwards).
+  sql(`do $$ begin if not exists (select 1 from pg_roles where rolname = 'photo_nousage_owner') then create role photo_nousage_owner nologin; end if; end $$`);
+  sql('revoke all on schema storage from photo_nousage_owner; revoke all on all tables in schema storage from photo_nousage_owner');
+  equal(sql("select has_schema_privilege('photo_nousage_owner', 'storage', 'usage')"), 'f', 'the simulated owner has no USAGE on schema storage');
+  const asNoUsageOwner = body => spawnSync('psql', [process.env.GARAGE_CARE_TEST_DATABASE_URL, '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-c',
+    `begin; grant create on schema public to photo_nousage_owner;
+     alter function public.care_backfill_legacy_photo_markers() owner to photo_nousage_owner;
+     alter function public.care_observed_request_photo_count(uuid, text) owner to photo_nousage_owner;
+     ${body}; rollback;`], { encoding: 'utf8' });
+  const noUsageBefore = sql('select count(*) from public.care_request_photo_sets');
+  const noUsage = asNoUsageOwner('select public.care_backfill_legacy_photo_markers()');
+  equal(noUsage.status, 0, `the backfill by a role without USAGE on storage does not fail: ${noUsage.stderr}`);
+  ok_(/^0$/m.test(noUsage.stdout), 'it returns 0');
+  ok_(/NOTICE:\s+care_backfill_legacy_photo_markers: role photo_nousage_owner has no USAGE on schema storage; skipped/.test(noUsage.stderr), `it says why in a NOTICE: ${noUsage.stderr}`);
+  const observedNoUsage = asNoUsageOwner(`select public.care_observed_request_photo_count(${quote(bfTwo)}::uuid, 'account') is null`);
+  equal(observedNoUsage.status, 0, `the observation by a role without USAGE does not raise: ${observedNoUsage.stderr}`);
+  ok_(/^t$/m.test(observedNoUsage.stdout), 'it answers "unknown" (NULL)');
+  equal(sql('select count(*) from public.care_request_photo_sets'), noUsageBefore, 'the skipped backfill wrote nothing');
+  equal(sql("select pg_get_userbyid(proowner) from pg_proc where proname = 'care_backfill_legacy_photo_markers'") !== 'photo_nousage_owner', true, 'ownership change was rolled back');
+  sql('drop owned by photo_nousage_owner; drop role photo_nousage_owner');
+  // The migration text carries the explicit prerequisite and the ordered checks.
+  for (const needle of ["has_schema_privilege(current_user, 'storage', 'usage')", "to_regnamespace('storage')", 'no USAGE on schema storage']) {
+    ok_(migration.includes(needle), `migration states the storage USAGE prerequisite: ${needle}`);
+  }
+  assert.ok(migration.indexOf("has_schema_privilege(current_user, 'storage', 'usage')") < migration.indexOf("to_regclass('storage.objects')"), 'USAGE is checked before the first call that needs it'); checks += 1;
 
   // Cleanup on delete: the marker goes with its request; other markers stay.
   const doomed = submit(owner, vehicle.id); const kept = submit(owner, vehicle.id);
