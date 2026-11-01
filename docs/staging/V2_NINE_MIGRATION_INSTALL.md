@@ -1,6 +1,6 @@
 # V2 nine-migration install: manifest, pre-migration checklist, post-migration verification, backup gap review
 
-> **Revision 7 (adds section 13: restore test of the logical export). Revision 6 (adds section 12: changed install set `60a48da`, pre-checks P9 to P11). Revision 5 (adds section 11: install results of 1 Nov 2026). Revision 4 (adds section 10: live staging inventory of 1 Nov 2026, the sequence-revoke migration `20261101133000` in the install set, and checklist items 14-15 with query P8). Revision 3 added section 9: pre-launch ops for request-photo uploads. Revision 2 added sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed.**
+> **Revision 8 (adds section 14: version mapping, week1-candidate delta, history-repair plan). Revision 7 (adds section 13: restore test of the logical export). Revision 6 (adds section 12: changed install set `60a48da`, pre-checks P9 to P11). Revision 5 (adds section 11: install results of 1 Nov 2026). Revision 4 (adds section 10: live staging inventory of 1 Nov 2026, the sequence-revoke migration `20261101133000` in the install set, and checklist items 14-15 with query P8). Revision 3 added section 9: pre-launch ops for request-photo uploads. Revision 2 added sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed.**
 >
 > **Status: documentation only. Nothing in this document has been executed against any hosted
 > database.** No migration has been applied, no workflow has been dispatched, and no secret or
@@ -1336,3 +1336,193 @@ Gaps that remain (UNVERIFIED or not covered): storage object **bytes** (3 object
 ### 13.4 Clean-up
 
 The cluster was stopped and its directory deleted. All generated SQL containing row data, the scratch queries and one stray connector output file that held a copy of `auth.users` were deleted. A search of `/workspace`, `/tmp` and the home directory for the user's id, e-mail address and password-hash prefix found no copy outside the backup directory. The backup directory is mode 700 with all files mode 600, and its 31 files still match the manifest sha256 values.
+
+## 14. Mapping of hosted history to repo files, the week1-candidate delta and a history-repair plan (2 Nov 2026, docs only; nothing was run or changed)
+
+Written 2 Nov 2026 at about 01:40 ACDT (Australia/Adelaide, UTC+10:30). The only access to staging was read-only SELECTs (`schema_migrations` rows, with an md5 of each `statements` value). Everything in 14.3 is a plan that was **not run**.
+
+### 14.1 Exact mapping: hosted `supabase_migrations.schema_migrations` (staging, 18 rows) to repo files
+
+Hosted rows were read about 01:38 ACDT. Repo side: `integration/week1-candidate` @ `60a48dab27b72cdfd987fa5e2293aa26adc78919`, read with `git ls-tree` and `git rev-parse` (VERIFIED). For the ten files installed in section 11, the blob at the source commit (`18240dc137a66660ef9251101df906159ffae9a4` for the nine, `39a2f89a4fe04cb5c02c863742ccbe075158827c` for `20261101133000`) **is identical** to the blob at `60a48da` (all ten). The md5 column compares `md5(array_to_string(statements, E'\n'))` on the hosted row (each row holds one statement element) with `md5` of the repo file bytes.
+
+| # | Hosted version | Name | Repo filename (at `60a48da`) | Blob SHA (full, at `60a48da`) | Source commit | Blob at source = blob at `60a48da` | md5 hosted `statements` vs md5 repo file |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `20260928230146` | `foundation` | `202609200001_foundation.sql` | `a1d1cf28b896474e3e3a972e5857993126acc921` | `23468048a391cc6c16ae87afcd34abadf82f9522 (commit that first added the file; no pin of record)` | n/a (no pin) | equal only without the file's final newline (hosted 5261 chars, file 5262 bytes; `2f6520431e51f1a2632c93b7068e8f67`) |
+| 2 | `20260930225800` | `care_requests` | `202609200002_care_requests.sql` | `5fa6a6f399ade7fc8dbecd2b4e779f4a877fb40f` | `4120275b64f34da325aa6a0763c0d1202895cca2 (commit that first added the file; no pin of record)` | n/a (no pin) | equal (`e1c92eea238c72850f3435ad6a989ab8`) |
+| 3 | `20260930225820` | `care_my_jobs` | `202609200003_care_my_jobs.sql` | `d74c23175405f2846e61046c19ed901050f58b19` | `4120275b64f34da325aa6a0763c0d1202895cca2 (commit that first added the file; no pin of record)` | n/a (no pin) | equal (`4c72d480b8f6d2644917c1ed3095027d`) |
+| 4 | `20260930225838` | `garage_mutations` | `202609200100_garage_mutations.sql` | `07f2f8b701ed86f5ba5d2b5bac7ea279c935e0fa` | `4120275b64f34da325aa6a0763c0d1202895cca2 (commit that first added the file; no pin of record)` | n/a (no pin) | equal (`e3b0b1da00f1a3872951eda4d2c4e16a`) |
+| 5 | `20260930225859` | `garage_vehicle_photos` | `202609200300_garage_vehicle_photos.sql` | `16eab45434c926b8ec783f49db6d0474ad8ba1c4` | `4120275b64f34da325aa6a0763c0d1202895cca2 (commit that first added the file; no pin of record)` | n/a (no pin) | equal (`e6119d2fd52bb1eec1ebe1f379a568f4`) |
+| 6 | `20260930225917` | `care_offers` | `202609220100_care_offers.sql` | `82f09e2b26b8cb351c814d32f2306697fc4d8711` | `822261797da4617fce896be680e7c97a0655c0d4 (commit that first added the file; no pin of record)` | n/a (no pin) | equal (`0a9eeed77849b3d243b1a81f64a93a26`) |
+| 7 | `20260930230048` | `staging_access_hardening` | `202609300001_staging_access_hardening.sql` | `0d21a113d00f8b7491a44ab226ca670094243b61` | `512f7043096208e2b45f0b0045e01cfc578ddb4f (commit that first added the file; no pin of record)` | n/a (no pin) | equal (`e215de4491956900c7e2d1d95a15c277`) |
+| 8 | `20261001023756` | `care_guest_requests` | `20261001030000_care_guest_requests.sql` | `173148e6cc448b9e10e52006e21bc68609105e7f` | `072c30b76c83df84e416ce3b861c909fa9b3cdf5 (commit that first added the file; no pin of record)` | n/a (no pin) | equal (`5ecdd8b60d8adbec523ef531de26c0d0`) |
+| 9 | `20261101101109` | `care_connected_journey` | `20261003064126_care_connected_journey.sql` | `de4b31ad085e9d5f0c410b825cf37565208ff0f5` | `18240dc137a66660ef9251101df906159ffae9a4` | identical | equal (`bcb7e78db9e9978871c50e64d67482cd`) |
+| 10 | `20261101101123` | `technician_inbox` | `20261004090000_technician_inbox.sql` | `55d448620035d8eaa1f0040f3121fb53a0e03e7e` | `18240dc137a66660ef9251101df906159ffae9a4` | identical | equal (`1cc59c190332937285764d4f63eae76c`) |
+| 11 | `20261101101132` | `technician_quotes` | `20261004124000_technician_quotes.sql` | `6773498011dd697f1f327b5684b0dca8f29b061e` | `18240dc137a66660ef9251101df906159ffae9a4` | identical | equal (`e457b1427af7a1e96036ae12fe764f80`) |
+| 12 | `20261101101140` | `technician_work_start` | `20261004133000_technician_work_start.sql` | `1e8a70c873b3ddd0ba63fba9652b890a8efd9488` | `18240dc137a66660ef9251101df906159ffae9a4` | identical | equal (`df0e454414cb04b0090e2d4c4e0152d5`) |
+| 13 | `20261101101148` | `technician_completion` | `20261004140000_technician_completion.sql` | `0d4bb71697ea671963647372e33a040a52ef4dbe` | `18240dc137a66660ef9251101df906159ffae9a4` | identical | equal (`c6c097b3ba1a2425e78bd715f24503cf`) |
+| 14 | `20261101101156` | `customer_completion_review` | `20261004150000_customer_completion_review.sql` | `37bd21c7e08d7d20c44fa1ca342d598f6c309c7a` | `18240dc137a66660ef9251101df906159ffae9a4` | identical | equal (`5a24b36f6154ae1d2813079fe6b8b694`) |
+| 15 | `20261101101204` | `completion_review_security_fix` | `20261020183000_completion_review_security_fix.sql` | `b8476976ffecc30721e3b358ddf95229871f9875` | `18240dc137a66660ef9251101df906159ffae9a4` | identical | equal (`14bd8f30507e476a382db4fddbd6b209`) |
+| 16 | `20261101101212` | `completion_review_replay_authority` | `20261020183001_completion_review_replay_authority.sql` | `9da568903d8d95718e382897670fbbf34bfe53e6` | `18240dc137a66660ef9251101df906159ffae9a4` | identical | equal (`e14c549c99e05a1de1037fe4fe5ecb04`) |
+| 17 | `20261101101220` | `completion_review_final_lock_authority` | `20261101024732_completion_review_final_lock_authority.sql` | `52f11c3e9edca2cb6f57c66d1377bee1cd59618e` | `18240dc137a66660ef9251101df906159ffae9a4` | identical | equal (`b913b530c5c1850a667783e71a56941d`) |
+| 18 | `20261101101228` | `revoke_public_sequence_grants` | `20261101133000_revoke_public_sequence_grants.sql` | `fcdfe66f90d54d8130d07c8ce3cd3b2afcaa5097` | `39a2f89a4fe04cb5c02c863742ccbe075158827c` | identical | equal (`99dd5e9b2bdcadd8032084aa0c95b523`) |
+
+Reading it:
+- **Rows 9 to 18** (installed in section 11): hosted statements are **byte-identical** to the repo files at `60a48da` (md5 equal for all ten).
+- **Rows 2 to 8** (baseline): byte-identical to the files at `60a48da`.
+- **Row 1** (`foundation`): the hosted text equals the repo file only without its final newline (5261 against 5262). Same content otherwise; the baseline was not applied by this install and its original source commit is not on record, so the "source commit" shown for rows 1 to 8 is only the commit that first added the file (UNVERIFIED as the applied source).
+- Hosted versions are generated at apply time (`20260928…` to `20261001…` for the baseline, `20261101101109` to `20261101101228` for rows 9 to 18). **No hosted version equals a repo filename version.** Names do match, one to one (18 of 18), which is why A1n and name-based checks are the valid ones.
+- The repo baseline files use 12-digit versions (`202609200001`, `202609200002`, `202609200003`, `202609200100`, `202609200300`, `202609220100`, `202609300001`); the other repo files use 14 digits.
+- Extra columns on the hosted table: `created_by`, `idempotency_key` (unique), `rollback`.
+
+### 14.2 Delta: in `60a48da` but not on staging (8 files, in repo version order)
+
+All eight blobs read at `60a48da` (VERIFIED). Apply order is the repo version order, which is also the order in the integration branch. `20261101133000` is already on staging, so on the repo-version timeline it sits between 3 and 4 below; `20261101140000` follows `20261101133000` (the sequence-grant work), which staging already has; dependencies between the other seven were not analysed beyond the file headers (UNVERIFIED).
+
+| Order | Full filename | Blob SHA (full) | Bytes | First added in |
+| --- | --- | --- | --- | --- |
+| 1 | `20261101062300_technician_availability.sql` | `9c2f5846017ecfeefe0f1064d2cff8d8e7fddf16` | 17404 | `4d778d1` (PR #76) |
+| 2 | `20261101062400_my_jobs_journey_status.sql` | `92866f98bbf91e9fe2f198dea24fe7ef0918eb87` | 3172 | `4d778d1` (PR #76) |
+| 3 | `20261101063000_technician_availability_enforcement_delta.sql` | `bd68031b5657a8901947aa65c770dbc9cc5a251b` | 21959 | `be732e6` |
+| 4 | `20261101120000_care_journey_command_lock_order.sql` | `65a7bb48dc58efbc5c060c4a1e09c3a26edef070` | 26472 | `469eef7` |
+| 5 | `20261101130000_request_photo_flag_and_upload_quota.sql` | `848ca31e0d610e990ebf98ab5e1542150a29e2b1` | 11235 | `054e5d8` |
+| 6 | `20261101140000_revoke_supabase_admin_sequence_default_acl.sql` | `64348849ab8120f3cca860247c50ccbe55d233a5` | 4881 | `e52810c` (same blob at `cd1e3ae` and `60a48da`) |
+| 7 | `20261101150000_request_photo_marker_legacy_state_and_cleanup.sql` | `a21d73d524a0a1ce6fbdd17ea8755d97100e3498` | 11951 | `c56bfe8` |
+| 8 | `20261101160000_care_service_coverage_enforcement.sql` | `9a48a2123fd7ed568a03091a1a4d842c375e7bba` | 14869 | `7f8071f` |
+
+Status: **`60a48da` is QA BLOCKED and will be superseded by a later candidate commit.** Nothing in this list is approved for installing; re-derive the list, the blobs and the order from the superseding commit, and re-run pre-checks P1 to P11, before use. `20261101063000` needs `btree_gist` (P9); `20261101130000` was skipped in section 11 and is in this set.
+
+### 14.3 Plan (NOT RUN): make hosted history match the repo filenames before production
+
+**Current policy until this is approved and done:** keep applying by name with `apply_migration` on staging (hosted versions stay generated). Names are the join key.
+
+**Why bother:** the Supabase CLI compares local files with the remote table by version. Today `supabase migration list` and `supabase db push` would show the 18 hosted versions as "remote only" and all 26 repo files as "local only", and `db push` stops with a request to repair the history. Production should not start with that mismatch. The cleanest production path is to apply the files there with the CLI (`supabase db push`) from the repo so versions equal the filenames from the start, and only repair staging if staging history must also match; this plan covers repairing staging.
+
+**Prerequisites (all required before running anything):**
+1. **Marcel's direct approval**, in his own words, for this specific change to staging (and a separate one for production).
+2. **A verified backup** taken immediately before: re-run the logical export (section 11.1, at minimum `supabase_migrations.schema_migrations` with every column, including `created_by`, `idempotency_key`, `rollback`) and, preferably, a Supabase platform backup. The restore test (section 13) shows the export is usable for `public` data and history rows.
+3. All wanted delta files already applied, so the repo-version order matches the history order (otherwise `db push` later reports "found local migration files to be inserted before the last migration on remote database" and needs `--include-all`).
+4. The QA-approved final candidate commit identified (not `60a48da`), and its filenames and blobs re-verified against the hosted names.
+5. Someone with direct Postgres access as `postgres` (the owner of the table) or the CLI linked to the project. The box and the Supabase connector cannot do this: the connector `execute_sql` is used read-only here, and `apply_migration` would only add a new row with another generated version.
+6. Read-only baseline captured (14.3.3 queries 1 and 2), with the output saved with mode 600.
+
+**14.3.1 Option A: `supabase migration repair`**
+
+Mechanics (from the CLI reference): `--status reverted <version>` **deletes** the row for that version; `--status applied <version>` **inserts** a row from the local file (version, name, statements; newer CLIs upsert on conflict). It changes only the history table and runs no SQL. Needs `supabase link` or `--db-url`, and the database password.
+
+Shape of the run, not to be executed now: for each of the 18 hosted versions run `supabase migration repair <hosted_version> --status reverted`, then for each of the 18 repo versions (those files that exist on staging) run `supabase migration repair <repo_version> --status applied`, then `supabase migration list` to confirm LOCAL equals REMOTE for those rows.
+
+Risks:
+- **Data loss in the history rows between the two steps:** `reverted` deletes the row, including `created_by`, `idempotency_key`, `rollback` and the exact `statements` text. The re-inserted row is built from the local file and the CLI splits the file into several statements, so the stored `statements` will **not** be byte-identical to the current rows, and `created_by` and `idempotency_key` become NULL. A saved copy of the current rows is essential.
+- **Not atomic:** each repair is its own call. A failure half way leaves some versions missing and others duplicated; if a hosted and a repo version are both present, the CLI sees both.
+- **Wrong direction is silent:** `applied` for a file that was never run records a lie, and `reverted` for a file that ran makes a later `db push` try to run it again (most files here are not idempotent: `create table`, `create function` without `or replace`), failing or double-applying. Only mark `applied` for a file whose effect is verified on staging (verification SQL below).
+- Uses the database password and a direct connection; the project must not be paused, and the pooler or direct connection must be reachable from the machine that runs it.
+- The 12-digit baseline versions (`202609200001` and the like) are accepted by the CLI as numeric prefixes, but that is UNVERIFIED against the platform's own tooling (dashboard migration list).
+
+**14.3.2 Option B: SQL `UPDATE` of `version` on `schema_migrations`**
+
+Not to be executed now. Idea: rename each hosted version to its repo version, keyed on `name`, in one transaction, leaving `name`, `statements`, `created_by`, `idempotency_key` and `rollback` untouched, so the history rows stay byte-identical apart from `version`.
+
+```sql
+-- NOT RUN. Needs approval and a verified backup. Run as postgres, in one transaction.
+begin;
+lock table supabase_migrations.schema_migrations in share row exclusive mode;
+
+with m(hosted_version, name, repo_version) as (values
+  ('20260928230146', 'foundation', '202609200001'),
+  ('20260930225800', 'care_requests', '202609200002'),
+  ('20260930225820', 'care_my_jobs', '202609200003'),
+  ('20260930225838', 'garage_mutations', '202609200100'),
+  ('20260930225859', 'garage_vehicle_photos', '202609200300'),
+  ('20260930225917', 'care_offers', '202609220100'),
+  ('20260930230048', 'staging_access_hardening', '202609300001'),
+  ('20261001023756', 'care_guest_requests', '20261001030000'),
+  ('20261101101109', 'care_connected_journey', '20261003064126'),
+  ('20261101101123', 'technician_inbox', '20261004090000'),
+  ('20261101101132', 'technician_quotes', '20261004124000'),
+  ('20261101101140', 'technician_work_start', '20261004133000'),
+  ('20261101101148', 'technician_completion', '20261004140000'),
+  ('20261101101156', 'customer_completion_review', '20261004150000'),
+  ('20261101101204', 'completion_review_security_fix', '20261020183000'),
+  ('20261101101212', 'completion_review_replay_authority', '20261020183001'),
+  ('20261101101220', 'completion_review_final_lock_authority', '20261101024732'),
+  ('20261101101228', 'revoke_public_sequence_grants', '20261101133000')
+)
+update supabase_migrations.schema_migrations s
+   set version = m.repo_version
+  from m
+ where s.version = m.hosted_version and s.name = m.name;
+-- expected: UPDATE 18
+
+-- guard: abort unless exactly the expected history results
+do $$
+begin
+  if (select count(*) from supabase_migrations.schema_migrations) <> 18 then raise exception 'row count changed'; end if;
+  if exists (select 1 from supabase_migrations.schema_migrations where version ~ '^2026(0928|0930|1001)[0-9]{6}$' and name in ('foundation','care_requests','care_my_jobs','garage_mutations','garage_vehicle_photos','care_offers','staging_access_hardening','care_guest_requests')) then raise exception 'baseline version not renamed'; end if;
+  if exists (select 1 from supabase_migrations.schema_migrations where version like '2026110110%') then raise exception 'hosted generated version still present'; end if;
+end $$;
+commit;   -- use rollback; instead to abandon
+```
+
+Risks:
+- It is a hand edit of a platform-owned table. Supabase may add triggers, columns or checks (the table already has `created_by`, `idempotency_key`, `rollback`); a platform or dashboard feature that keys on those values (for example the `idempotency_key`) could behave unexpectedly. UNVERIFIED how the platform reads these rows.
+- `version` is the primary key: a collision aborts the statement (safe), but a typo in the mapping silently records the wrong version for a name; the guard above and the verification queries are the protection.
+- `apply_migration` calls made afterwards still generate a timestamp version, so new rows will again differ from the filenames; this must be done when the set is complete, immediately before the CLI becomes the only way to apply.
+- If a repo file is later edited and renamed, the history will not follow; it only records what was applied.
+- Preferably run by a person in the SQL editor or `psql`; the connector's `execute_sql` is read-only here and is not a route for it.
+
+**14.3.3 Read-only verification SQL (safe to run at any time, SELECT only)**
+
+```sql
+-- 1. Before: the hosted rows and their identifiers (save the output, mode 600).
+select version, name, md5(array_to_string(statements, E'\n')) as statements_md5,
+       created_by, idempotency_key is not null as has_idem
+from supabase_migrations.schema_migrations order by version;
+
+-- 2. Before: which names are on staging (expect 18; the 8 baseline names and the 10 from section 11).
+select name from supabase_migrations.schema_migrations order by name;
+
+-- 3. Before/after: the schema itself must not change in a history-only repair. Compare this fingerprint before and after.
+select md5(string_agg(x, '|' order by x)) as schema_fingerprint, count(*) as objects from (
+  select 'f:'||p.oid::regprocedure::text||md5(pg_get_functiondef(p.oid)) as x
+    from pg_proc p where p.pronamespace = 'public'::regnamespace
+  union all select 't:'||c.relname||c.relrowsecurity::text from pg_class c where c.relnamespace='public'::regnamespace and c.relkind in ('r','p')
+  union all select 'p:'||schemaname||'.'||tablename||'.'||policyname||md5(coalesce(qual,'')||coalesce(with_check,'')) from pg_policies where schemaname='public'
+  union all select 'i:'||indexname||md5(indexdef) from pg_indexes where schemaname='public'
+) q;
+
+-- 4. After: every hosted version must equal the repo version for its name (copy the repo mapping into the VALUES list).
+with m(name, repo_version) as (values
+  ('foundation','202609200001'), ('care_requests','202609200002'), ('care_my_jobs','202609200003'),
+  ('garage_mutations','202609200100'), ('garage_vehicle_photos','202609200300'), ('care_offers','202609220100'),
+  ('staging_access_hardening','202609300001'), ('care_guest_requests','20261001030000'),
+  ('care_connected_journey','20261003064126'), ('technician_inbox','20261004090000'), ('technician_quotes','20261004124000'),
+  ('technician_work_start','20261004133000'), ('technician_completion','20261004140000'),
+  ('customer_completion_review','20261004150000'), ('completion_review_security_fix','20261020183000'),
+  ('completion_review_replay_authority','20261020183001'), ('completion_review_final_lock_authority','20261101024732'),
+  ('revoke_public_sequence_grants','20261101133000'))
+select m.name, m.repo_version, s.version as hosted_version,
+       case when s.version = m.repo_version then 'PASS' else 'FAIL' end as status
+from m full join supabase_migrations.schema_migrations s on s.name = m.name
+order by coalesce(m.repo_version, s.version);
+-- expected: 18 rows, all PASS, no row with a NULL side.
+
+-- 5. After: no generated versions left, and history order equals repo order.
+select count(*) filter (where version like '2026110110%') as generated_left,
+       count(*) as total,
+       string_agg(name, ',' order by version) as names_in_version_order
+from supabase_migrations.schema_migrations;
+-- expected: generated_left 0; total 18 (more once the delta is applied); names_in_version_order equals the
+-- repo filename order of query 4 (the 18 names as listed there, ordered by repo_version).
+
+-- 6. After, Option B only: statements and other columns untouched (md5 equal to query 1's saved output, row for row, by name).
+```
+
+On the CLI side, after a repair `supabase migration list` must show every local file with a matching remote version and nothing remote-only. For Option A the `statements` md5 will legitimately differ from the saved one (statements are re-split), so compare names and versions only.
+
+**14.3.4 Rollback**
+
+- Before anything: the saved copy of query 1 (all columns, not only these) is the rollback source. Keep it in the mode-700 backup directory.
+- **Option B:** run the same `UPDATE` with the mapping reversed (`set version = hosted_version where version = repo_version and name = …`) inside one transaction; or, before commit, issue `rollback;`. The `UPDATE` is atomic, so there is no half state. Then re-run queries 1 and 3 and compare with the saved output.
+- **Option A:** run `supabase migration repair <repo_version> --status reverted` for each, then re-insert the saved original rows (version, name, statements, created_by, idempotency_key, rollback) by a transactional `INSERT` from the saved JSON, since `--status applied` cannot recreate the original hosted versions or the original columns.
+- A history repair never touches schema objects, so there is nothing to undo in the schema; if query 3's fingerprint differs after a repair, stop and investigate before doing anything else.
+- If the history table itself is damaged, restore its rows from the logical export (section 13 shows the export restores `schema_migrations`).
