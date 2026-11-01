@@ -8,6 +8,7 @@ import { verifyCareJourney } from "./care-journey.acceptance.mjs";
 import { verifyTechnicianCompletion } from "./technician-completion.acceptance.mjs";
 import { verifyCustomerCompletionReview } from "./customer-completion-review.acceptance.mjs";
 import { verifyCompletionLockReview } from "./completion-lock-review.acceptance.mjs";
+import { verifyCompletionLockOrder } from "./completion-lock-order.acceptance.mjs";
 import { verifyTechnicianWorkStart } from "./technician-work-start.acceptance.mjs";
 import { verifyTechnicianQuotes } from "./technician-quotes.acceptance.mjs";
 import { verifyTechnicianInbox } from "./technician-inbox.acceptance.mjs";
@@ -285,5 +286,6 @@ test('Selected technicians start confirmed work on the shared journey',async()=>
 
 test('Technician completion shares evidence and writes account history atomically',async()=>{await verifyTechnicianCompletion({sql,auth,quote,result,waitForQuery});});
 test('Customers review completed work without changing fulfilment or money',async()=>{await verifyCustomerCompletionReview({sql,auth,quote,result,waitForQuery});});
+test('Completion review uses a deadlock-safe intermediate lock order',async()=>{await verifyCompletionLockOrder({sql,quote,result});});
 test('Fresh completion review rejects roles changed during the final journey lock wait',async()=>{await verifyCompletionLockReview({sql,quote,result});});
 
