@@ -15,6 +15,8 @@ import { verifyTechnicianQuotes } from "./technician-quotes.acceptance.mjs";
 import { verifyTechnicianInbox } from "./technician-inbox.acceptance.mjs";
 import { verifyTechnicianAvailability } from "./technician-availability.acceptance.mjs";
 import { verifyMyJobsJourneyState } from "./my-jobs-journey-state.acceptance.mjs";
+import { verifySequenceGrantRevoke } from "./sequence-grant-revoke.acceptance.mjs";
+import { verifySupabaseAdminSequenceDefaultAcl } from "./supabase-admin-sequence-default-acl.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
@@ -116,6 +118,8 @@ before(() => {
     '20261101024732_completion_review_final_lock_authority.sql',
     '20261101062300_technician_availability.sql',
     '20261101062400_my_jobs_journey_status.sql',
+    '20261101133000_revoke_public_sequence_grants.sql',
+    '20261101140000_revoke_supabase_admin_sequence_default_acl.sql',
   ], 'combined verification must include every public migration in filename order');
   for (const migration of migrations) file(`supabase/migrations/${migration}`);
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
@@ -301,4 +305,9 @@ test('Technician availability is private and does not take booking locks', async
 test('My Jobs exposes the caller journey state without private issue text', () => {
   verifyMyJobsJourneyState({ sql, auth, quote, garageCreate, carePayload });
 });
-
+test('Public sequences grant nothing to browser roles and service_role identity inserts still work', () => {
+  verifySequenceGrantRevoke({ sql, quote });
+});
+test('Sequence default privileges: migration is safe for any runner, supabase_admin ops script and gate behave', () => {
+  verifySupabaseAdminSequenceDefaultAcl({ sql, quote });
+});
