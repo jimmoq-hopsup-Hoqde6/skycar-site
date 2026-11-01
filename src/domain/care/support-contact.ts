@@ -7,7 +7,9 @@ export const DEFAULT_SUPPORT_EMAIL = "info@skycar.au";
 
 export type SupportContact = { email: string | null; phone: string | null };
 
-const EMAIL = /^[^\s@<>"'`]+@[^\s@<>"'`]+\.[^\s@<>"'`]+$/;
+// Characters that could start a query string or add mailto: parameters (? and &) are rejected,
+// along with whitespace, a second @, quotes and angle brackets.
+const EMAIL = /^[^\s@<>"'`?&]+@[^\s@<>"'`?&]+\.[^\s@<>"'`?&]+$/;
 const PHONE = /^\+?[0-9][0-9 ()-]{4,22}[0-9]$/;
 
 export function readSupportContact(env: Record<string, string | undefined>): SupportContact {
