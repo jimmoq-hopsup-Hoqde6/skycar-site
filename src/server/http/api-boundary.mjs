@@ -12,6 +12,7 @@ export const API_ROUTE_TEMPLATES = Object.freeze({
   authSignIn: '/api/v1/auth/sign-in',
   authSignOut: '/api/v1/auth/sign-out',
   garageVehiclePhoto: '/api/v1/garage/vehicles/[vehicleId]/photo',
+  technicianAvailability: '/api/v1/technician/availability',
   technicianJobs: '/api/v1/technician/jobs',
   technicianJob: '/api/v1/technician/jobs/[jobId]',
   technicianCompletionPhotos: '/api/v1/technician/jobs/[jobId]/completion-photos',

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { careJobAction, careJobSummary, readCareJobsPage } from "../../src/domain/care/my-jobs.ts";
+import { careJobAction, careJobLink, careJobSummary, readCareJobsPage } from "../../src/domain/care/my-jobs.ts";
 
 const base = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -61,4 +61,24 @@ test("connected milestones outrank stale overdue and no-match projections", () =
   assert.match(careJobSummary({ ...stale, quote_state: "accepted", assignment_state: "reserved" }).detail, /not confirmed/);
   assert.equal(careJobSummary({ ...stale, quote_state: "accepted", assignment_state: "accepted", fulfilment_state: "scheduled" }).status, "Appointment confirmed");
   assert.equal(careJobSummary({ ...stale, quote_state: "accepted", assignment_state: "accepted", fulfilment_state: "completed" }).status, "Service complete");
+});
+
+test("recorded journey states outrank stale request projections", () => {
+  const confirmed = { ...base, quote_state: "accepted", assignment_state: "accepted", fulfilment_state: "scheduled", journey_state: "cancellation_requested", completion_review_state: null };
+  assert.equal(careJobSummary(confirmed).status, "Cancellation requested");
+  assert.match(careJobSummary(confirmed).detail, /holds the recorded appointment/);
+  assert.equal(careJobAction(confirmed), "Skycar cancellation review");
+  assert.equal(careJobLink(confirmed), "View cancellation request");
+  const paused = { ...base, fulfilment_state: "paused", journey_state: "in_progress", completion_review_state: null };
+  assert.equal(careJobSummary(paused).status, "Service paused");
+  const issue = { ...base, fulfilment_state: "completed", journey_state: "completed", completion_review_state: "issue_reported" };
+  assert.equal(careJobSummary(issue).status, "Completion issue reported");
+  assert.equal(careJobLink(issue), "View completion issue");
+  const waiting = { ...base, fulfilment_state: "completed", journey_state: "completed", completion_review_state: "awaiting_review" };
+  assert.equal(careJobAction(waiting), "Confirm completion or report an issue");
+  assert.equal(careJobLink(waiting), "Review completion");
+  const review = { ...base, customer_stage: "no_match", next_action: "choose_recovery", responsible_role: "customer", next_update_at: null, journey_state: "review", completion_review_state: null };
+  assert.equal(careJobSummary(review).status, "Request in review");
+  assert.throws(() => readCareJobsPage({ items: [{ ...base, journey_state: "booked" }], next_cursor: null, evaluated_at: "2026-09-20T13:30:00Z" }));
+  assert.throws(() => readCareJobsPage({ items: [{ ...base, journey_state: "scheduled", completion_review_state: "confirmed" }], next_cursor: null, evaluated_at: "2026-09-20T13:30:00Z" }));
 });
