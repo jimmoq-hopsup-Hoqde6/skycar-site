@@ -40,6 +40,8 @@ try {
       uploads.push(await Promise.all(files.map(async file => ({ type: file.type, size: file.size, hash: createHash("sha256").update(Buffer.from(await file.arrayBuffer())).digest("hex") }))));
       const outcome = photoMode(uploads.length);
       if (outcome === "abort") return route.abort("failed");
+      if (outcome === "limited") return route.fulfill({ status: 429, headers: { "Retry-After": "3" }, json: { error: { code: "RATE_LIMITED", message: "Too many photo uploads. Wait a little, then retry the same photos.", retryable: true } } });
+      if (outcome === "limited-no-header") return route.fulfill({ status: 429, json: { error: { code: "RATE_LIMITED", message: "Too many photo uploads. Wait a little, then retry the same photos.", retryable: true } } });
       if (outcome === "conflict") return route.fulfill({ status: 409, json: { error: { code: "INVALID_TRANSITION", message: "Photos can no longer be added to this request." } } });
       return route.fulfill({ status: 201, json: { data: { stored: files.length } } });
     });
@@ -110,7 +112,40 @@ try {
     assert.equal(uploads.length, 0);
   });
 
-  // 5. Responsive widths.
+  // 5. 429: server message, disabled retry with a countdown, then the same files are retried without a second create.
+  await scenario(n => (n === 1 ? "limited" : "ok"), async ({ page, creates, uploads }) => {
+    await page.getByLabel("Add damage photos").setInputFiles({ name: "front.jpg", mimeType: "image/jpeg", buffer: jpeg });
+    await page.getByRole("button", { name: "Remove photo 1" }).waitFor();
+    await submit(page);
+    await page.getByText("Photo upload limit reached").waitFor();
+    await page.getByText("Too many photo uploads. Wait a little, then retry the same photos.").waitFor();
+    const retry = page.getByRole("button", { name: /^Retry in \d+:\d\d$/ });
+    await retry.waitFor();
+    assert.equal(await retry.isDisabled(), true);
+    assert.equal((await retry.boundingBox()).height >= 44, true);
+    assert.equal(await page.getByRole("link", { name: "Continue to your request without photos" }).count(), 1);
+    await page.getByRole("button", { name: "Retry photo upload" }).waitFor({ timeout: 8000 });
+    assert.equal(uploads.length, 1, "no upload while the countdown runs");
+    await page.getByRole("button", { name: "Retry photo upload" }).click();
+    await page.waitForURL(`${origin}/care/requests/${requestId}`);
+    assert.equal(creates.length, 1); assert.equal(uploads.length, 2);
+    assert.deepEqual(uploads[0], uploads[1]);
+  });
+
+  // 5b. 429 without Retry-After: message shown, retry stays available (the server decides).
+  await scenario(n => (n === 1 ? "limited-no-header" : "ok"), async ({ page, creates, uploads }) => {
+    await page.getByLabel("Add damage photos").setInputFiles({ name: "front.jpg", mimeType: "image/jpeg", buffer: jpeg });
+    await page.getByRole("button", { name: "Remove photo 1" }).waitFor();
+    await submit(page);
+    await page.getByText("Photo upload limit reached").waitFor();
+    const retry = page.getByRole("button", { name: "Retry photo upload" });
+    assert.equal(await retry.isDisabled(), false);
+    await retry.click();
+    await page.waitForURL(`${origin}/care/requests/${requestId}`);
+    assert.equal(creates.length, 1); assert.deepEqual(uploads[0], uploads[1]);
+  });
+
+  // 6. Responsive widths.
   const context = await browser.newContext();
   const page = await context.newPage();
   await context.route("**/api/v1/garage/vehicles?*", route => route.fulfill({ json: { data: { items: [vehicle], nextCursor: null } } }));
@@ -120,5 +155,5 @@ try {
     await page.getByLabel("Add damage photos").waitFor({ state: "attached" });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `no horizontal scroll at ${width}`);
   }
-  console.log("PASS: signed-in request photos: 0-3 picker, JPEG/HEIC prepare, exact-byte retry without second create, saved-without-photos recovery, HEIC refusal, three widths");
+  console.log("PASS: signed-in request photos: 0-3 picker, JPEG/HEIC prepare, exact-byte retry without second create, 429 countdown retry, saved-without-photos recovery, HEIC refusal, three widths");
 } finally { if (browser) await browser.close(); server.kill("SIGTERM"); }
