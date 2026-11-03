@@ -155,3 +155,16 @@ export function careJobLink(item: CareRequestSummary) {
   if (journey === "quotes_ready" || connected === "quote_ready") return "Review quotes";
   return "Open service journey";
 }
+
+// Display-only photo hint. The server owns the count; the browser only formats it.
+// Missing, zero or malformed values yield no hint (never "no photos": old requests report 0).
+export function careJobPhotoHint(item: CareRequestSummary): { count: number | null; label: string } | null {
+  const count: unknown = item.photo_count;
+  const flag: unknown = item.has_photos;
+  if (flag === false) return null;
+  if (typeof count === "number" && Number.isInteger(count) && count >= 1 && count <= 3) {
+    return { count, label: count === 1 ? "1 photo sent" : `${count} photos sent` };
+  }
+  if (flag === true && (count === undefined || count === null)) return { count: null, label: "Photos sent" };
+  return null;
+}

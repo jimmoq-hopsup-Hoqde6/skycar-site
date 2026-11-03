@@ -13,6 +13,10 @@ export type CareRequestSummary = Omit<CareReceipt, "description" | "preferred_wi
   is_overdue: boolean;
   journey_state?: "review" | "quotes_ready" | "booking_requested" | "scheduled" | "in_progress" | "completed" | "cancellation_requested" | "cancelled" | null;
   completion_review_state?: "awaiting_review" | "confirmed" | "issue_reported" | null;
+  // Server-provided display hints. Optional: older deployments omit them, and requests photographed
+  // before the marker existed report 0 even if photos exist, so 0/absent must never be shown as "no photos".
+  photo_count?: number;
+  has_photos?: boolean;
 };
 export type CareListRows = {
   items: CareRequestSummary[];

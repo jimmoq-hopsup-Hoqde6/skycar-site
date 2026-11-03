@@ -257,8 +257,45 @@
   display: block;
 }
 .journey-private-photos figcaption {
-  font-size: 11px;
+  font-size: 14px;
   padding: 12px;
+}
+.journey-photo {
+  min-height: 90px;
+}
+.journey-photo-state {
+  display: grid;
+  gap: 8px;
+  align-content: center;
+  min-height: 90px;
+  padding: 10px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #c2d0dc;
+}
+.journey-photo-state button,
+.request-photos-retry {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.request-photos {
+  margin: 24px 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+}
+.request-photos h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
 }
 .journey-description {
   white-space: pre-wrap;

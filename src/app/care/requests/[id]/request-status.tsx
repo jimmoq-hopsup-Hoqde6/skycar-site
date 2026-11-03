@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CareReceipt } from "@/domain/care/request";
 import { eventLabels, readReceipt, statusSummary } from "@/domain/care/presentation";
 import { clearPendingCareRetry, readPendingCareRetry, savePendingCareRetry } from "@/domain/care/retry-recovery";
+import { RequestPhotos } from "@/features/care/journey/request-photos";
 import styles from "./status.module.css";
 
 const windows = { one_to_two_business_days: "1–2 business days", seven_to_fourteen_days: "7–14 days", flexible: "Flexible" };
@@ -152,6 +153,7 @@ export default function RequestStatus({ id }: { id: string }) {
         <section className={styles.panel} aria-labelledby="timeline"><h2 id="timeline">{summary.connected ? "Original request updates" : "Recorded updates"}</h2><ol className={styles.timeline}>{[...receipt.events].sort((a, b) => a.sequence - b.sequence).map(event => <li key={event.id}><strong>{eventLabels[event.type]}</strong><time dateTime={event.occurred_at}>{date(event.occurred_at)}</time></li>)}</ol>{receipt.events.length === 0 && <p>No updates were returned.</p>}</section>
         <section className={styles.panel} aria-labelledby="details"><h2 id="details">Your request</h2><dl><dt>Service</dt><dd>{receipt.service === "repair" ? "Repair" : "Cleaning"}</dd><dt>Preferred timing</dt><dd>{windows[receipt.preferred_window]} — preference only</dd><dt>What you told us</dt><dd className={styles.description}>{receipt.description}</dd><dt>Request reference</dt><dd className={styles.reference}>{receipt.id}</dd></dl><p className={styles.note}>{summary.connected ? "The connected service journey is the authoritative record for quotes, appointment confirmation and completion. No payment has been taken through Skycar." : "This receipt does not confirm a booking, technician, quote or payment."} Times are shown in your device’s local timezone.</p></section>
       </div>
+      <RequestPhotos key={id} id={id} />
     </>}
     <p className={styles.note}><Link href="/auth/sign-out">Sign out on this device</Link></p>
   </main>;

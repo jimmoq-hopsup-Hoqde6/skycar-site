@@ -4,7 +4,7 @@ import Link from "next/link";
 import { AppIcon } from "@/components/app-icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CareRequestSummary } from "@/domain/care/list";
-import { careJobAction, careJobLink, careJobSummary, journeyStateLabel, readCareJobsPage, type CareJobsPage } from "@/domain/care/my-jobs";
+import { careJobPhotoHint, careJobAction, careJobLink, careJobSummary, journeyStateLabel, readCareJobsPage, type CareJobsPage } from "@/domain/care/my-jobs";
 import { connectedCareStage } from "@/domain/care/presentation";
 import { garageApi, type Vehicle } from "@/features/garage/types";
 import "./my-jobs.css";
@@ -164,13 +164,14 @@ export function MyJobs() {
 
     {!!items.length && <section className="jobs-list" aria-label="Saved Care requests">
       {items.map(item => {
-        const summary = careJobSummary(item); const vehicle = vehicleMap.get(item.vehicle_id); const connected = connectedCareStage(item);
+        const photos = careJobPhotoHint(item); const summary = careJobSummary(item); const vehicle = vehicleMap.get(item.vehicle_id); const connected = connectedCareStage(item);
         return <article className={`job-card job-${summary.tone}`} key={item.id}>
           <div className="job-card-top"><span className="job-service">{item.service === "repair" ? "Repair" : "Cleaning"}</span><span className="job-status">{summary.status}</span></div>
           <h2>{vehicle ? vehicleName(vehicle) : "Your vehicle"}</h2>
           <p>{summary.detail}</p>
           <div className="job-next-action"><AppIcon name={item.responsible_role === "customer" ? "arrow" : "jobs"}/><div><span>WHAT HAPPENS NEXT</span><strong>{careJobAction(item)}</strong></div></div>
           {item.vehicle_archived && <span className="job-archived">Archived vehicle history</span>}
+          {photos && <p className="job-photos"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M4 8h3l2-2h6l2 2h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg><span>{photos.label}</span></p>}
           <dl><div><dt>Responsible</dt><dd>{item.journey_state === "cancellation_requested" ? "Skycar operations" : connected === "appointment_requested" ? "Skycar availability team" : item.responsible_role === "customer" ? "You" : "Skycar operations"}</dd></div>{journeyStateLabel(item) && <div><dt>Journey</dt><dd>{journeyStateLabel(item)}</dd></div>}<div><dt>{connected || item.journey_state ? "Journey updated" : item.is_overdue ? "Overdue since" : "Next update"}</dt><dd>{connected || item.journey_state ? displayDate(item.updated_at) : item.next_update_at ? displayDate(item.next_update_at) : "No update time committed"}</dd></div><div><dt>Submitted</dt><dd>{displayDate(item.created_at)}</dd></div></dl>
           <Link className="job-detail-link" href={`/care/journey/${encodeURIComponent(item.id)}`}>{careJobLink(item)} <span aria-hidden="true">→</span></Link>
         </article>;
