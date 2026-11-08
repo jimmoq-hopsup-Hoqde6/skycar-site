@@ -179,7 +179,7 @@ Needs Python 3 with `openpyxl`. The script holds the rule and the two LGA codes;
 
 One list, two readers. `src/server/care/coverage-areas.json` is authoritative. The database cannot read it, so a generated mirror is migrated: `supabase/migrations/20261101160000_care_service_coverage_enforcement.sql` creates `public.care_service_coverage(service, postcode)` and `care_service_coverage_meta(area_id, version)` and seeds them from the **same** `buildCoverageIndex()` the resolver uses (`scripts/coverage-data/build-coverage-migration.mjs`; the block between the `GENERATED COVERAGE SEED` markers). Both tables are RLS-enabled with every grant revoked (no browser, anon or service role can read or edit them); only the SECURITY DEFINER function `care_assert_postcode_covered(service, postcode)` (`search_path=''`) reads them.
 
-- **Authenticated:** `care_submit_request` takes a fifth key, `postcode` (`^[0-9]{4}$`; the legacy four-key shape remains valid for replay and, during the deploy window, create: see "Deploy order" below). Order: advisory lock → idempotency lookup (a replay returns the existing request with no area decision) → coverage → vehicle `FOR UPDATE` → policy → insert. An out-of-area request locks and writes nothing. Commands stored before the migration have no postcode and replay against the other four fields.
+- **Authenticated:** `care_submit_request` takes a fifth key, `postcode` (`^[0-9]{4}$`; the legacy four-key shape remains valid for replay and, until the sunset below, create). Order: advisory lock → idempotency lookup (a replay returns the existing request with no area decision) → coverage or legacy gate → vehicle `FOR UPDATE` → policy → insert. An out-of-area request locks and writes nothing. Commands stored before the migration have no postcode and replay against the other four fields. A legacy create is gated again after the insert and, only if that second check still passes, increments `care_legacy_create_audit` in the same transaction.
 - **Guest:** `care_submit_guest_request` runs the same check after its replay lookup and before the rate limits and insert. The route stores photos only after the function returns a receipt, so a rejected request does no Storage I/O (`src/server/care/guest-intake.mjs`).
 - **Errors:** `OUT_OF_AREA` (422, `retryable:false`), `COVERAGE_UNAVAILABLE` (503, `retryable:false`: the list is missing or empty for that service; nothing was submitted).
 - **Drift is a test failure:** `tests/unit/coverage-enforcement.test.mjs` compares the latest seed block with the JSON-derived one; `tests/integration/coverage-enforcement.acceptance.mjs` compares the live table with the JSON.
@@ -192,19 +192,63 @@ The signed-in payload changed from four keys to five (`postcode`). Neither deplo
 
 | Order | State | What happens |
 |---|---|---|
-| Migration first | new database, old app/stale tab sends four keys | `care_submit_request` accepts the legacy four-key shape. **Replay** of any existing key returns the original receipt (never `VALIDATION_FAILED`). **Create** is allowed while `public.care_service_coverage_compat.accept_legacy_create` is `true` (the default); that create has no postcode and is therefore **not** area-checked (a temporary, deliberate gap). |
+| Migration first | new database, old app/stale tab sends four keys | `care_submit_request` accepts the legacy four-key shape. **Replay** of any existing key returns the original receipt (never `VALIDATION_FAILED`). **Create** is allowed only while `care_legacy_create_open(clock_timestamp())` is true: the compat boolean is true, its row exists, and the clock is **strictly before** 2026-11-22 00:00 Australia/Adelaide (`2026-11-21T13:30:00Z`). That create has no postcode and is therefore **not** area-checked. It is counted. At the cap it is `VALIDATION_FAILED` and stores nothing, even if the boolean is still true. |
 | App first | new app sends five keys, old database | The old function rejects the fifth key as `VALIDATION_FAILED` and stores nothing. `careHandlers.submit` retries **once**, same idempotency key, with the four legacy keys (only for `VALIDATION_FAILED` on a payload that had a postcode; `OUT_OF_AREA`, `COVERAGE_UNAVAILABLE`, conflicts and outages are never retried). The form has already checked the area through `/api/v1/care/coverage`. Once the migration is applied the same key replays against the stored four-key command. |
 | Stale tab, new app | new app route, old browser JS | `careInput` accepts the four-key shape and forwards it unchanged (no postcode is invented). The database decides replay or create as above. |
 
-Replay compares the postcode only when both the stored command and the call carry one: four request fields otherwise. Two different postcodes under one key remain `IDEMPOTENCY_CONFLICT`.
+Replay compares the postcode only when both the stored command and the call carry one: four request fields otherwise. Two different postcodes under one key remain `IDEMPOTENCY_CONFLICT`. A replay never increments the legacy-create count. A present postcode is always area-checked; the sunset does not weaken that path.
 
-**Closing the window (required follow-up, not part of this migration).** After the app that sends the postcode has been live everywhere (no old tabs or workers), ship a NEW forward-only migration containing
+**Sunset (Backend & Security), forward-only.** `supabase/migrations/20261108120000_care_legacy_create_sunset.sql` is the close. It does not edit `20261101160000`. Apply it in filename order immediately after `20261101160000`, in the same maintenance window, before traffic uses a database that has only the boolean. Until `20261108120000` is applied, `accept_legacy_create = true` still has no clock and a signed-in caller can omit `postcode`.
+
+The boolean is not the sunset. It stays `true` so the compatibility path works until the cap. Backend & Security may close earlier, from a privileged session, with either statement:
 
 ```sql
 update public.care_service_coverage_compat set accept_legacy_create = false;
+update public.care_service_coverage_compat
+  set legacy_create_deadline = timestamptz '2026-11-21 13:30:00+00' - interval '1 second';
 ```
 
-and, in the same release, make `careInput` require `postcode` again and delete the retry in `careHandlers.submit`. After that a legacy-shaped call can only replay; a legacy create is `VALIDATION_FAILED`. If the switch row is ever missing, legacy creates are refused (fail closed). `care_service_coverage_compat` is RLS-enabled with every grant revoked, like the list tables.
+A deadline later than `2026-11-21T13:30:00Z` is rejected by `care_service_coverage_compat_deadline_cap`. The function also compares against that same instant, so dropping the constraint does not extend the window. A missing compat row, a null deadline, or a missing audit row fails closed for a legacy **create** only. Postcode creates do not read the audit row.
 
-`20261101160000` was revised in place, not superseded, because it has not been applied anywhere: it is not on `main` (`git merge-base --is-ancestor` of its commit against `origin/main` fails; only the coverage and integration branches contain it), and the staging install record (`docs/staging/V2_NINE_MIGRATION_INSTALL.md` section 11 at `ceaf6e8`, branch `docs/staging-nine-migration-checklist`) lists the ten files applied on 1 Nov 2026 (the nine at `18240dc` plus `20261101133000`); `20261101160000` is not among them. If it had been applied somewhere, this change would have to be a new migration instead.
+`care_legacy_create_audit` holds one row: `create_count`, `first_created_at`, `last_created_at`. No customer, vehicle, key or payload. RLS is enabled and not forced (the definer function runs as the table owner and must increment the row). `REVOKE ALL` from `public`, `anon`, `authenticated` and `service_role` is the customer boundary; `service_role` bypasses RLS and still has no grant. There is no sequence. A trigger rejects deletes, truncates and any update that is not `create_count + 1`. The migration owner can still disable that trigger; customers cannot. Creates that committed before `20261108120000` are not backfilled.
+
+The route retry stays in this change. On a database that has the sunset migration, a valid five-key body is not `VALIDATION_FAILED`, so the retry does not strip the postcode. A four-key create at or after the cap is `VALIDATION_FAILED` and is not retried, because the retry runs only when the first body had a postcode. Removing the retry and making `careInput` require `postcode` is a later change: it waits until every database has `20261101160000`, because an older function still rejects five keys and the retry is what keeps that deploy order working.
+
+**Why `20261101160000` was not edited.** It is not on `origin/main`. The staging install record `docs/staging/V2_NINE_MIGRATION_INSTALL.md` at `a1bd60c` (branch `docs/staging-nine-migration-checklist`, 2026-11-02) section 11 lists ten files applied on 1 Nov 2026 and does not include it. Section 12 lists it among eight files **not yet installed**, at blob `9a48a212` (`7f8071f`). The file on this branch is blob `837ba184` (`0eb3e74`), the same blob as `integration/week1-candidate` `ff2c941`. No later commit in this clone records an apply of either blob. Hosted staging and production were not read for this change, so live status is **not** claimed. The file's own comment still describes a manual `accept_legacy_create = false` follow-up; that comment is frozen with the file. This section is the current rule.
+
+### Closure verification
+
+Run this as the migration owner, not through the Data API. Do not grant the audit table or `care_legacy_create_open` to `anon`, `authenticated` or `service_role`.
+
+```sql
+select clock_timestamp() >= timestamptz '2026-11-21 13:30:00+00' as at_or_after_cap,
+       public.care_legacy_create_open(clock_timestamp()) as legacy_create_open,
+       accept_legacy_create,
+       legacy_create_deadline,
+       create_count, first_created_at, last_created_at
+from public.care_service_coverage_compat
+cross join public.care_legacy_create_audit;
+```
+
+Before the cap, `legacy_create_open` is true while the boolean is true. At and after the cap it is false. Then confirm a legacy create fails closed without changing the count. Use a disposable customer and roll the probe back:
+
+```sql
+begin;
+-- set local role authenticated; set the test customer's jwt sub; call care_submit_request
+-- with the four legacy keys and a fresh idempotency key.
+-- Expect VALIDATION_FAILED at or after the cap. create_count must be unchanged after rollback.
+rollback;
+```
+
+A five-key in-area create must still succeed, and a five-key out-of-area create must still be `OUT_OF_AREA`. Replay of a key that already exists must return the original receipt in both shapes.
+
+### QA probe expectations
+
+`/workspace/qa/repro/cov-srv/cov_probe.sh` is not in this repository (no tracked path on the fetched remotes, and the file is not on the machine that wrote this). It was not edited. QA recorded stale `VALIDATION_FAILED` expectations at lines 92 and 95. If those lines treat every signed-in body that omits `postcode` as `VALIDATION_FAILED`, that is stale. The corrected split is:
+
+- Replay of an existing key, four-key or five-key: the original receipt, never `VALIDATION_FAILED`, before and after the cap.
+- Legacy create before `2026-11-21T13:30:00Z` while the compat row exists and `accept_legacy_create` is true: success, no area check, audit count increases by one.
+- Legacy create at or after that instant, or with the boolean false, or with the compat or audit row missing: `VALIDATION_FAILED`, no new request, audit count unchanged.
+- A present postcode is area-checked (`OUT_OF_AREA` or `COVERAGE_UNAVAILABLE`), including after the cap.
+- A three-key body, or a four-key body plus an unknown key, remains `VALIDATION_FAILED`.
 

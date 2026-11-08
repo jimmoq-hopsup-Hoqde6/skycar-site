@@ -15,7 +15,7 @@ import { verifyTechnicianQuotes } from "./technician-quotes.acceptance.mjs";
 import { verifyTechnicianInbox } from "./technician-inbox.acceptance.mjs";
 import { verifyTechnicianAvailability } from "./technician-availability.acceptance.mjs";
 import { verifyMyJobsJourneyState } from "./my-jobs-journey-state.acceptance.mjs";
-import { verifyCoverageEnforcement } from "./coverage-enforcement.acceptance.mjs";
+import { proveLegacyBypassThenSunset, verifyCoverageEnforcement } from "./coverage-enforcement.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
@@ -119,9 +119,16 @@ before(() => {
     '20261101062300_technician_availability.sql',
     '20261101062400_my_jobs_journey_status.sql',
     '20261101160000_care_service_coverage_enforcement.sql',
+    '20261108120000_care_legacy_create_sunset.sql',
   ], 'combined verification must include every public migration in filename order');
-  for (const migration of migrations) file(`supabase/migrations/${migration}`);
+  const sunset = '20261108120000_care_legacy_create_sunset.sql';
+  for (const migration of migrations) {
+    if (migration === sunset) continue;
+    file(`supabase/migrations/${migration}`);
+  }
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
+  // Show the pre-fix bypass on 20261101160000 alone, then apply the sunset before any later test.
+  proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, file });
 });
 
 test('combined Garage and Care migrations preserve ownership, history, retries, races and atomic writes', async () => {
