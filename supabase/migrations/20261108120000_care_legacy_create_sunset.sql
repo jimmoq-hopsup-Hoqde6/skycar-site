@@ -131,10 +131,14 @@ comment on function public.care_legacy_create_open(timestamptz) is
 revoke all on function public.care_legacy_create_open(timestamptz) from public, anon, authenticated, service_role;
 
 -- Same signature, owner and grants as 20261101160000. Replay is still decided
--- before any coverage or legacy gate. A legacy create is gated before the
--- vehicle lock and again immediately before the audit increment, so a lock wait
--- that crosses the cap rolls the insert back. The increment is in this
--- transaction: a rollback keeps the previous count, a replay does not increment.
+-- before any coverage or legacy gate. The check before the vehicle lock is only
+-- a fast refusal: it must not be the one that commits. After the vehicle lock,
+-- the insert and the event, a legacy create locks the audit singleton and then
+-- the compat singleton (that order for every legacy create; early-close updates
+-- only the compat row, so it does not wait on the audit row). The clock sample
+-- and care_legacy_create_open both happen in the increment statement, after
+-- those waits. A wait that crosses the cap, or an early-close that commits
+-- during the wait, updates zero rows and the transaction rolls back.
 create or replace function public.care_submit_request(p_key uuid, p_payload jsonb) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
@@ -147,7 +151,6 @@ declare
   stored_core jsonb;
   incoming_core jsonb;
   at_time timestamptz := clock_timestamp();
-  legacy_at timestamptz;
 begin
   if p_key is null or p_payload is null or jsonb_typeof(p_payload) <> 'object' or
     not (p_payload ?& array['vehicle_id','service','description','preferred_window']) or
@@ -202,15 +205,21 @@ begin
   insert into public.care_request_commands values(actor, 'submit', p_key, normalized, request.id);
   perform public.care_append_event(request, 'request_received', at_time, actor);
   if not (normalized ? 'postcode') then
-    legacy_at := clock_timestamp();
-    if not public.care_legacy_create_open(legacy_at) then
+    perform 1 from public.care_legacy_create_audit where singleton for update;
+    if not found then
       raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
     end if;
-    update public.care_legacy_create_audit
-      set create_count = create_count + 1,
-          first_created_at = coalesce(first_created_at, legacy_at),
-          last_created_at = legacy_at
-      where singleton;
+    perform 1 from public.care_service_coverage_compat where singleton for update;
+    if not found then
+      raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
+    end if;
+    update public.care_legacy_create_audit as audit
+      set create_count = audit.create_count + 1,
+          first_created_at = coalesce(audit.first_created_at, sampled.at),
+          last_created_at = sampled.at
+      from (select clock_timestamp() as at) as sampled
+      where audit.singleton
+        and public.care_legacy_create_open(sampled.at);
     if not found then
       raise exception using errcode = 'P0001', message = 'VALIDATION_FAILED';
     end if;

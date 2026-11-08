@@ -121,9 +121,11 @@ test('20261101160000 is frozen and the legacy-create sunset is a later migration
   const covered = body.indexOf('care_assert_postcode_covered');
   const vehicle = body.indexOf('from public.vehicles where id');
   const inserted = body.indexOf('insert into public.care_requests');
-  const audit = body.indexOf('update public.care_legacy_create_audit');
-  assert.ok(replay > 0 && replay < gate && gate < vehicle && covered > 0 && covered < vehicle && vehicle < inserted && inserted < audit, 'replay, then gate, then vehicle lock, then insert, then the count');
-  assert.equal(body.includes('clock_timestamp()'), true);
+  const auditLock = body.indexOf('from public.care_legacy_create_audit where singleton for update');
+  const compatLock = body.indexOf('from public.care_service_coverage_compat where singleton for update');
+  const counted = body.indexOf('and public.care_legacy_create_open(sampled.at)');
+  assert.ok(replay > 0 && replay < gate && gate < vehicle && covered > 0 && covered < vehicle && vehicle < inserted && inserted < auditLock && auditLock < compatLock && compatLock < counted, 'replay, provisional gate, vehicle lock, insert, then audit lock, compat lock, and one fresh sample');
+  assert.equal(body.includes('legacy_at := clock_timestamp()'), false, 'the committed decision must not reuse a clock sample taken before the audit lock');
   assert.equal(/\bnow\(\)/.test(body), false, 'the gate uses clock_timestamp so an open transaction cannot outlive the cap');
 });
 

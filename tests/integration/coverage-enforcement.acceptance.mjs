@@ -69,6 +69,88 @@ export function proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, fi
   console.log(`PASS: ${checks} legacy-create proofs (pre-fix bypass without a deadline, then fail-closed expiry, replay, boundary and cap).`);
 }
 
+// Two sessions. One holds the audit singleton across a deadline and across an
+// early-close. The creator must already be waiting on that row before the
+// change, then fail closed with no count. A postcode create must not take the lock.
+export async function verifyLegacyAuditLockWait({ sql, quote, garageCreate, result }) {
+  let checks = 0;
+  const equal = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks += 1; };
+  assert.equal(sql(`select clock_timestamp() + interval '10 seconds' < timestamptz ${quote(CAP)}`), 't', 'this regression needs the clock more than 10 seconds before the hard cap');
+  const owner = randomUUID();
+  sql(`insert into auth.users(id) values (${quote(owner)});`);
+  const vehicle = garageCreate(owner, randomUUID(), 'Audit wait');
+  const other = garageCreate(owner, randomUUID(), 'Audit wait other');
+  const legacy = JSON.stringify({
+    vehicle_id: vehicle.id, service: 'repair', description: 'Scratch on rear bumper', preferred_window: 'flexible',
+  });
+  const five = JSON.stringify({
+    vehicle_id: other.id, service: 'repair', description: 'Scratch on rear bumper', preferred_window: 'flexible', postcode: '5000',
+  });
+  const count = () => sql('select create_count from public.care_legacy_create_audit');
+  const restore = () => sql(`update public.care_service_coverage_compat set accept_legacy_create = true, legacy_create_deadline = timestamptz ${quote(CAP)}`);
+  const sleeping = tag => sql(`select count(*) from pg_stat_activity where pid <> pg_backend_pid() and query like ${quote(`%${tag}%`)} and wait_event = 'PgSleep'`);
+  const locking = tag => sql(`select count(*) from pg_stat_activity where pid <> pg_backend_pid() and query like ${quote(`%${tag}%`)} and wait_event_type = 'Lock'`);
+  const until = async (predicate, label) => {
+    for (let attempt = 0; attempt < 250; attempt++) {
+      if (predicate()) return;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    throw new Error(label);
+  };
+  const refused = (outcome, label) => {
+    assert.equal(outcome.error !== undefined, true, label);
+    assert.match(outcome.output, /VALIDATION_FAILED/, label);
+    assert.doesNotMatch(outcome.output, /"replayed"/, label);
+    checks += 1;
+  };
+
+  restore();
+  const holdCap = `hold-cap-${randomUUID()}`;
+  const holderCap = result(`begin; select 1 from public.care_legacy_create_audit where singleton for update; select pg_sleep(8), ${quote(holdCap)}; commit;`);
+  await until(() => sleeping(holdCap) === '1', 'deadline holder did not keep the audit row');
+  sql(`update public.care_service_coverage_compat set accept_legacy_create = true, legacy_create_deadline = least(clock_timestamp() + interval '2 seconds', timestamptz ${quote(CAP)})`);
+  const storedDeadline = sql('select legacy_create_deadline from public.care_service_coverage_compat');
+  const beforeCap = count();
+  const waitCap = `wait-cap-${randomUUID()}`;
+  const keyCap = randomUUID();
+  const blockedCap = result(`begin; set local role authenticated; set local request.jwt.claim.sub = ${quote(owner)}; select public.care_submit_request(${quote(keyCap)}::uuid, ${quote(legacy)}::jsonb), ${quote(waitCap)}; rollback;`);
+  await until(() => locking(waitCap) === '1', 'creator did not wait on the audit row before the deadline');
+  await until(() => sql(`select clock_timestamp() >= ${quote(storedDeadline)}::timestamptz`) === 't', 'clock did not pass the stored deadline');
+  equal(sleeping(holdCap), '1', 'the audit row was still held when the stored deadline passed');
+  assert.equal((await holderCap).error, undefined);
+  refused(await blockedCap, 'waiting across the stored deadline fails closed');
+  equal(count(), beforeCap, 'a create that waited across the deadline is not counted');
+  equal(sql(`select count(*) from public.care_request_commands where idempotency_key = ${quote(keyCap)}::uuid`), '0', 'that create stored no command');
+
+  restore();
+  sql(`update public.care_service_coverage_compat set legacy_create_deadline = least(clock_timestamp() + interval '30 minutes', timestamptz ${quote(CAP)})`);
+  const holdClose = `hold-close-${randomUUID()}`;
+  const holderClose = result(`begin; select 1 from public.care_legacy_create_audit where singleton for update; select pg_sleep(5), ${quote(holdClose)}; commit;`);
+  await until(() => sleeping(holdClose) === '1', 'early-close holder did not keep the audit row');
+  const waitClose = `wait-close-${randomUUID()}`;
+  const keyClose = randomUUID();
+  const blockedClose = result(`begin; set local role authenticated; set local request.jwt.claim.sub = ${quote(owner)}; select public.care_submit_request(${quote(keyClose)}::uuid, ${quote(legacy)}::jsonb), ${quote(waitClose)}; rollback;`);
+  await until(() => locking(waitClose) === '1', 'creator did not wait before the early-close');
+  const fiveStarted = Date.now();
+  const fiveCreated = JSON.parse(sql(`begin; set local statement_timeout = '1000ms'; set local role authenticated; set local request.jwt.claim.sub = ${quote(owner)}; select public.care_submit_request(${quote(randomUUID())}::uuid, ${quote(five)}::jsonb); commit;`).split('\n')[0]);
+  equal(fiveCreated.replayed, false, 'a postcode create does not take the legacy audit lock');
+  assert.ok(Date.now() - fiveStarted < 1000, 'the postcode create did not wait out the audit holder');
+  checks += 1;
+  const closeStarted = Date.now();
+  sql('update public.care_service_coverage_compat set accept_legacy_create = false');
+  assert.ok(Date.now() - closeStarted < 1000, 'early-close does not wait on the audit row');
+  checks += 1;
+  equal(sleeping(holdClose), '1', 'early-close finished while the audit row was still held');
+  const beforeClose = count();
+  assert.equal((await holderClose).error, undefined);
+  refused(await blockedClose, 'an early-close that commits during the audit wait fails the waiter closed');
+  equal(count(), beforeClose, 'early-close during the wait does not count');
+  equal(sql(`select count(*) from public.care_request_commands where idempotency_key = ${quote(keyClose)}::uuid`), '0', 'the early-closed create stored no command');
+  restore();
+  equal(sql(`select accept_legacy_create::text || ',' || (legacy_create_deadline = timestamptz ${quote(CAP)})::text from public.care_service_coverage_compat`), 'true,true', 'the wait regression restores the cap and the boolean');
+  console.log(`PASS: ${checks} legacy-create audit-lock regressions (deadline crossed while waiting, early-close while waiting, postcode create does not take that lock).`);
+}
+
 export async function verifyCoverageEnforcement({ sql, auth, quote, garageCreate, result }) {
   let checks = 0;
   const equal = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks += 1; };
@@ -93,7 +175,9 @@ export async function verifyCoverageEnforcement({ sql, auth, quote, garageCreate
     ||','||(select count(*) from public.care_guest_requests)`);
   const asOwner = (statement, setup = '') => `begin; ${setup} set local role authenticated; set local request.jwt.claim.sub = ${quote(owner)}; ${statement}; rollback;`;
   equal(sql("select position('care_legacy_create_open' in pg_get_functiondef('public.care_submit_request(uuid,jsonb)'::regprocedure)) > 0"), 't', 'the sunset migration replaced care_submit_request');
+  equal(sql("select position('care_legacy_create_open(sampled.at)' in pg_get_functiondef('public.care_submit_request(uuid,jsonb)'::regprocedure)) > 0"), 't', 'the installed increment rechecks the clock after the locks');
   equal(sql(`select public.care_legacy_create_open(timestamptz ${quote(CAP)})`), 'f', 'installed predicate is closed at the cap');
+  await verifyLegacyAuditLockWait({ sql, quote, garageCreate, result });
 
   // 1. One list: the table is the JSON, not a second copy that can drift.
   const rows = sql('select service||\':\'||postcode from public.care_service_coverage order by 1').split('\n');
