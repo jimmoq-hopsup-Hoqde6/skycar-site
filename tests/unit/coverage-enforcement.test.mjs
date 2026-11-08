@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import data from '../../src/server/care/coverage-areas.json' with { type: 'json' };
 import { buildCoverageIndex, createCoverageResolver } from '../../src/server/care/coverage-resolver.ts';
@@ -93,6 +94,40 @@ test('frozen migrations that define the two functions are untouched', () => {
   const text = read('202609200002_care_requests.sql');
   assert.equal(text.includes('postcode'), false, 'the original submit function has no postcode: the change is a new forward-only migration');
   assert.equal(read('20261001030000_care_guest_requests.sql').includes('care_assert_postcode_covered'), false);
+});
+
+test('20261101160000 is frozen and the legacy-create sunset is a later migration', () => {
+  const frozen = read('20261101160000_care_service_coverage_enforcement.sql');
+  assert.equal(createHash('sha256').update(frozen).digest('hex'), '555cc1769ddcf019c991941bd8deea1f74f4b516c71ff6d7ec2f765f446e4f5e');
+  assert.equal(frozen.includes('legacy_create_deadline'), false);
+  assert.equal(frozen.includes('care_legacy_create_audit'), false);
+  const sunsetName = '20261108120000_care_legacy_create_sunset.sql';
+  assert.ok(migrations.includes(sunsetName));
+  assert.ok(sunsetName > '20261101160000_care_service_coverage_enforcement.sql');
+  assert.equal(sunsetName.includes('care_service_coverage'), false, 'a sunset file must not become the coverage seed');
+  const sunset = read(sunsetName);
+  assert.match(sunset, /2026-11-22 00:00:00 Australia\/Adelaide/);
+  assert.match(sunset, /2026-11-21 13:30:00\+00/);
+  assert.match(sunset, /LEGACY_CREATE_DEADLINE_TIMEZONE_MISMATCH/);
+  assert.match(sunset, /legacy_create_deadline <= timestamptz '2026-11-21 13:30:00\+00'/);
+  assert.match(sunset, /return p_at < least\(deadline, cap\)/);
+  assert.match(sunset, /revoke all on public\.care_legacy_create_audit from public, anon, authenticated, service_role/);
+  assert.match(sunset, /revoke all on function public\.care_legacy_create_open\(timestamptz\) from public, anon, authenticated, service_role/);
+  assert.match(sunset, /LEGACY_CREATE_AUDIT_TAMPER/);
+  assert.equal(sunset.includes('care_submit_guest_request'), false, 'guest intake already requires a postcode');
+  assert.equal(/drop\s+(table|function)/i.test(sunset), false);
+  const body = sunset.slice(sunset.indexOf('create or replace function public.care_submit_request'), sunset.indexOf('revoke all on function public.care_submit_request'));
+  const replay = body.indexOf("'replayed', true");
+  const gate = body.indexOf('care_legacy_create_open');
+  const covered = body.indexOf('care_assert_postcode_covered');
+  const vehicle = body.indexOf('from public.vehicles where id');
+  const inserted = body.indexOf('insert into public.care_requests');
+  const auditLock = body.indexOf('from public.care_legacy_create_audit where singleton for update');
+  const compatLock = body.indexOf('from public.care_service_coverage_compat where singleton for update');
+  const counted = body.indexOf('and public.care_legacy_create_open(sampled.at)');
+  assert.ok(replay > 0 && replay < gate && gate < vehicle && covered > 0 && covered < vehicle && vehicle < inserted && inserted < auditLock && auditLock < compatLock && compatLock < counted, 'replay, provisional gate, vehicle lock, insert, then audit lock, compat lock, and one fresh sample');
+  assert.equal(body.includes('legacy_at := clock_timestamp()'), false, 'the committed decision must not reuse a clock sample taken before the audit lock');
+  assert.equal(/\bnow\(\)/.test(body), false, 'the gate uses clock_timestamp so an open transaction cannot outlive the cap');
 });
 
 // ---- guest intake: reject before any Storage or photo I/O ---------------------------------------
