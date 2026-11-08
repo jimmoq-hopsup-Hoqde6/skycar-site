@@ -21,7 +21,7 @@ import { verifySequenceGrantRevoke } from "./sequence-grant-revoke.acceptance.mj
 import { verifySupabaseAdminSequenceDefaultAcl } from "./supabase-admin-sequence-default-acl.acceptance.mjs";
 import { verifyRequestPhotos } from "./request-photos.acceptance.mjs";
 import { verifyRequestPhotoMarker } from "./request-photo-marker.acceptance.mjs";
-import { verifyCoverageEnforcement } from "./coverage-enforcement.acceptance.mjs";
+import { proveLegacyBypassThenSunset, verifyCoverageEnforcement } from "./coverage-enforcement.acceptance.mjs";
 import { verifyCrossLockOrder } from "./week1-cross-lock-order.acceptance.mjs";
 import { verifyCrossLockStress } from "./week1-cross-lock-stress.acceptance.mjs";
 
@@ -133,9 +133,16 @@ before(() => {
     '20261101140000_revoke_supabase_admin_sequence_default_acl.sql',
     '20261101150000_request_photo_marker_legacy_state_and_cleanup.sql',
     '20261101160000_care_service_coverage_enforcement.sql',
+    '20261108120000_care_legacy_create_sunset.sql',
   ], 'combined verification must include every public migration in filename order');
-  for (const migration of migrations) file(`supabase/migrations/${migration}`);
+  const sunset = '20261108120000_care_legacy_create_sunset.sql';
+  for (const migration of migrations) {
+    if (migration === sunset) continue;
+    file(`supabase/migrations/${migration}`);
+  }
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
+  // Show the pre-fix bypass on 20261101160000 alone, then apply the sunset before any later test.
+  proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, file });
 });
 
 test('combined Garage and Care migrations preserve ownership, history, retries, races and atomic writes', async () => {
