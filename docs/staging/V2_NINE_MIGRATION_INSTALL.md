@@ -1,6 +1,6 @@
 # V2 nine-migration install: manifest, pre-migration checklist, post-migration verification, backup gap review
 
-> **Revision 8 (adds section 14: version mapping, week1-candidate delta, history-repair plan). Revision 7 (adds section 13: restore test of the logical export). Revision 6 (adds section 12: changed install set `60a48da`, pre-checks P9 to P11). Revision 5 (adds section 11: install results of 1 Nov 2026). Revision 4 (adds section 10: live staging inventory of 1 Nov 2026, the sequence-revoke migration `20261101133000` in the install set, and checklist items 14-15 with query P8). Revision 3 added section 9: pre-launch ops for request-photo uploads. Revision 2 added sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed.**
+> **Revision 9 (adds section 14.2.1: do not install the section 14.2 coverage blob; validated integration pins). Revision 8 (adds section 14: version mapping, week1-candidate delta, history-repair plan). Revision 7 (adds section 13: restore test of the logical export). Revision 6 (adds section 12: changed install set `60a48da`, pre-checks P9 to P11). Revision 5 (adds section 11: install results of 1 Nov 2026). Revision 4 (adds section 10: live staging inventory of 1 Nov 2026, the sequence-revoke migration `20261101133000` in the install set, and checklist items 14-15 with query P8). Revision 3 added section 9: pre-launch ops for request-photo uploads. Revision 2 added sections 6-8: staging inventory reconciliation, backup design proposal, why the 27-29 Sep runs failed.**
 >
 > **Status: documentation only. Nothing in this document has been executed against any hosted
 > database.** No migration has been applied, no workflow has been dispatched, and no secret or
@@ -1390,6 +1390,19 @@ All eight blobs read at `60a48da` (VERIFIED). Apply order is the repo version or
 | 8 | `20261101160000_care_service_coverage_enforcement.sql` | `9a48a2123fd7ed568a03091a1a4d842c375e7bba` | 14869 | `7f8071f` |
 
 Status: **`60a48da` is QA BLOCKED and will be superseded by a later candidate commit.** Nothing in this list is approved for installing; re-derive the list, the blobs and the order from the superseding commit, and re-run pre-checks P1 to P11, before use. `20261101063000` needs `btree_gist` (P9); `20261101130000` was skipped in section 11 and is in this set.
+
+### 14.2.1 Superseding pins (8 Nov 2026, repository evidence only; nothing applied)
+
+The table in 14.2 is the historical delta at `60a48da`. Row 8's blob `9a48a212` (`7f8071f`, 14869 bytes) has **no** `care_service_coverage_compat`. Do not install that blob.
+
+Validated `integration/week1-candidate` `ff2c94105e76a0412f47fa5a73b832a01f8df9ba`, read with `git rev-parse` on that commit (not from a hosted database):
+
+| File | Blob to use | Replaces |
+| --- | --- | --- |
+| `20261101150000_request_photo_marker_legacy_state_and_cleanup.sql` | `4d6c540c2961c1199575b55f955e70077d5db34f` | section 14.2 row 7 `a21d73d524a0a1ce6fbdd17ea8755d97100e3498` |
+| `20261101160000_care_service_coverage_enforcement.sql` | `837ba184cc5905e85961057d6ca028eed09156c9` | section 14.2 row 8 `9a48a212`. This blob is `0eb3e74` and includes the compat switch. |
+
+Apply `837ba184` immediately before `20261108120000_care_legacy_create_sunset.sql` (blob `de25cefcad5fcc837e84efe1e9a74422aa18adfc` at `6ccf1e16b9711d2dca6417de521ef1d45fff9d23` on `cursor/legacy-create-sunset-78bd`). Neither `4d6c540c` nor `837ba184` is edited by that sunset. This note does not record a hosted apply and does not approve an install.
 
 ### 14.3 Plan (NOT RUN): make hosted history match the repo filenames before production
 
