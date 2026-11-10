@@ -1,0 +1,10 @@
+import {readFileSync,mkdirSync} from 'node:fs';
+import {spawn} from 'node:child_process';
+const root=process.env.SKYCAR_LOCAL_STACK_DIR,source=process.env.SKYCAR_STORAGE_SOURCE;
+if(!root||!source||process.env.SKYCAR_LOCAL_API_TEST!=='1')throw new Error('Use the isolated local runner');
+const keys=JSON.parse(readFileSync(root+'/secrets.json','utf8'));
+mkdirSync(root+'/files',{recursive:true});
+const env={...process.env,NODE_ENV:'production',SERVER_HOST:'127.0.0.1',SERVER_PORT:'55436',SERVER_REGION:'local',TENANT_ID:'skycar-local-test',AUTH_JWT_SECRET:keys.jwtSecret,ANON_KEY:keys.anonKey,SERVICE_KEY:keys.serviceKey,AUTH_JWT_ALGORITHM:'HS256',DATABASE_URL:'postgresql://postgres@127.0.0.1:55433/skycar_api_test',DATABASE_POOL_URL:'',DB_INSTALL_ROLES:'false',DB_ALLOW_MIGRATION_REFRESH:'false',STORAGE_BACKEND:'file',STORAGE_FILE_BACKEND_PATH:root+'/files',STORAGE_S3_BUCKET:'skycar-local',UPLOAD_FILE_SIZE_LIMIT:'52428800',UPLOAD_FILE_SIZE_LIMIT_STANDARD:'52428800',IMAGE_TRANSFORMATION_ENABLED:'false',PG_QUEUE_ENABLE:'false',S3_PROTOCOL_ENABLED:'false',RATE_LIMITER_ENABLED:'false',LOGFLARE_ENABLED:'false',TRACING_ENABLED:'false',DEFAULT_METRICS_ENABLED:'false',LOG_LEVEL:'warn',EXPOSE_DOCS:'false'};
+const child=spawn(process.execPath,[source+'/dist/start/server.js'],{cwd:source,env,stdio:'inherit'});
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>child.kill(signal));
+child.on('exit',code=>process.exit(code??1));
