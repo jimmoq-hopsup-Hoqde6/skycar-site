@@ -10,6 +10,10 @@ const pg=process.env.SKYCAR_POSTGRES_BIN;
 const psql=pg+'/psql',db='postgresql://postgres@127.0.0.1:55433/skycar_api_test';
 const sql=q=>execFileSync(psql,[db,'-XqAt','-v','ON_ERROR_STOP=1','-c',q],{encoding:'utf8'}).trim();
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));let checks=0;
+const issueMode=process.env.SKYCAR_LOCAL_REVIEW_MODE==='issue';
+const reviewAction=issueMode?'report_completion_issue':'confirm_completion';
+const issueDetails='Synthetic inspection found the repaired surface still needs attention.';
+const reviewPayload=issueMode?{details:issueDetails}:{};
 const actors={};
 for(const [name,role]of [['customer','customer'],['stranger','customer'],['operator','admin'],['technician','technician']]){
  const email=`skycar-local-${name}@example.invalid`,password=randomBytes(24).toString('base64url');
@@ -71,10 +75,29 @@ await sleep(Math.max(0,start-Date.now()+200));
 await tech('start');
 await request(technician,`/api/v1/technician/jobs/${id}/completion-photos`,{method:'POST',form:form(),status:201});
 const completionKey=randomUUID();assert.equal((await tech('complete',{},completionKey)).data.replayed,false);assert.equal((await tech('complete',{},completionKey)).data.replayed,true);checks+=2;
-const reviewKey=randomUUID();await journey('confirm_completion',{},reviewKey);assert.equal((await journey('confirm_completion',{},reviewKey)).data.replayed,true);checks++;
+const reviewKey=randomUUID();
+if(issueMode){
+ const before=(await request(customer,`/api/v1/care/journey/${id}`)).data;
+ await request(customer,`/api/v1/care/journey/${id}`,{method:'POST',body:{action:reviewAction,payload:{details:'short'}},status:400});
+ await request(stranger,`/api/v1/care/journey/${id}`,{method:'POST',body:{action:reviewAction,payload:reviewPayload},status:404});
+ const unchanged=(await request(customer,`/api/v1/care/journey/${id}`)).data;
+ assert.equal(unchanged.revision,before.revision);assert.equal(unchanged.completion_review.state,'awaiting_review');checks+=2;
+}
+const reviewed=(await journey(reviewAction,reviewPayload,reviewKey)).data;
+assert.equal(reviewed.replayed,false);const replayed=(await journey(reviewAction,reviewPayload,reviewKey)).data;
+assert.equal(replayed.replayed,true);assert.equal(replayed.revision,reviewed.revision);checks+=3;
+if(issueMode){
+ const conflict=await request(customer,`/api/v1/care/journey/${id}`,{method:'POST',body:{action:reviewAction,payload:{details:'Different synthetic issue details must not replace the first report.'}},key:reviewKey,status:409});
+ assert.equal(conflict.json.error.code,'IDEMPOTENCY_CONFLICT');checks++;
+ const overwrite=await request(customer,`/api/v1/care/journey/${id}`,{method:'POST',body:{action:'confirm_completion',payload:{}},status:409});
+ assert.equal(overwrite.json.error.code,'INVALID_TRANSITION');checks++;
+ const counts=sql(`select (select count(*) from public.care_journey_events where journey_id='${id}' and type='completion_issue_reported'),(select count(*) from public.audit_events where resource_id='${id}' and action='care.report_completion_issue'),(select count(*) from public.care_journey_commands where journey_id='${id}' and action='report_completion_issue')`);
+ assert.equal(counts,'1|1|1');checks++;
+}
 const history=(await request(customer,`/api/v1/garage/vehicles/${vehicle.id}/history`)).data;
 const completed=history.items.filter(x=>x.event_type==='care_service_completed');assert.equal(completed.length,1);checks++;
-const snap=(await request(customer,`/api/v1/care/journey/${id}`)).data;assert.equal(snap.state,'completed');assert.equal(snap.completion_review.state,'confirmed');checks+=2;
+const snap=(await request(customer,`/api/v1/care/journey/${id}`)).data;assert.equal(snap.state,'completed');assert.equal(snap.completion_review.state,issueMode?'issue_reported':'confirmed');checks+=2;
+if(issueMode){assert.equal(snap.completion_review.issue_details,issueDetails);assert.equal(snap.revision,reviewed.revision);checks+=2;}
 const selected=snap.quotes.find(q=>q.id===snap.selected_quote_id);assert.equal(selected.total_price_cents,49500);assert.equal(selected.currency,'AUD');assert.equal(completed[0].payload.quote_id,snap.selected_quote_id);assert.deepEqual(snap.completion_photos,[1]);checks+=4;
 const completionPhoto=await request(customer,`/api/v1/care/journey/${id}/photos/1?kind=completion`);assert.deepEqual(completionPhoto.bytes,image);checks++;
 await request(stranger,`/api/v1/care/journey/${id}/photos/1?kind=completion`,{status:404});
@@ -89,7 +112,7 @@ for(const token of [secret.anonKey,strangerSession.access_token]){
 }
 // Change only disposable local fixture roles, then exercise actual app APIs.
 sql(`insert into public.user_roles(user_id,role)values('${customer.id}','technician')`);
-await request(customer,`/api/v1/care/journey/${id}`,{method:'POST',body:{action:'confirm_completion',payload:{}},key:reviewKey,status:404});
+await request(customer,`/api/v1/care/journey/${id}`,{method:'POST',body:{action:reviewAction,payload:reviewPayload},key:reviewKey,status:404});
 sql(`delete from public.user_roles where user_id='${customer.id}' and role='technician'`);
 sql(`delete from public.user_roles where user_id='${technician.id}' and role='technician'`);
 await request(technician,`/api/v1/technician/jobs/${id}`,{status:403});
@@ -101,5 +124,5 @@ await request(customer,'/api/v1/auth/sign-out',{method:'POST',body:{}});
 await request(customer,`/api/v1/care/journey/${id}`,{status:401});
 console.log('PASS real private-Storage denial, dual-role replay denial, revoked technician and account-switch boundaries');
 
-console.log(`PASS ${checks} genuine local HTTP/Auth/PostgREST/Storage/PostgreSQL journey assertions; no hosted or physical-device acceptance claimed`);
-writeFileSync(root+'/result.json',JSON.stringify({checks,status:'PASS',services:{auth:'real GoTrue',database:'real PostgreSQL',rest:'real PostgREST',storage:'real Supabase Storage'},hosted:false,physicalDevice:false},null,2));
+console.log(`PASS ${reviewAction}: ${checks} genuine local HTTP/Auth/PostgREST/Storage/PostgreSQL journey assertions; no hosted or physical-device acceptance claimed`);
+writeFileSync(root+'/result.json',JSON.stringify({checks,status:'PASS',reviewAction,services:{auth:'real GoTrue',database:'real PostgreSQL',rest:'real PostgREST',storage:'real Supabase Storage'},hosted:false,physicalDevice:false},null,2));

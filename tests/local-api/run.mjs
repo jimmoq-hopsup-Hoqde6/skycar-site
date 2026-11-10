@@ -6,6 +6,8 @@ import {fileURLToPath} from 'node:url';
 import {randomBytes,createHmac} from 'node:crypto';
 import net from 'node:net';
 if(process.env.SKYCAR_LOCAL_API_TEST!=='1')throw new Error('Set SKYCAR_LOCAL_API_TEST=1 to run disposable loopback services');
+const reviewMode=process.env.SKYCAR_LOCAL_REVIEW_MODE||'confirm';
+if(!['confirm','issue'].includes(reviewMode))throw new Error('SKYCAR_LOCAL_REVIEW_MODE must be confirm or issue');
 const fixture=dirname(fileURLToPath(import.meta.url)),repo=resolve(fixture,'../..');
 const root=mkdtempSync(tmpdir()+'/skycar-local-api-');
 const pg=process.env.SKYCAR_POSTGRES_BIN,authBin=process.env.SKYCAR_AUTH_BIN,postgrestBin=process.env.SKYCAR_POSTGREST_BIN,storageSource=process.env.SKYCAR_STORAGE_SOURCE;
@@ -19,7 +21,7 @@ const jwtSecret=randomBytes(48).toString('base64url');const enc=x=>Buffer.from(J
 const token=role=>{const payload=enc({alg:'HS256',typ:'JWT'})+'.'+enc({role,iss:'supabase-local',iat:Math.floor(Date.now()/1000),exp:Math.floor(Date.now()/1000)+7200});return payload+'.'+createHmac('sha256',jwtSecret).update(payload).digest('base64url');};
 const keys={jwtSecret,anonKey:token('anon'),serviceKey:token('service_role')};
 writeFileSync(root+'/secrets.json',JSON.stringify(keys),{mode:0o600});
-const cleanEnv={PATH:process.env.PATH,LANG:'C.UTF-8',TZ:'UTC',HOME:root,TMPDIR:root,SKYCAR_LOCAL_STACK_DIR:root,SKYCAR_LOCAL_API_TEST:'1',SKYCAR_POSTGRES_BIN:pg,SKYCAR_STORAGE_SOURCE:storageSource};
+const cleanEnv={PATH:process.env.PATH,LANG:'C.UTF-8',TZ:'UTC',HOME:root,TMPDIR:root,SKYCAR_LOCAL_STACK_DIR:root,SKYCAR_LOCAL_API_TEST:'1',SKYCAR_LOCAL_REVIEW_MODE:reviewMode,SKYCAR_POSTGRES_BIN:pg,SKYCAR_STORAGE_SOURCE:storageSource};
 const appEnv={SKYCAR_ENV:'demo',FEATURE_CARE:'true',FEATURE_GARAGE:'true',NEXT_PUBLIC_SUPABASE_URL:'http://127.0.0.1:55431',NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:keys.anonKey,SUPABASE_SECRET_KEY:keys.serviceKey,NEXT_TELEMETRY_DISABLED:'1'};
 const db='postgresql://postgres@127.0.0.1:55433/skycar_api_test';
 const children=[];let stopping=false;

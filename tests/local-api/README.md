@@ -46,6 +46,13 @@ SKYCAR_STORAGE_SOURCE=/absolute/path/to/built/storage-source \
 node tests/local-api/run.mjs
 ```
 
+Set `SKYCAR_LOCAL_REVIEW_MODE=issue` on a separate invocation to exercise the
+customer report-an-issue path instead of confirmation (default `confirm`).
+Issue mode checks invalid and cross-account reports, exact replay, changed-payload
+conflict, rejection of a later confirmation, preserved issue details, and one
+issue event/audit/command alongside exactly-once Garage history. Each invocation
+uses a fresh database and accounts. Run both modes for both review outcomes.
+
 The runner refuses occupied ports 3340, 55431 and 55433–55436, creates a fresh
 PostgreSQL cluster/database, installs real Auth and Storage schemas followed
 by all filename-ordered Skycar migrations, and launches loopback-only services.
