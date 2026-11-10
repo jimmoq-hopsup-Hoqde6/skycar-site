@@ -39,6 +39,13 @@ named `skycar_integration_test`:
 GARAGE_CARE_TEST_DATABASE_URL=postgresql://postgres:disposable_test_only@127.0.0.1:5432/skycar_integration_test node --test tests/integration/garage-care-db.test.mjs
 ```
 
+The shared guard requires a PostgreSQL client URL pointing to `localhost` or
+`127.0.0.1` and this exact disposable database name. It rejects query parameters,
+URL fragments and `PGHOSTADDR`/`PGSERVICE` routing overrides. PostgreSQL may
+report a non-loopback server interface when Docker forwards the client’s local
+port, as in CI; the guard therefore checks the client URL rather than
+`inet_server_addr()`. The seam separately verifies `current_database()`.
+
 The bootstrap also creates cluster-wide API roles. Use a fresh disposable cluster
 for each run, not just a new database in an already bootstrapped cluster.
 

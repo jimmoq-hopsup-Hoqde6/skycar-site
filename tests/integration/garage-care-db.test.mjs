@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { promisify } from "node:util";
+import { assertLocalIntegrationDatabase } from "./local-integration-database.mjs";
 import { verifyCareOffers } from "./care-offers.acceptance.mjs";
 import { verifyCareJourney } from "./care-journey.acceptance.mjs";
 import { verifyTechnicianCompletion } from "./technician-completion.acceptance.mjs";
@@ -29,10 +30,7 @@ const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
   throw new Error("GARAGE_CARE_TEST_DATABASE_URL is required; use a fresh disposable PostgreSQL database.");
 }
-const url = new URL(database);
-if (!['localhost', '127.0.0.1'].includes(url.hostname) || url.pathname !== '/skycar_integration_test') {
-  throw new Error('Refusing database tests: only local disposable skycar_integration_test is permitted.');
-}
+assertLocalIntegrationDatabase(database);
 
 const psqlArgs = [database, '-X', '-qAt', '-v', 'ON_ERROR_STOP=1'];
 const sql = statement => execFileSync('psql', [...psqlArgs, '-c', statement], { encoding: 'utf8' }).trim();
@@ -142,7 +140,7 @@ before(() => {
   }
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
   // Show the pre-fix bypass on 20261101160000 alone, then apply the sunset before any later test.
-  proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, file });
+  proveLegacyBypassThenSunset({ database, sql, auth, quote, garageCreate, file });
 });
 
 test('combined Garage and Care migrations preserve ownership, history, retries, races and atomic writes', async () => {
@@ -323,7 +321,7 @@ test('Technician availability is private and does not take booking locks', async
   await verifyTechnicianAvailability({ sql, quote, result, waitForQuery });
 });
 test('Server-side service-area enforcement rejects out-of-area requests for signed-in and guest bypass attempts', async () => {
-  await verifyCoverageEnforcement({ sql, auth, quote, garageCreate, result });
+  await verifyCoverageEnforcement({ database, sql, auth, quote, garageCreate, result });
 });
 test('care_journey_command takes locks in the canonical order for every action and never deadlocks', async () => {
   await verifyCareJourneyLockOrder({ sql, quote, result });

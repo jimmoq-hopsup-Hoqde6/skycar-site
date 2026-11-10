@@ -11,7 +11,7 @@ import { buildCoverageIndex } from '../../src/server/care/coverage-resolver.ts';
 // The UI and /api/v1/care/coverage are bypassed entirely.
 // The real predicate, hard cap, grants, lock order and snapshots remain in use.
 
-export function proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, file }) {
+export function proveLegacyBypassThenSunset({ database, sql, auth, quote, garageCreate, file }) {
   let checks = 0;
   const equal = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks += 1; };
   const fails = (statement, expected, label = expected) => {
@@ -44,7 +44,7 @@ export function proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, fi
   fails(auth(owner, submit(randomUUID(), withPostcode('5290'))), 'OUT_OF_AREA', 'pre-fix still rejects a present out-of-area postcode');
 
   file('supabase/migrations/20261108120000_care_legacy_create_sunset.sql');
-  const clock = installLegacySunsetTestClock({ sql, quote });
+  const clock = installLegacySunsetTestClock({ database, sql, quote });
   try {
     const pastDeadline = `update public.care_service_coverage_compat set legacy_create_deadline = least(${clock.now} - interval '1 microsecond', timestamptz ${quote(CAP)});`;
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { assertLocalIntegrationDatabase } from './local-integration-database.mjs';
 
 export const LEGACY_CAP = '2026-11-21 13:30:00+00';
 export const LEGACY_OPEN_AT = '2026-11-20 13:30:00+00';
@@ -29,9 +30,9 @@ export function substituteSunsetClock(definition) {
   return modified;
 }
 
-export function installLegacySunsetTestClock({ sql, quote }) {
+export function installLegacySunsetTestClock({ database, sql, quote }) {
+  assertLocalIntegrationDatabase(database);
   assert.equal(sql('select current_database()'), 'skycar_integration_test', 'test seam requires the disposable integration database');
-  assert.equal(sql("select inet_server_addr() in (inet '127.0.0.1', inet '::1')"), 't', 'test seam requires a loopback database');
   const definition = signature => sql(`select pg_get_functiondef(${quote(signature)}::regprocedure)`);
   const metadata = () => sql(`select jsonb_build_object('owner',proowner,'acl',proacl,'config',proconfig,'definer',prosecdef,'volatility',provolatile) from pg_proc where oid=${quote(SUBMIT)}::regprocedure`);
   const constraint = () => sql("select pg_get_constraintdef(oid) from pg_constraint where conrelid='public.care_service_coverage_compat'::regclass and conname='care_service_coverage_compat_deadline_cap'");

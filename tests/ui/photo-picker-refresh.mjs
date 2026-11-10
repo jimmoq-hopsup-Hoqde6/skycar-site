@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {test, before, after} from 'node:test';
+import {photoApiRoute} from './support/photo-api-route.mjs';
 const {chromium} = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const origin = 'http://127.0.0.1:3205';
 const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -26,6 +27,7 @@ async function fixture(role) {
   const page = await browser.newPage({viewport:{width:390, height:844}});
   page.setDefaultTimeout(5000);
   const errors = [];
+  const fixtureErrors = [];
   page.on('pageerror', error => errors.push(error.message));
   const current = {account:accountA, status:200, revision:0, malformed:false, hold:null, reads:0, posts:[], uploaded:0};
   const snapshot = () => role === 'customer' ? {
@@ -39,31 +41,61 @@ async function fixture(role) {
     own_quotes:[], completion_photos:Array.from({length:current.uploaded}, (_, index) => index + 1),
   };
   const path = role === 'customer' ? `/api/v1/care/journey/${id}` : `/api/v1/technician/jobs/${id}`;
-  await page.route(`**${path}**`, async route => {
-    if (route.request().method() === 'POST') {
-      const request = route.request();
-      const form = await new Response(request.postDataBuffer(), {headers:{'Content-Type':request.headers()['content-type']}}).formData();
-      const photos = form.getAll('photos');
-      current.posts.push(photos);
-      current.uploaded = photos.length;
-      return route.fulfill({json:{data:Object.hasOwn(current, 'postData') ? current.postData : {stored:photos.length}}, headers:{'X-Skycar-Account':current.account}});
-    }
-    if (route.request().url() !== origin + path) return route.fulfill({status:404, body:''});
-    current.reads++;
-    if (current.hold) await current.hold;
-    if (current.status === 0) return route.abort('failed');
-    return route.fulfill({status:current.status, json:current.status === 200 ? {data:current.malformed ? {} : snapshot()} : {error:{message:'Read access unavailable', retryable:current.status >= 500}}, headers:{'X-Skycar-Account':current.account}});
+  const uploadUrl = origin + path + (role === 'customer' ? '/photos' : '/completion-photos');
+  async function failRoute(route, error) {
+    const message = `${route.request().method()} ${route.request().url()}: ${error.message}`;
+    fixtureErrors.push(message);
+    console.error(`Photo API fixture failure: ${message}`);
+    await route.fulfill({status:500, json:{error:{message:`Photo fixture failure: ${message}`, retryable:false}}});
+  }
+  // Never let a missed synthetic API route silently reach the real demo endpoint.
+  await page.route(url => url.origin === origin && url.pathname.startsWith('/api/'),
+    route => failRoute(route, new Error('Unexpected API request outside the photo fixture')));
+  await page.route(photoApiRoute(origin, path), async route => {
+    try {
+      if (route.request().method() === 'POST') {
+        const request = route.request();
+        assert.equal(request.url(), uploadUrl, 'only the scoped photo endpoint accepts uploads');
+        const form = await new Response(request.postDataBuffer(), {headers:{'Content-Type':request.headers()['content-type']}}).formData();
+        const photos = form.getAll('photos');
+        assert.ok(photos.length >= 1 && photos.length <= 3, 'multipart upload contains the selected photos');
+        assert.deepEqual([...form.keys()], photos.map(() => 'photos'));
+        for (const photo of photos) {
+          assert.equal(photo.type, 'image/jpeg');
+          assert.ok(photo.size >= 128 && photo.size <= 900000);
+        }
+        const key = request.headers()['idempotency-key'];
+        if (role === 'customer') assert.match(key || '', /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i);
+        else assert.equal(request.headers()['x-skycar-account'], current.account);
+        current.posts.push({photos, key, url:request.url()});
+        current.uploaded = photos.length;
+        return route.fulfill({status:201, json:{data:Object.hasOwn(current, 'postData') ? current.postData : {stored:photos.length}}, headers:{'X-Skycar-Account':current.account}});
+      }
+      assert.equal(route.request().method(), 'GET');
+      if (route.request().url() !== origin + path) return route.fulfill({status:404, body:''});
+      current.reads++;
+      if (current.hold) await current.hold;
+      if (current.status === 0) return route.abort('failed');
+      return route.fulfill({status:current.status, json:current.status === 200 ? {data:current.malformed ? {} : snapshot()} : {error:{message:'Read access unavailable', retryable:current.status >= 500}}, headers:{'X-Skycar-Account':current.account}});
+    } catch (error) { await failRoute(route, error); }
   });
   await page.goto(`${origin}/${role === 'customer' ? 'care/journey' : 'technician/jobs'}/${id}`);
   await page.getByRole('heading', {name:`Synthetic ${accountA}`, exact:true}).waitFor();
-  const photo = Buffer.from(await page.evaluate(() => {
+  const photos = await page.evaluate(() => ['#2a8270', '#e28743'].map(color => {
     const canvas = document.createElement('canvas'); canvas.width = 96; canvas.height = 64;
-    const context = canvas.getContext('2d'); context.fillStyle = '#2a8270'; context.fillRect(0, 0, 96, 64);
+    const context = canvas.getContext('2d'); context.fillStyle = color; context.fillRect(0, 0, 96, 64);
     return canvas.toDataURL('image/png').split(',')[1];
-  }), 'base64');
-  const choose = () => page.getByLabel(role === 'customer' ? 'Add damage photos' : 'Add completion photos').setInputFiles({name:'camera.png', mimeType:'image/png', buffer:photo});
+  }));
+  const choose = (index = 0) => page.getByLabel(role === 'customer' ? 'Add damage photos' : 'Add completion photos').setInputFiles({name:`camera-${index}.png`, mimeType:'image/png', buffer:Buffer.from(photos[index], 'base64')});
   const save = page.getByRole('button', {name:role === 'customer' ? 'Save photos with request' : 'Save completion photos', exact:true});
   const refreshButton = page.getByRole('button', {name:role === 'customer' ? 'Refresh' : 'Refresh jobs', exact:true});
+  async function submit(button = save) {
+    await Promise.all([
+      page.waitForResponse(response => response.url() === uploadUrl && response.request().method() === 'POST'),
+      button.click(),
+    ]);
+    assert.deepEqual(fixtureErrors, [], 'photo API fixture handled and parsed the actual browser upload');
+  }
   async function refresh(event = 'focus') {
     const before = current.reads;
     await page.evaluate(event => {
@@ -80,10 +112,10 @@ async function fixture(role) {
         window.releasePhoto = () => { window.createImageBitmap = original; return original(...args).then(resolve, reject); };
       });
     });
-    await choose();
+    await choose(1);
     await page.getByText('Preparing photos…', {exact:true}).waitFor();
   }
-  return {page, current, errors, choose, save, refresh, refreshButton, deferPhoto};
+  return {page, current, errors, fixtureErrors, choose, save, submit, refresh, refreshButton, deferPhoto};
 }
 async function waitFor(predicate) {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 50)); }
@@ -109,11 +141,11 @@ for (const role of ['customer', 'technician']) {
         await f.refresh(event);
         assert.equal(await page.getByRole('button', {name:'Remove photo 1'}).count(), 1, `${event} preserves prepared photo`);
       }
-      await save.click();
+      await f.submit();
       await waitFor(() => current.posts.length === 1);
-      assert.equal(current.posts[0].length, 2);
-      assert.equal(current.posts[0][0].type, 'image/jpeg');
-      assert.ok(current.posts[0][0].size >= 128 && current.posts[0][0].size <= 900000);
+      assert.equal(current.posts[0].photos.length, 2);
+      assert.equal(current.posts[0].photos[0].type, 'image/jpeg');
+      assert.ok(current.posts[0].photos[0].size >= 128 && current.posts[0].photos[0].size <= 900000);
       assert.deepEqual(f.errors, []);
     } finally { await page.close(); }
   });
@@ -205,18 +237,22 @@ test('customer: an invalid upload receipt retains exact photos and request ident
   const f = await fixture('customer');
   try {
     await f.choose(); await f.page.getByRole('button', {name:'Remove photo 1'}).waitFor();
-    await f.choose(); await f.page.getByRole('button', {name:'Remove photo 2'}).waitFor();
+    await f.choose(1); await f.page.getByRole('button', {name:'Remove photo 2'}).waitFor();
     f.current.postData = {stored:1};
-    await f.save.click();
+    await f.submit();
     await f.page.getByRole('button', {name:'Check same action'}).waitFor();
     assert.equal(f.current.posts.length, 1);
     await f.refresh();
     delete f.current.postData;
-    await f.page.getByRole('button', {name:'Check same action'}).click();
+    await f.submit(f.page.getByRole('button', {name:'Check same action'}));
     await f.page.getByRole('button', {name:'Check same action'}).waitFor({state:'hidden'});
     assert.equal(f.current.posts.length, 2);
     const bytes = files => Promise.all(files.map(file => file.arrayBuffer()));
-    assert.deepEqual(await bytes(f.current.posts[1]), await bytes(f.current.posts[0]));
+    assert.equal(f.current.posts[1].key, f.current.posts[0].key, 'retry keeps its idempotency key');
+    assert.equal(f.current.posts[1].url, f.current.posts[0].url, 'retry keeps its request destination');
+    const original = await bytes(f.current.posts[0].photos);
+    assert.notDeepEqual(original[0], original[1], 'distinct selected images make order assertions meaningful');
+    assert.deepEqual(await bytes(f.current.posts[1].photos), original, 'retry keeps the exact ordered image bytes');
     assert.deepEqual(f.errors, []);
   } finally { await f.page.close(); }
 });
@@ -230,10 +266,10 @@ test('customer: a reloaded partial set exposes original-file recovery without al
     await f.choose(); await f.page.getByRole('button', {name:'Remove photo 1'}).waitFor();
     await f.deferPhoto(); await f.refresh(); await f.page.evaluate(() => window.releasePhoto());
     await f.page.getByRole('button', {name:'Remove photo 2'}).waitFor();
-    await f.page.getByRole('button', {name:'Retry original photo upload', exact:true}).click();
+    await f.submit(f.page.getByRole('button', {name:'Retry original photo upload', exact:true}));
     await f.page.getByRole('button', {name:'Retry an interrupted photo upload'}).waitFor();
     assert.equal(f.current.posts.length, 1);
-    assert.equal(f.current.posts[0].length, 2);
+    assert.equal(f.current.posts[0].photos.length, 2);
     assert.equal(await f.page.getByLabel('Add damage photos').count(), 0);
     assert.match(await f.page.locator('main').innerText(), /same browser and device/);
     assert.deepEqual(f.errors, []);

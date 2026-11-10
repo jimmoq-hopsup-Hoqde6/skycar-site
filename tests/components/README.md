@@ -64,6 +64,13 @@ to external test-only installations. It uses real browser image preparation and
 synthetic API routes. Native-device acceptance still needs an iPhone/Android
 camera or photo chooser.
 
+The browser fixture uses a URL predicate, not a trailing `id**` glob: Playwright
+1.55 (the CI pin) treats that glob as excluding `/photos` and other child paths,
+whereas 1.57 matches them. `node --test tests/unit/photo-picker-fixture.test.mjs`
+checks snapshots, child paths, and unrelated-origin/request exclusions without
+a browser. Unexpected API requests fail the fixture instead of reaching the
+real local endpoint; uploads still require parsed multipart image bytes.
+
 ## Request status and reopening recovery
 
 From the repository root, with the same test-only Happy DOM installation:

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readdirSync } from 'node:fs';
+import { assertLocalIntegrationDatabase } from './local-integration-database.mjs';
 import { verifyLegacyAuditLockWait } from './coverage-enforcement.acceptance.mjs';
 import { LEGACY_CAP, installLegacySunsetTestClock } from './legacy-sunset-test-clock.mjs';
 
@@ -10,10 +11,7 @@ import { LEGACY_CAP, installLegacySunsetTestClock } from './legacy-sunset-test-c
 // a fresh database; deliberately break only its disposable installed function.
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) throw new Error('GARAGE_CARE_TEST_DATABASE_URL is required.');
-const url = new URL(database);
-if (!['localhost', '127.0.0.1'].includes(url.hostname) || url.pathname !== '/skycar_integration_test') {
-  throw new Error('Refusing mutation test: only local disposable skycar_integration_test is permitted.');
-}
+assertLocalIntegrationDatabase(database);
 const args = [database, '-X', '-qAt', '-v', 'ON_ERROR_STOP=1'];
 const sql = statement => execFileSync('psql', [...args, '-c', statement], { encoding: 'utf8' }).trim();
 const quote = value => `'${String(value).replaceAll("'", "''")}'`;
@@ -48,7 +46,7 @@ test('the audit-wait regression detects broken post-lock checks', async t => {
     },
   ];
   for (const mutation of mutations) await t.test(mutation.name, async () => {
-    const clock = installLegacySunsetTestClock({ sql, quote });
+    const clock = installLegacySunsetTestClock({ database, sql, quote });
     try {
       const definition = sql("select pg_get_functiondef('public.care_submit_request(uuid,jsonb)'::regprocedure)");
       assert.equal(definition.split(recheck).length - 1, 1);
