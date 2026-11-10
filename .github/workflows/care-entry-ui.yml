@@ -27,12 +27,17 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Install pinned Playwright browser runner
         run: |
-          npm install --prefix "$RUNNER_TEMP/skycar-browser" --ignore-scripts --no-audit --no-fund playwright@1.55.0
+          npm install --prefix "$RUNNER_TEMP/skycar-browser" --ignore-scripts --no-audit --no-fund playwright@1.55.0 happy-dom@20.8.4
           "$RUNNER_TEMP/skycar-browser/node_modules/.bin/playwright" install --with-deps chromium
       - name: Build
         run: npm run build
         env:
           SKYCAR_ENV: demo
+      - name: Run mounted draft and authority regressions
+        run: |
+          export HAPPY_DOM_MODULE="$RUNNER_TEMP/skycar-browser/node_modules/happy-dom/lib/index.js"
+          node --test tests/components/*.test.mjs
+          node tests/ui/technician-availability-state.mjs
       - name: Run all customer browser regressions
         run: |
           export PLAYWRIGHT_MODULE="$RUNNER_TEMP/skycar-browser/node_modules/playwright/index.mjs"
@@ -50,6 +55,8 @@ jobs:
           node tests/ui/technician-quotes.mjs
           node tests/ui/technician-completion.mjs
           node tests/ui/customer-completion-review.mjs
+          node tests/ui/photo-picker-refresh.mjs
+          node tests/ui/technician-availability-refresh.mjs
           node tests/ui/care-connected-customer.mjs
           npm run start -- --hostname 127.0.0.1 -p 3100 > "$RUNNER_TEMP/skycar-garage.log" 2>&1 &
           server_pid=$!

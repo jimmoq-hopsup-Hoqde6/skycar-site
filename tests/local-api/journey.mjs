@@ -97,7 +97,13 @@ if(issueMode){
 const history=(await request(customer,`/api/v1/garage/vehicles/${vehicle.id}/history`)).data;
 const completed=history.items.filter(x=>x.event_type==='care_service_completed');assert.equal(completed.length,1);checks++;
 const snap=(await request(customer,`/api/v1/care/journey/${id}`)).data;assert.equal(snap.state,'completed');assert.equal(snap.completion_review.state,issueMode?'issue_reported':'confirmed');checks+=2;
-if(issueMode){assert.equal(snap.completion_review.issue_details,issueDetails);assert.equal(snap.revision,reviewed.revision);checks+=2;}
+if(issueMode){
+ assert.equal(snap.completion_review.issue_details,issueDetails);assert.equal(snap.revision,reviewed.revision);checks+=2;
+ const techView=await request(technician,`/api/v1/technician/jobs/${id}`);
+ assert.ok(!techView.text.includes(issueDetails));assert.ok(!techView.text.includes('issue_details'));checks+=2;
+ assert.ok(!JSON.stringify(snap.events).includes(issueDetails));assert.ok(!JSON.stringify(history).includes(issueDetails));checks+=2;
+ const unrelated=await request(stranger,`/api/v1/care/journey/${id}`,{status:404});assert.ok(!unrelated.text.includes(issueDetails));checks++;
+}
 const selected=snap.quotes.find(q=>q.id===snap.selected_quote_id);assert.equal(selected.total_price_cents,49500);assert.equal(selected.currency,'AUD');assert.equal(completed[0].payload.quote_id,snap.selected_quote_id);assert.deepEqual(snap.completion_photos,[1]);checks+=4;
 const completionPhoto=await request(customer,`/api/v1/care/journey/${id}/photos/1?kind=completion`);assert.deepEqual(completionPhoto.bytes,image);checks++;
 await request(stranger,`/api/v1/care/journey/${id}/photos/1?kind=completion`,{status:404});
@@ -110,10 +116,25 @@ const direct=await fetch(gateway+storagePath,{headers:{apikey:secret.serviceKey,
 for(const token of [secret.anonKey,strangerSession.access_token]){
  const denied=await fetch(gateway+storagePath,{headers:{apikey:secret.anonKey,authorization:`Bearer ${token}`}});const denial=await denied.json();assert.ok([400,401,403,404].includes(denied.status),'Storage denial must not be a server/proxy failure');assert.ok(['not_found','NoSuchKey','AccessDenied','Unauthorized','Forbidden'].includes(denial.error)||/not found|not authorized|permission|Unauthorized|Forbidden/i.test(denial.message||''),'Storage must return an explicit access/not-found error');checks++;
 }
-// Change only disposable local fixture roles, then exercise actual app APIs.
-sql(`insert into public.user_roles(user_id,role)values('${customer.id}','technician')`);
-await request(customer,`/api/v1/care/journey/${id}`,{method:'POST',body:{action:reviewAction,payload:reviewPayload},key:reviewKey,status:404});
-sql(`delete from public.user_roles where user_id='${customer.id}' and role='technician'`);
+// Compare durable state and ledger counts across current-authority denials.
+const reviewFingerprint=()=>sql(`select jsonb_build_object('journey',(select to_jsonb(j) from public.care_journeys j where id='${id}'),'events',(select jsonb_agg(to_jsonb(e) order by to_jsonb(e)::text) from public.care_journey_events e where journey_id='${id}'),'audit',(select jsonb_agg(to_jsonb(a) order by to_jsonb(a)::text) from public.audit_events a where resource_id='${id}'),'commands',(select jsonb_agg(to_jsonb(c) order by to_jsonb(c)::text) from public.care_journey_commands c where journey_id='${id}'))`);
+const beforeDenied=reviewFingerprint();
+for(const role of ['technician','admin','remove_customer']){
+ if(role==='remove_customer')sql(`delete from public.user_roles where user_id='${customer.id}' and role='customer'`);
+ else sql(`insert into public.user_roles(user_id,role)values('${customer.id}','${role}')`);
+ try{
+  for(const key of [reviewKey,randomUUID()]){
+   const denied=await request(customer,`/api/v1/care/journey/${id}`,{method:'POST',body:{action:reviewAction,payload:reviewPayload},key,status:404});
+   assert.equal(denied.json.error.code,'NOT_FOUND');assert.ok(!denied.text.includes(issueDetails));checks+=2;
+  }
+  assert.equal(reviewFingerprint(),beforeDenied,'denied current-authority attempts must not mutate journey or ledgers');checks++;
+ }finally{
+  if(role==='remove_customer')sql(`insert into public.user_roles(user_id,role)values('${customer.id}','customer')`);
+  else sql(`delete from public.user_roles where user_id='${customer.id}' and role='${role}'`);
+ }
+ assert.equal((await journey(reviewAction,reviewPayload,reviewKey)).data.replayed,true);checks++;
+ assert.equal(reviewFingerprint(),beforeDenied,'restored-authority exact replay must remain read-only');checks++;
+}
 sql(`delete from public.user_roles where user_id='${technician.id}' and role='technician'`);
 await request(technician,`/api/v1/technician/jobs/${id}`,{status:403});
 // Real cookie replacement and old-account command binding, not a mocked identity.

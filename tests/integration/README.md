@@ -29,3 +29,66 @@ frozen multi-page snapshot.
 This does not prove Supabase JWT verification, hosted Storage isolation,
 notification delivery, scheduled deadline monitoring or browser behaviour.
 Those remain distinct integration/release gates in #1/#8.
+
+## Combined Garage/Care acceptance and legacy sunset
+
+The full 27-migration suite uses a separate **fresh local PostgreSQL 17 database**
+named `skycar_integration_test`:
+
+```
+GARAGE_CARE_TEST_DATABASE_URL=postgresql://postgres:disposable_test_only@127.0.0.1:5432/skycar_integration_test node --test tests/integration/garage-care-db.test.mjs
+```
+
+The bootstrap also creates cluster-wide API roles. Use a fresh disposable cluster
+for each run, not just a new database in an already bootstrapped cluster.
+
+The legacy-create hard cap stays **2026-11-21T13:30:00Z**. Coverage tests must pass
+both before and after that wall-clock date without skipping the open-window
+cases. `legacy-sunset-test-clock.mjs` temporarily instruments only the two sunset
+decision clock expressions in the installed `care_submit_request` definition:
+its initial fast refusal and its post-lock increment. It does not replace the
+production predicate, cap, CHECK, grants, security mode, lock statements, or
+request/event timestamps. The installed submit and predicate bodies must match
+the production migration exactly before instrumentation. Missing, repeated or
+already instrumented clock sites fail rather than silently changing the seam.
+
+The private, API-inaccessible clock is a VOLATILE SQL function reading a test
+row. This lets another session advance it after `pg_stat_activity` proves a
+creator is waiting for the audit row. Every run tests:
+
+- Successful legacy creation one microsecond before the real cap, with telemetry.
+- Rejection exactly at and one microsecond after the cap, plus preserved replay,
+  in-area creation and out-of-area rejection.
+- An audit wait crossing an earlier stored deadline and the actual hard cap,
+  with no persisted request, command, event, outbox or audit effects.
+- An independently committed early-close while the creator waits. The original
+  STABLE predicate must see that update in the later post-lock SQL statement.
+- Postcode creation and early-close updates do not wait for the audit row.
+
+The fixture settles pending sessions and restores the original function in a
+`finally` block. It compares the restored definition and security metadata,
+checks the predicate and CHECK are unchanged, and removes/checks for test-clock
+residue. The rest of the combined suite runs the uninstrumented production
+function and uses postcode-bearing payloads. The earlier `care-db.test.mjs`
+intentionally tests only the first three migrations, before any sunset exists.
+
+This is a test-clock seam, not whole-system time travel: it proves the sunset
+branch's real predicates and concurrent SQL behavior at controlled instants.
+It does not simulate every timestamp in PostgreSQL or change the system clock.
+
+### Optional negative controls
+
+On another **fresh disposable cluster/database**, run:
+
+```
+GARAGE_CARE_TEST_DATABASE_URL=postgresql://postgres:disposable_test_only@127.0.0.1:5432/skycar_integration_test node --test tests/integration/legacy-sunset-mutation.test.mjs
+```
+
+This applies the actual migrations, validates/installs the seam, then deliberately
+breaks only the disposable installed submit function. It checks that the real
+regression rejects (1) a missing post-lock predicate and (2) a switch boolean
+cached before waiting, with deadline checks retained. Each negative control
+requires the specific incorrect *successful waiter* outcome, so a timeout,
+source-verification failure or unrelated SQL error cannot count as proof.
+The original function is restored after each mutation. No application code or
+migration is modified by these tests.

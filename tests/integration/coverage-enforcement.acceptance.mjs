@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
+import { LEGACY_CAP as CAP, LEGACY_OPEN_AT, LEGACY_BEFORE_CAP, LEGACY_AFTER_CAP, installLegacySunsetTestClock } from './legacy-sunset-test-clock.mjs';
 import { randomUUID } from 'node:crypto';
 import data from '../../src/server/care/coverage-areas.json' with { type: 'json' };
 import { buildCoverageIndex } from '../../src/server/care/coverage-resolver.ts';
 
 // Server-side service-area enforcement (migration 20261101160000 plus the legacy-create
 // sunset 20261108120000). proveLegacyBypassThenSunset runs first, on 160000 alone, and
-// applies the sunset. Everything below then calls the real functions as the roles a
-// scripted client would use, so the UI and /api/v1/care/coverage are bypassed entirely.
-const CAP = '2026-11-21 13:30:00+00';
+// applies the sunset. The coverage probes use the installed functions as API roles,
+// with only the two sunset decision clock expressions temporarily instrumented.
+// The UI and /api/v1/care/coverage are bypassed entirely.
+// The real predicate, hard cap, grants, lock order and snapshots remain in use.
 
 export function proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, file }) {
   let checks = 0;
@@ -30,7 +32,6 @@ export function proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, fi
   });
   const submit = (key, body) => `select public.care_submit_request(${quote(key)}::uuid, ${quote(body)}::jsonb)`;
   const asOwner = (statement, setup = '') => `begin; ${setup} set local role authenticated; set local request.jwt.claim.sub = ${quote(owner)}; ${statement}; rollback;`;
-  const pastDeadline = `update public.care_service_coverage_compat set legacy_create_deadline = least(clock_timestamp() - interval '1 microsecond', timestamptz ${quote(CAP)});`;
 
   equal(sql("select to_regclass('public.care_legacy_create_audit') is null"), 't', 'pre-fix has no legacy-create audit');
   equal(sql("select count(*) from information_schema.columns where table_schema='public' and table_name='care_service_coverage_compat' and column_name='legacy_create_deadline'"), '0', 'pre-fix has no deadline');
@@ -43,39 +44,49 @@ export function proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, fi
   fails(auth(owner, submit(randomUUID(), withPostcode('5290'))), 'OUT_OF_AREA', 'pre-fix still rejects a present out-of-area postcode');
 
   file('supabase/migrations/20261108120000_care_legacy_create_sunset.sql');
+  const clock = installLegacySunsetTestClock({ sql, quote });
+  try {
+    const pastDeadline = `update public.care_service_coverage_compat set legacy_create_deadline = least(${clock.now} - interval '1 microsecond', timestamptz ${quote(CAP)});`;
 
-  const replay = JSON.parse(sql(auth(owner, submit(key, legacy))).split('\n')[0]);
-  equal([replay.replayed, replay.request.id], [true, created.request.id], 'the pre-fix create replays after the sunset migration');
-  equal(sql('select create_count from public.care_legacy_create_audit'), '0', 'a create from before the sunset migration is not backfilled');
-  equal(sql(`select (timestamptz '2026-11-22 00:00:00 Australia/Adelaide') = timestamptz ${quote(CAP)}`), 't', 'Adelaide midnight is 2026-11-21T13:30:00Z');
-  equal(sql(`select legacy_create_deadline = timestamptz ${quote(CAP)} and accept_legacy_create from public.care_service_coverage_compat`), 't', 'the boolean stays true and the deadline is the cap');
-  equal(sql(`select public.care_legacy_create_open(timestamptz ${quote(CAP)} - interval '1 microsecond')`), 't', 'one microsecond before the cap is open');
-  equal(sql(`select public.care_legacy_create_open(timestamptz ${quote(CAP)})`), 'f', 'the cap instant is closed');
-  equal(sql(`select public.care_legacy_create_open(timestamptz ${quote(CAP)} + interval '1 microsecond')`), 'f', 'after the cap is closed');
-  equal(sql('select public.care_legacy_create_open(null)'), 'f', 'a null clock fails closed');
-  fails(asOwner(submit(randomUUID(), legacy), pastDeadline), 'VALIDATION_FAILED', 'the same legacy create fails closed once the deadline is in the past');
-  equal(JSON.parse(sql(asOwner(submit(key, legacy), pastDeadline)).split('\n')[0]).request.id, created.request.id, 'expiry does not turn a replay into a rejection');
-  equal(JSON.parse(sql(asOwner(submit(randomUUID(), withPostcode('5000')), pastDeadline)).split('\n')[0]).replayed, false, 'a past deadline does not block an in-area postcode');
-  fails(asOwner(submit(randomUUID(), withPostcode('5290')), pastDeadline), 'OUT_OF_AREA', 'a past deadline does not skip an out-of-area postcode');
-  equal(sql('select create_count from public.care_legacy_create_audit'), '0', 'expired and rolled-back probes do not count');
-  equal(sql(`select legacy_create_deadline = timestamptz ${quote(CAP)} from public.care_service_coverage_compat`), 't', 'deadline probes roll back to the cap');
-  fails(`begin; update public.care_service_coverage_compat set legacy_create_deadline = timestamptz ${quote(CAP)} + interval '1 microsecond'; commit;`, 'care_service_coverage_compat_deadline_cap', 'the deadline cannot be extended past the cap');
-  equal(sql(`select legacy_create_deadline = timestamptz ${quote(CAP)} from public.care_service_coverage_compat`), 't', 'a rejected extension leaves the cap in place');
-  if (sql('select public.care_legacy_create_open(clock_timestamp())') === 't') {
-    const rolled = JSON.parse(sql(asOwner(submit(randomUUID(), legacy))).split('\n')[0]);
-    equal(rolled.replayed, false, 'before the cap a legacy create still succeeds inside its transaction');
-    equal(sql('select create_count from public.care_legacy_create_audit'), '0', 'rolling that create back leaves the count unchanged');
-  }
+    const replay = JSON.parse(sql(auth(owner, submit(key, legacy))).split('\n')[0]);
+    equal([replay.replayed, replay.request.id], [true, created.request.id], 'the pre-fix create replays after the sunset migration');
+    equal(sql('select create_count from public.care_legacy_create_audit'), '0', 'a create from before the sunset migration is not backfilled');
+    equal(sql(`select (timestamptz '2026-11-22 00:00:00 Australia/Adelaide') = timestamptz ${quote(CAP)}`), 't', 'Adelaide midnight is 2026-11-21T13:30:00Z');
+    equal(sql(`select legacy_create_deadline = timestamptz ${quote(CAP)} and accept_legacy_create from public.care_service_coverage_compat`), 't', 'the boolean stays true and the deadline is the cap');
+    equal(sql(`select public.care_legacy_create_open(timestamptz ${quote(CAP)} - interval '1 microsecond')`), 't', 'one microsecond before the cap is open');
+    equal(sql(`select public.care_legacy_create_open(timestamptz ${quote(CAP)})`), 'f', 'the cap instant is closed');
+    equal(sql(`select public.care_legacy_create_open(timestamptz ${quote(CAP)} + interval '1 microsecond')`), 'f', 'after the cap is closed');
+    equal(sql('select public.care_legacy_create_open(null)'), 'f', 'a null clock fails closed');
+    fails(asOwner(submit(randomUUID(), legacy), pastDeadline), 'VALIDATION_FAILED', 'the same legacy create fails closed once the deadline is in the past');
+    equal(JSON.parse(sql(asOwner(submit(key, legacy), pastDeadline)).split('\n')[0]).request.id, created.request.id, 'expiry does not turn a replay into a rejection');
+    equal(JSON.parse(sql(asOwner(submit(randomUUID(), withPostcode('5000')), pastDeadline)).split('\n')[0]).replayed, false, 'a past deadline does not block an in-area postcode');
+    fails(asOwner(submit(randomUUID(), withPostcode('5290')), pastDeadline), 'OUT_OF_AREA', 'a past deadline does not skip an out-of-area postcode');
+    equal(sql('select create_count from public.care_legacy_create_audit'), '0', 'expired and rolled-back probes do not count');
+    equal(sql(`select legacy_create_deadline = timestamptz ${quote(CAP)} from public.care_service_coverage_compat`), 't', 'deadline probes roll back to the cap');
+    fails(`begin; update public.care_service_coverage_compat set legacy_create_deadline = timestamptz ${quote(CAP)} + interval '1 microsecond'; commit;`, 'care_service_coverage_compat_deadline_cap', 'the deadline cannot be extended past the cap');
+    equal(sql(`select legacy_create_deadline = timestamptz ${quote(CAP)} from public.care_service_coverage_compat`), 't', 'a rejected extension leaves the cap in place');
+    clock.set(LEGACY_BEFORE_CAP);
+    {
+      const rolled = JSON.parse(sql(asOwner(submit(randomUUID(), legacy))).split('\n')[0]);
+      equal(rolled.replayed, false, 'before the cap a legacy create still succeeds inside its transaction');
+      equal(sql('select create_count from public.care_legacy_create_audit'), '0', 'rolling that create back leaves the count unchanged');
+    }
+    for (const at of [CAP, LEGACY_AFTER_CAP]) {
+      clock.set(at);
+      fails(asOwner(submit(randomUUID(), legacy)), 'VALIDATION_FAILED', `legacy create is closed at ${at}`);
+      equal(JSON.parse(sql(asOwner(submit(key, legacy))).split('\n')[0]).request.id, created.request.id, `legacy replay survives ${at}`);
+      equal(sql('select create_count from public.care_legacy_create_audit'), '0', 'boundary probes leave no telemetry');
+    }
+  } finally { clock.restore(); }
   console.log(`PASS: ${checks} legacy-create proofs (pre-fix bypass without a deadline, then fail-closed expiry, replay, boundary and cap).`);
 }
 
 // Two sessions. One holds the audit singleton across a deadline and across an
 // early-close. The creator must already be waiting on that row before the
 // change, then fail closed with no count. A postcode create must not take the lock.
-export async function verifyLegacyAuditLockWait({ sql, quote, garageCreate, result }) {
+export async function verifyLegacyAuditLockWait({ sql, quote, garageCreate, result, clock }) {
   let checks = 0;
   const equal = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks += 1; };
-  assert.equal(sql(`select clock_timestamp() + interval '10 seconds' < timestamptz ${quote(CAP)}`), 't', 'this regression needs the clock more than 10 seconds before the hard cap');
   const owner = randomUUID();
   sql(`insert into auth.users(id) values (${quote(owner)});`);
   const vehicle = garageCreate(owner, randomUUID(), 'Audit wait');
@@ -104,54 +115,80 @@ export async function verifyLegacyAuditLockWait({ sql, quote, garageCreate, resu
     checks += 1;
   };
 
-  restore();
-  const holdCap = `hold-cap-${randomUUID()}`;
-  const holderCap = result(`begin; select 1 from public.care_legacy_create_audit where singleton for update; select pg_sleep(8), ${quote(holdCap)}; commit;`);
-  await until(() => sleeping(holdCap) === '1', 'deadline holder did not keep the audit row');
-  sql(`update public.care_service_coverage_compat set accept_legacy_create = true, legacy_create_deadline = least(clock_timestamp() + interval '2 seconds', timestamptz ${quote(CAP)})`);
-  const storedDeadline = sql('select legacy_create_deadline from public.care_service_coverage_compat');
-  const beforeCap = count();
-  const waitCap = `wait-cap-${randomUUID()}`;
-  const keyCap = randomUUID();
-  const blockedCap = result(`begin; set local role authenticated; set local request.jwt.claim.sub = ${quote(owner)}; select public.care_submit_request(${quote(keyCap)}::uuid, ${quote(legacy)}::jsonb), ${quote(waitCap)}; rollback;`);
-  await until(() => locking(waitCap) === '1', 'creator did not wait on the audit row before the deadline');
-  await until(() => sql(`select clock_timestamp() >= ${quote(storedDeadline)}::timestamptz`) === 't', 'clock did not pass the stored deadline');
-  equal(sleeping(holdCap), '1', 'the audit row was still held when the stored deadline passed');
-  assert.equal((await holderCap).error, undefined);
-  refused(await blockedCap, 'waiting across the stored deadline fails closed');
-  equal(count(), beforeCap, 'a create that waited across the deadline is not counted');
-  equal(sql(`select count(*) from public.care_request_commands where idempotency_key = ${quote(keyCap)}::uuid`), '0', 'that create stored no command');
+  const pending = [];
+  const start = statement => { const promise = result(statement); pending.push(promise); return promise; };
+  const traces = () => sql(`select (select count(*) from public.care_requests)||','||(select count(*) from public.care_request_commands)
+    ||','||(select count(*) from public.care_request_events)||','||(select count(*) from public.care_notification_outbox)
+    ||','||(select count(*) from public.audit_events)`);
+  try {
+    // First exercise an earlier stored deadline, then the real immutable hard cap.
+    // Advance only once pg_stat_activity proves the creator reached the audit lock.
+    for (const [label, deadline] of [['stored deadline', '2026-11-20 14:00:00+00'], ['hard cap', CAP]]) {
+      restore();
+      clock.set(LEGACY_OPEN_AT);
+      sql(`update public.care_service_coverage_compat set legacy_create_deadline = timestamptz ${quote(deadline)}`);
+      const holdCap = `hold-cap-${randomUUID()}`;
+      const holderCap = start(`begin; select 1 from public.care_legacy_create_audit where singleton for update; select pg_sleep(8), ${quote(holdCap)}; commit;`);
+      await until(() => sleeping(holdCap) === '1', `${label} holder did not keep the audit row`);
+      const beforeCap = count();
+      const beforeTraces = traces();
+      const waitCap = `wait-cap-${randomUUID()}`;
+      const keyCap = randomUUID();
+      const blockedCap = start(`begin; set local role authenticated; set local request.jwt.claim.sub = ${quote(owner)}; select public.care_submit_request(${quote(keyCap)}::uuid, ${quote(legacy)}::jsonb), ${quote(waitCap)}; rollback;`);
+      await until(() => locking(waitCap) === '1', `creator did not wait on the audit row before ${label}`);
+      clock.set(deadline);
+      equal(sql(`select ${clock.now} = timestamptz ${quote(deadline)}`), 't', `controlled clock reaches exact ${label}`);
+      equal(sleeping(holdCap), '1', `the audit row is still held at ${label}`);
+      assert.equal((await holderCap).error, undefined);
+      refused(await blockedCap, `waiting across ${label} fails closed`);
+      equal(count(), beforeCap, `a create that waited across ${label} is not counted`);
+      equal(traces(), beforeTraces, `${label} rejection rolls back request, command, event, outbox and audit rows`);
+      equal(sql(`select count(*) from public.care_request_commands where idempotency_key = ${quote(keyCap)}::uuid`), '0', 'that create stored no command');
+    }
 
-  restore();
-  sql(`update public.care_service_coverage_compat set legacy_create_deadline = least(clock_timestamp() + interval '30 minutes', timestamptz ${quote(CAP)})`);
-  const holdClose = `hold-close-${randomUUID()}`;
-  const holderClose = result(`begin; select 1 from public.care_legacy_create_audit where singleton for update; select pg_sleep(5), ${quote(holdClose)}; commit;`);
-  await until(() => sleeping(holdClose) === '1', 'early-close holder did not keep the audit row');
-  const waitClose = `wait-close-${randomUUID()}`;
-  const keyClose = randomUUID();
-  const blockedClose = result(`begin; set local role authenticated; set local request.jwt.claim.sub = ${quote(owner)}; select public.care_submit_request(${quote(keyClose)}::uuid, ${quote(legacy)}::jsonb), ${quote(waitClose)}; rollback;`);
-  await until(() => locking(waitClose) === '1', 'creator did not wait before the early-close');
-  const fiveStarted = Date.now();
-  const fiveCreated = JSON.parse(sql(`begin; set local statement_timeout = '1000ms'; set local role authenticated; set local request.jwt.claim.sub = ${quote(owner)}; select public.care_submit_request(${quote(randomUUID())}::uuid, ${quote(five)}::jsonb); commit;`).split('\n')[0]);
-  equal(fiveCreated.replayed, false, 'a postcode create does not take the legacy audit lock');
-  assert.ok(Date.now() - fiveStarted < 1000, 'the postcode create did not wait out the audit holder');
-  checks += 1;
-  const closeStarted = Date.now();
-  sql('update public.care_service_coverage_compat set accept_legacy_create = false');
-  assert.ok(Date.now() - closeStarted < 1000, 'early-close does not wait on the audit row');
-  checks += 1;
-  equal(sleeping(holdClose), '1', 'early-close finished while the audit row was still held');
-  const beforeClose = count();
-  assert.equal((await holderClose).error, undefined);
-  refused(await blockedClose, 'an early-close that commits during the audit wait fails the waiter closed');
-  equal(count(), beforeClose, 'early-close during the wait does not count');
-  equal(sql(`select count(*) from public.care_request_commands where idempotency_key = ${quote(keyClose)}::uuid`), '0', 'the early-closed create stored no command');
-  restore();
+    restore();
+    clock.set(LEGACY_OPEN_AT);
+    const holdClose = `hold-close-${randomUUID()}`;
+    const holderClose = start(`begin; select 1 from public.care_legacy_create_audit where singleton for update; select pg_sleep(5), ${quote(holdClose)}; commit;`);
+    await until(() => sleeping(holdClose) === '1', 'early-close holder did not keep the audit row');
+    const waitClose = `wait-close-${randomUUID()}`;
+    const keyClose = randomUUID();
+    const blockedClose = start(`begin; set local role authenticated; set local request.jwt.claim.sub = ${quote(owner)}; select public.care_submit_request(${quote(keyClose)}::uuid, ${quote(legacy)}::jsonb), ${quote(waitClose)}; rollback;`);
+    await until(() => locking(waitClose) === '1', 'creator did not wait before the early-close');
+    const fiveStarted = Date.now();
+    const fiveCreated = JSON.parse(sql(`begin; set local statement_timeout = '1000ms'; set local role authenticated; set local request.jwt.claim.sub = ${quote(owner)}; select public.care_submit_request(${quote(randomUUID())}::uuid, ${quote(five)}::jsonb); commit;`).split('\n')[0]);
+    equal(fiveCreated.replayed, false, 'a postcode create does not take the legacy audit lock');
+    assert.ok(Date.now() - fiveStarted < 1000, 'the postcode create did not wait out the audit holder');
+    checks += 1;
+    const closeStarted = Date.now();
+    // The unchanged STABLE predicate must see this independently committed update
+    // from its new post-lock SQL statement, not the creator's earlier snapshot.
+    sql('update public.care_service_coverage_compat set accept_legacy_create = false');
+    assert.ok(Date.now() - closeStarted < 1000, 'early-close does not wait on the audit row');
+    checks += 1;
+    equal(sleeping(holdClose), '1', 'early-close finished while the audit row was still held');
+    const beforeClose = count();
+    assert.equal((await holderClose).error, undefined);
+    refused(await blockedClose, 'an early-close that commits during the audit wait fails the waiter closed');
+    equal(count(), beforeClose, 'early-close during the wait does not count');
+    equal(sql(`select count(*) from public.care_request_commands where idempotency_key = ${quote(keyClose)}::uuid`), '0', 'the early-closed create stored no command');
+  } finally {
+    // Do not restore the function/clock while a failed probe still has a session.
+    await Promise.all(pending);
+    restore();
+    clock.set(LEGACY_OPEN_AT);
+  }
   equal(sql(`select accept_legacy_create::text || ',' || (legacy_create_deadline = timestamptz ${quote(CAP)})::text from public.care_service_coverage_compat`), 'true,true', 'the wait regression restores the cap and the boolean');
-  console.log(`PASS: ${checks} legacy-create audit-lock regressions (deadline crossed while waiting, early-close while waiting, postcode create does not take that lock).`);
+  console.log(`PASS: ${checks} legacy-create audit-lock regressions (stored deadline and hard cap crossed while waiting, committed early-close visible after waiting, postcode create does not take that lock).`);
 }
 
-export async function verifyCoverageEnforcement({ sql, auth, quote, garageCreate, result }) {
+export async function verifyCoverageEnforcement(context) {
+  const clock = installLegacySunsetTestClock(context);
+  try { await verifyCoverageWithClock({ ...context, clock }); }
+  finally { clock.restore(); }
+}
+
+async function verifyCoverageWithClock({ sql, auth, quote, garageCreate, result, clock }) {
   let checks = 0;
   const equal = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks += 1; };
   const fails = (statement, expected, label = expected) => {
@@ -177,7 +214,7 @@ export async function verifyCoverageEnforcement({ sql, auth, quote, garageCreate
   equal(sql("select position('care_legacy_create_open' in pg_get_functiondef('public.care_submit_request(uuid,jsonb)'::regprocedure)) > 0"), 't', 'the sunset migration replaced care_submit_request');
   equal(sql("select position('care_legacy_create_open(sampled.at)' in pg_get_functiondef('public.care_submit_request(uuid,jsonb)'::regprocedure)) > 0"), 't', 'the installed increment rechecks the clock after the locks');
   equal(sql(`select public.care_legacy_create_open(timestamptz ${quote(CAP)})`), 'f', 'installed predicate is closed at the cap');
-  await verifyLegacyAuditLockWait({ sql, quote, garageCreate, result });
+  await verifyLegacyAuditLockWait({ sql, quote, garageCreate, result, clock });
 
   // 1. One list: the table is the JSON, not a second copy that can drift.
   const rows = sql('select service||\':\'||postcode from public.care_service_coverage order by 1').split('\n');
@@ -187,6 +224,8 @@ export async function verifyCoverageEnforcement({ sql, auth, quote, garageCreate
 
   // 2. Nobody can read or edit the list over the API; only the definer functions read it.
   for (const role of ['anon', 'authenticated', 'service_role']) {
+    fails(`begin; set local role ${role}; select ${clock.now}`, 'permission denied', `${role} cannot call the test clock`);
+    fails(`begin; set local role ${role}; update legacy_sunset_test.clock set at = timestamptz ${quote(LEGACY_OPEN_AT)}`, 'permission denied', `${role} cannot control the test clock`);
     fails(`begin; set local role ${role}; select * from public.care_service_coverage`, 'permission denied');
     fails(`begin; set local role ${role}; delete from public.care_service_coverage`, 'permission denied');
     fails(`begin; set local role ${role}; insert into public.care_service_coverage_meta(area_id,version) values('x','y')`, 'permission denied');
@@ -300,13 +339,14 @@ export async function verifyCoverageEnforcement({ sql, auth, quote, garageCreate
   }
   fails(auth(owner, submit(newKey, legacyBody({ description: 'A different description here' }))), 'IDEMPOTENCY_CONFLICT', 'legacy-shaped retry with changed content');
   fails(auth(owner, submit(newKey, payload({ postcode: '5251' }))), 'IDEMPOTENCY_CONFLICT', 'a different postcode under a five-key command conflicts');
-  const pastDeadline = `update public.care_service_coverage_compat set legacy_create_deadline = least(clock_timestamp() - interval '1 microsecond', timestamptz ${quote(CAP)});`;
+  const pastDeadline = `update public.care_service_coverage_compat set legacy_create_deadline = least(${clock.now} - interval '1 microsecond', timestamptz ${quote(CAP)});`;
   fails(asOwner(submit(randomUUID(), legacyBody()), pastDeadline), 'VALIDATION_FAILED', 'legacy create fails closed when the deadline is already past');
   equal(sql('select create_count from public.care_legacy_create_audit'), '0', 'an expired legacy create is not counted');
   equal(sql(`select legacy_create_deadline = timestamptz ${quote(CAP)} from public.care_service_coverage_compat`), 't', 'the past-deadline probe rolls back');
   // 11c. Before the cap, and only then, a legacy create still stores a command without a postcode.
   // The boolean is not sufficient once the clock reaches the cap.
-  if (sql('select public.care_legacy_create_open(clock_timestamp())') === 't') {
+  clock.set(LEGACY_BEFORE_CAP);
+  {
     const legacyKey = randomUUID();
     const legacyCreated = JSON.parse(sql(auth(owner, submit(legacyKey, legacyBody()))).split('\n')[0]); persisted += 1;
     equal([legacyCreated.replayed, Object.keys(legacyCreated.request).includes('postcode')], [false, false], 'legacy create works before the cap');
@@ -317,10 +357,16 @@ export async function verifyCoverageEnforcement({ sql, auth, quote, garageCreate
     equal(JSON.parse(sql(auth(owner, submit(legacyKey, legacyBody()))).split('\n')[0]).replayed, true, 'legacy replay after the count');
     equal(sql('select create_count from public.care_legacy_create_audit'), '1', 'replay does not count again');
     legacyCreates = 1;
-  } else {
-    fails(auth(owner, submit(randomUUID(), legacyBody())), 'VALIDATION_FAILED', 'at or after the cap a true boolean does not allow a legacy create');
-    equal(sql('select create_count from public.care_legacy_create_audit'), '0', 'the expired create is not counted');
   }
+  for (const at of [CAP, LEGACY_AFTER_CAP]) {
+    clock.set(at);
+    fails(auth(owner, submit(randomUUID(), legacyBody())), 'VALIDATION_FAILED', `a true boolean does not allow a legacy create at ${at}`);
+    equal(sql('select create_count from public.care_legacy_create_audit'), '1', 'the expired create is not counted');
+    equal(JSON.parse(sql(asOwner(submit(oldKey, legacyBody()))).split('\n')[0]).replayed, true, 'legacy replay survives the cap');
+    equal(JSON.parse(sql(asOwner(submit(randomUUID(), payload()))).split('\n')[0]).replayed, false, 'postcode create survives the cap');
+    fails(asOwner(submit(randomUUID(), payload({ postcode: outside[0] }))), 'OUT_OF_AREA', 'postcode coverage still applies after the cap');
+  }
+  clock.set(LEGACY_BEFORE_CAP);
   // 11d. the switch closes (and fails closed when its row is gone) for CREATION only; the 5-key path is unaffected.
   for (const [label, setup] of [['closed', closed], ['row missing', 'delete from public.care_service_coverage_compat;']]) {
     fails(asOwner(submit(randomUUID(), legacyBody()), setup), 'VALIDATION_FAILED', `legacy create refused: switch ${label}`);
@@ -353,7 +399,7 @@ export async function verifyCoverageEnforcement({ sql, auth, quote, garageCreate
   }
   const lockedOut = await result(asOwner(submit(randomUUID(), payload({ postcode: outside[0] })), "set local lock_timeout='400ms';"));
   assert.match(lockedOut.output, /OUT_OF_AREA/); assert.doesNotMatch(lockedOut.output, /lock timeout/); checks += 2;
-  const lockedLegacy = await result(asOwner(submit(randomUUID(), legacyBody()), `update public.care_service_coverage_compat set legacy_create_deadline = least(clock_timestamp() - interval '1 microsecond', timestamptz ${quote(CAP)}); set local lock_timeout='400ms';`));
+  const lockedLegacy = await result(asOwner(submit(randomUUID(), legacyBody()), `update public.care_service_coverage_compat set legacy_create_deadline = least(${clock.now} - interval '1 microsecond', timestamptz ${quote(CAP)}); set local lock_timeout='400ms';`));
   assert.match(lockedLegacy.output, /VALIDATION_FAILED/); assert.doesNotMatch(lockedLegacy.output, /lock timeout/); checks += 2;
   const lockedIn = await result(asOwner(submit(randomUUID(), payload()), "set local lock_timeout='400ms';"));
   assert.match(lockedIn.output, /lock timeout/); checks += 1;

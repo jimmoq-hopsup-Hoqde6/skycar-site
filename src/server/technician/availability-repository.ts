@@ -1,7 +1,7 @@
 import 'server-only';
 import { createSupabaseServerClient, createSupabaseTrustedServerClient } from '@/server/supabase/server';
 import { featureEnabled } from '@/server/env';
-import { availabilityFault } from './availability-http.mjs';
+import { availabilityFault, availabilityWriteFault } from './availability-http.mjs';
 
 async function sessionAccess(expectedAccount?: string) {
   if (!featureEnabled('CARE')) throw availabilityFault('UNAVAILABLE');
@@ -39,6 +39,6 @@ export async function replaceTechnicianAvailability(
     p_expected_revision: command.expectedRevision,
     p_payload: command.payload,
   });
-  if (result.error) faultFrom(result.error);
+  if (result.error) throw availabilityWriteFault(result.error);
   return { account: actor, data: result.data };
 }

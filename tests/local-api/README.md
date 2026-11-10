@@ -52,6 +52,10 @@ Issue mode checks invalid and cross-account reports, exact replay, changed-paylo
 conflict, rejection of a later confirmation, preserved issue details, and one
 issue event/audit/command alongside exactly-once Garage history. Each invocation
 uses a fresh database and accounts. Run both modes for both review outcomes.
+Both modes deny fresh and replayed review commands after dual-role or customer-role
+revocation and verify unchanged durable state and ledger rows, then verify
+restored-authority replay. Issue mode also checks that technician projections,
+events, history and unrelated-account errors do not expose the issue text.
 
 The runner refuses occupied ports 3340, 55431 and 55433–55436, creates a fresh
 PostgreSQL cluster/database, installs real Auth and Storage schemas followed
