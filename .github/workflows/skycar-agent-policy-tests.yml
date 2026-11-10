@@ -1,9 +1,17 @@
 name: Skycar autonomous routing policy tests
-# Manual-only. Does not run an AI model, access secrets, or change code.
+# PR-triggered, read-only policy verification. Never runs an AI model or accesses secrets.
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/skycar-agent-policy-tests.yml'
+      - 'scripts/autonomy/**'
+      - 'tests/autonomy/**'
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: skycar-policy-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   policy-tests:
     runs-on: ubuntu-latest
