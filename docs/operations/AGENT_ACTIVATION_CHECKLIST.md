@@ -20,8 +20,15 @@ Run nine role-scoped agents as independent, auditable jobs controlled by GitHub 
 ## Current blockers
 - Codex CI runner and credentials are not verified.
 - Current branch protection/rulesets, cost cap and secret scope have not been verified.
-- PR #92 is draft and workflows are not on main; do not claim active background coding.
+- PR #92 is open and currently marked ready for review (not merged); its manual-only workflows are not on main, so they cannot be dispatched yet. Do not claim active background coding.
 - Existing PR #84 remains a review candidate, not an integration approval.
 
 ## Policy
 Do not merge, deploy, modify hosted databases, access customer data, activate payments, contact customers, change branch protection, or modify secrets automatically. Block on QA/Security failures. Require Product Owner approval for protected actions.
+
+## 11 November 2026 — read-only verification checkpoint
+- PR #92 head `a2fff75d1b7c7e3d679702bb3a7f12da44f8acab` is open and unmerged; no submitted reviews were returned. Existing Skycar CI passed on the head in [run 42728300983](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/actions/runs/42728300983); that is NOT evidence an AI executor ran.
+- GitHub's main-branch snapshot reports `protected: true` and 10 required CI contexts, but the integration cannot read the full branch-protection endpoint (HTTP 403); protection enforcement and bypass permissions need an admin read before activation.
+- GitHub requires `workflow_dispatch` files to be on the default branch to be runnable; the three manual-only PR #92 pilots therefore cannot be launched from the current unmerged state. [GitHub documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch).
+- A separate narrowly scoped proposal adds a `pull_request` trigger to existing no-secret policy tests so the nine-role routing test can produce CI evidence before main changes. It does not enable Codex, expense-bearing calls, write permissions or a schedule.
+- Before any unattended coding, confirm restricted runner credentials, OpenAI project budget hard stop, operator kill switch, isolation, independent QA/Security gates and human authorization; then run one narrowly scoped agent draft-PR pilot.
