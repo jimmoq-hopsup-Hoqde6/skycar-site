@@ -1,0 +1,53 @@
+# REVIEW ONLY: outside .github/workflows; cannot run until separately activated.
+name: Skycar approved one-task coding test
+on:
+  workflow_dispatch:
+    inputs:
+      execute_paid_test:
+        description: 'Execute exactly one paid test after separate owner cost approval'
+        type: boolean
+        default: false
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: skycar-one-task-coding-pilot
+  cancel-in-progress: false
+jobs:
+  pilot:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    environment: skycar-agent-pilot
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: f10a36fe98961dc1dcfbace37d9323752e1f3ffe
+          persist-credentials: false
+      - name: Offline preflight (no credential)
+        run: >-
+          python3 scripts/autonomy/bounded_coding_pilot.py
+          --sha f10a36fe98961dc1dcfbace37d9323752e1f3ffe --budget-cents 100
+      - name: Install pinned SDK (no credential)
+        if: inputs.execute_paid_test
+        run: python3 -m pip install -r scripts/autonomy/requirements-pilot.txt
+      - name: One separately approved paid task
+        if: inputs.execute_paid_test
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: >-
+          python3 scripts/autonomy/bounded_coding_pilot.py
+          --sha f10a36fe98961dc1dcfbace37d9323752e1f3ffe --budget-cents 100
+          --execute --request-fingerprint 5f1b42e91c8178b79385f3394a3b9de986fab8cd5d463b7c926a308512dfbb56
+          --output "$RUNNER_TEMP/pilot-evidence"
+      - name: Preserve execution evidence
+        if: always() && inputs.execute_paid_test
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: skycar-coding-pilot-evidence
+          path: ${{ runner.temp }}/pilot-evidence
+          retention-days: 7
+          if-no-files-found: warn
+# No schedule, push/PR trigger, write token, automatic publication or deployment.
+# Inputs and first-attempt guard are NOT durable one-use authorization.
+# Every dispatch needs owner approval and prior-run cleanup/billing reconciliation.
