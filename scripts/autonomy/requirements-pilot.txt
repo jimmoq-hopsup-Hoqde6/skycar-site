@@ -1,0 +1,2 @@
+# Pinned public SDK. No install required for the offline unit tests/preflight.
+openai==3.49.0

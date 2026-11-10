@@ -1,0 +1,52 @@
+# INERT TEMPLATE: not a GitHub workflow. Activating requires owner approval,
+# independently reviewed exact code SHA, protected environment, verified key scope,
+# billing limit approval, and reconciliation of any existing pilot run.
+name: Skycar one-task coding pilot
+on:
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: 'Full independently reviewed commit SHA'
+        required: true
+        type: string
+      request_fingerprint:
+        description: 'Offline preflight fingerprint reviewed by owner'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: skycar-one-task-coding-pilot
+  cancel-in-progress: false
+jobs:
+  pilot:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    environment: skycar-agent-pilot # Must exist with owner approval required.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.approved_sha }}
+          persist-credentials: false
+      - name: Install pinned public SDK (no API credential yet)
+        run: python3 -m pip install -r scripts/autonomy/requirements-pilot.txt
+      - name: Execute one approved task, artifact only
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          REQUEST_FINGERPRINT: ${{ inputs.request_fingerprint }}
+        run: >-
+          python3 scripts/autonomy/bounded_coding_pilot.py
+          --sha "$APPROVED_SHA" --budget-cents 100
+          --execute --request-fingerprint "$REQUEST_FINGERPRINT" --output "$RUNNER_TEMP/pilot-evidence"
+      - name: Preserve evidence even when blocked
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: skycar-coding-pilot-evidence
+          path: ${{ runner.temp }}/pilot-evidence
+          retention-days: 7
+          if-no-files-found: warn
+# No schedule, PR event, GitHub writes, credential minting or automatic publishing.
+# Independent test/review and draft-PR publication are deliberately separate.
