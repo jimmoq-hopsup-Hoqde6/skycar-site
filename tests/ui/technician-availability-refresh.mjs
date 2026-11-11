@@ -61,6 +61,8 @@ try {
   const monday = page.locator('.availability-day').filter({has: page.getByRole('heading', {name: 'Monday', exact: true})});
   const starts = () => monday.getByLabel('Starts', {exact: true});
   const save = () => page.getByRole('button', {name: 'Save hours', exact: true});
+  // Next also exposes a route-announcer alert after navigation. Only wait on our error.
+  const appAlert = page.locator('.technician-shell .technician-error[role="alert"]');
   const settled = async () => page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Refresh' && !button.disabled));
   const trigger = async (event = 'focus') => {
     const response = readStatus === 'network'
@@ -161,7 +163,7 @@ try {
   await starts().fill('10:00');
   writeMode = 'conflict';
   await save().click();
-  await page.getByRole('alert').waitFor();
+  await appAlert.waitFor();
   assert.equal(writes.at(-1).body.expected_revision, 5);
   assert.equal(await starts().inputValue(), '10:00', '409 retains the rejected draft');
   await trigger();
@@ -222,14 +224,14 @@ try {
     readStatus = denial;
     await trigger();
     assert.equal(await page.locator('form').count(), 0, `${denial} read clears private draft`);
-    await page.getByRole('alert').waitFor();
+    await appAlert.waitFor();
   }
   for (const denial of [401, 403, 404, 'changed']) {
     await reset();
     await starts().fill('13:15');
     writeMode = denial;
     await save().click();
-    await page.getByRole('alert').waitFor();
+    await appAlert.waitFor();
     assert.equal(await page.locator('form').count(), 0, `${denial} write clears private draft`);
     assert.equal(await page.getByRole('button', {name: 'Retry the same hours', exact: true}).count(), 0);
   }
@@ -258,7 +260,7 @@ try {
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await oldRead.started.promise;
   deniedWrite.release.resolve();
-  await page.getByRole('alert').waitFor();
+  await appAlert.waitFor();
   oldRead.release.resolve();
   await page.waitForTimeout(100);
   assert.equal(await page.locator('form').count(), 0, 'late authorized GET does not revive revoked state');
