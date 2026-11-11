@@ -30,57 +30,66 @@ function PrivatePhoto({id,slot,account,completion=false}:{id:string;slot:number;
 export function TechnicianInbox({id}:{id?:string}){
   const[inbox,setInbox]=useState<Inbox|null>(null);const[detail,setDetail]=useState<Detail|null>(null);const[account,setAccount]=useState('');
   const[loading,setLoading]=useState(true);const[error,setError]=useState('');const[status,setStatus]=useState(0);
-  const epoch=useRef(0);const read=useRef<AbortController|null>(null);
-  const attempt=useRef<Attempt|null>(null);const verifiedAccount=useRef('');const locked=useRef(false);
+  const[photoRevision,setPhotoRevision]=useState(0);const[verified,setVerified]=useState(false);const canAct=useRef(false);
+  const epoch=useRef(0);const authority=useRef(0);const read=useRef<AbortController|null>(null);
+  const attempt=useRef<Attempt|null>(null);const verifiedScope=useRef('');const locked=useRef(false);
   const[files,setFiles]=useState<File[]>([]);const[preparing,setPreparing]=useState(false);const[checkedAt,setCheckedAt]=useState(0);const[busy,setBusy]=useState(false);const[uncertain,setUncertain]=useState(false);const[notice,setNotice]=useState('');
-  const clearPrivate=useCallback(()=>{setFiles([]);setPreparing(false);attempt.current=null;verifiedAccount.current='';setUncertain(false);setAccount('');setInbox(null);setDetail(null);},[]);
+  const clearPrivate=useCallback((cancelRead=false)=>{if(cancelRead){epoch.current++;read.current?.abort();setLoading(false);}authority.current++;canAct.current=false;setVerified(false);setNotice('');setFiles([]);setPreparing(false);attempt.current=null;verifiedScope.current='';setUncertain(false);setAccount('');setInbox(null);setDetail(null);},[]);
   const load=useCallback(async()=>{
     read.current?.abort();const controller=new AbortController();read.current=controller;const version=++epoch.current;
-    setFiles([]);setPreparing(false);setInbox(null);setDetail(null);setAccount('');setLoading(true);setError('');setStatus(0);
+    // Native photo pickers trigger focus/visibility events. Preserve drafts, not visible access.
+    canAct.current=false;setVerified(false);setLoading(true);setError('');setStatus(0);
     try{
       const result=await api(`/api/v1/technician/jobs${id?`/${id}`:''}`,{signal:controller.signal});if(version!==epoch.current)return;
       if(!result.account||!/^[0-9a-f-]{36}$/i.test(result.account))throw new Error('The technician account could not be verified.');
-      if(verifiedAccount.current&&verifiedAccount.current!==result.account){attempt.current=null;setUncertain(false);setNotice('');}verifiedAccount.current=result.account;
-      if(id)setDetail(readTechnicianDetail(result.data,id));else setInbox(readTechnicianInbox(result.data));setAccount(result.account);setCheckedAt(Date.now());
-    }catch(caught){if(version!==epoch.current||controller.signal.aborted)return;setError(caught instanceof Error?caught.message:'Technician jobs could not be loaded.');if(caught instanceof JourneyApiError){setStatus(caught.status);if([401,403,404].includes(caught.status))clearPrivate();}}
+      const next=id?readTechnicianDetail(result.data,id):readTechnicianInbox(result.data);
+      const scope=`${id||'inbox'}:${result.account}:${next.profile.expert_id}`;
+      if(verifiedScope.current!==scope){authority.current++;attempt.current=null;setUncertain(false);setNotice('');setFiles([]);setPreparing(false);}
+      if(id){setInbox(null);setDetail(next);if(next.job.state!=='in_progress'){setFiles([]);setPreparing(false);}}else{setDetail(null);setInbox(next);}
+      verifiedScope.current=scope;setPhotoRevision(value=>value+1);setAccount(result.account);setCheckedAt(Date.now());canAct.current=true;setVerified(true);
+    }catch(caught){if(version!==epoch.current||controller.signal.aborted)return;setError(caught instanceof Error?caught.message:'Technician jobs could not be loaded.');if(caught instanceof JourneyApiError){setStatus(caught.status);if([401,403,404].includes(caught.status))clearPrivate();}else clearPrivate();}
     finally{if(version===epoch.current)setLoading(false);}
   },[id,clearPrivate]);
-  const invalidate=useCallback(()=>{epoch.current++;read.current?.abort();},[]);
+  const invalidate=useCallback(()=>{authority.current++;canAct.current=false;epoch.current++;read.current?.abort();},[]);
   useEffect(()=>{const refresh=()=>{void load();};const visible=()=>{if(document.visibilityState==='visible')refresh();};queueMicrotask(refresh);
     window.addEventListener('focus',refresh);window.addEventListener('pageshow',refresh);document.addEventListener('visibilitychange',visible);
     return()=>{invalidate();window.removeEventListener('focus',refresh);window.removeEventListener('pageshow',refresh);document.removeEventListener('visibilitychange',visible);};
   },[load,invalidate]);
   async function send(action?:'quote'|'decline'|'start'|'complete'|'upload',payload?:Record<string,unknown>){
-    if(locked.current||loading||preparing||!account||!id)return;
+    if(locked.current||!canAct.current||loading||preparing||!account||!id||detail?.job.id!==id)return;
     if(!attempt.current){
       if(!action||(['start','complete','upload'].includes(action)?(detail?.job.access!=='selected'||detail.job.state!==(action==='start'?'scheduled':'in_progress')):detail?.job.access!=='invited'))return;
       try{if(action==='upload'){if(!files.length)return;attempt.current={key:crypto.randomUUID(),account,id,action,files:[...files]};}else{const command=readTechnicianCommand({action,payload});attempt.current={key:crypto.randomUUID(),account,id,action,body:JSON.stringify(command)};}}
       catch{setError('Check the scope, AUD price and proposed times.');return;}
     }
     const original=attempt.current;if(original.account!==account||original.id!==id)return;
-    locked.current=true;setBusy(true);setError('');setNotice('');const version=epoch.current;
+    locked.current=true;setBusy(true);setError('');setNotice('');
+    // A focus read must not invalidate a same-scope save response.
+    const version=authority.current;
     try{
       let body:BodyInit=original.body||'';const headers:Record<string,string>={'X-Skycar-Account':original.account};if(original.files){const form=new FormData();original.files.forEach(file=>form.append('photos',file));body=form;}else{headers['Content-Type']='application/json';headers['Idempotency-Key']=original.key;}
       const result=await api(`/api/v1/technician/jobs/${original.id}${original.files?'/completion-photos':''}`,{method:'POST',headers,body});
-      if(version!==epoch.current)return;
+      if(version!==authority.current)return;
       if(result.account!==original.account)throw new JourneyApiError('Your technician account changed. Refresh before continuing.',403,false);
       if(original.files){if(!result.data||Object.keys(result.data).length!==1||result.data.stored!==original.files.length)throw new Error('Completion upload could not be verified.');}else readTechnicianCommandResult(result.data,original.id,original.action);attempt.current=null;setFiles([]);setUncertain(false);
-      if(original.action==='decline'){setDetail(null);setInbox(null);setNotice('You declined this request. It has been removed from your review inbox.');}
+      if(original.action==='decline'){epoch.current++;read.current?.abort();setLoading(false);canAct.current=false;setVerified(true);setDetail(null);setInbox(null);setNotice('You declined this request. It has been removed from your review inbox.');}
       else{setNotice(original.action==='upload'?'Completion photos are saved privately. Confirm completion when ready.':original.action==='complete'?'Work completion is recorded. The customer can view your completion photos.':original.action==='start'?'Work has started. The customer can see this saved progress.':'Your proposal is saved for the customer to review. The appointment is not confirmed.');await load();}
     }catch(caught){
-      if(version!==epoch.current)return;
-      if(caught instanceof JourneyApiError&&[401,403,404].includes(caught.status)){clearPrivate();setStatus(caught.status);}
+      if(version!==authority.current)return;
+      if(caught instanceof JourneyApiError&&[401,403,404].includes(caught.status)){clearPrivate(true);setStatus(caught.status);}
       else if(caught instanceof JourneyApiError&&!caught.retryable){attempt.current=null;setUncertain(false);}
       setError(caught instanceof Error?caught.message:'The action could not be confirmed. Retry the same action.');
     }finally{locked.current=false;setBusy(false);if(attempt.current)setUncertain(true);}
   }
   const profile=inbox?.profile||detail?.profile;const job=detail?.job;
+  const visible=verified&&!loading&&(id?job?.id===id||(!job&&!!notice):!!inbox);
   const next=id?`/technician/jobs/${id}`:'/technician/jobs';
   return <main className="technician-shell">
     <nav className="technician-nav" aria-label="Technician navigation"><Link className="technician-wordmark" href="/technician/jobs">skycar<span>●</span></Link><Link href="/technician/jobs" aria-current={id ? undefined : 'page'}>My work</Link><Link href="/technician/availability">Availability</Link><Link href="/auth/sign-out">Sign out</Link></nav>
     <header><p className="technician-eyebrow">TECHNICIAN WORKSPACE</p><h1>{id?'Job review':'Your job inbox'}</h1><p>Review the work Skycar has shared with your account.</p></header>
-    <div className="technician-toolbar"><span role="status">{loading?'Verifying your account and jobs…':profile?'Latest saved status':'Access not verified'}</span><button type="button" disabled={loading||busy} onClick={()=>void load()}>Refresh jobs</button></div>
+    <div className="technician-toolbar"><span role="status">{loading?'Verifying your account and jobs…':visible?'Latest saved status':'Access not verified'}</span><button type="button" disabled={loading||busy} onClick={()=>void load()}>Refresh jobs</button></div>
     {error&&<section className="technician-error" role="alert"><h2>{status===403?'Technician access required':status===404?'Job unavailable':'Unable to load technician jobs'}</h2><p>{error}</p>{[401,403].includes(status)&&<Link href={`/auth/sign-in?next=${encodeURIComponent(next)}`}>Sign in as a technician</Link>}{status===404&&<Link href="/technician/jobs">Return to your inbox</Link>}</section>}
+    <div key={`${account}:${profile?.expert_id}:${id||'inbox'}`} hidden={!visible} inert={!visible}>
     {notice&&<section className="technician-panel" role="status"><p>{notice}</p>{!detail&&<Link href="/technician/jobs">Return to your inbox</Link>}</section>}
     {uncertain&&<section className="technician-panel" role="status"><p>The previous action has not been confirmed. Its original details are kept for a safe retry.</p><button disabled={busy||loading||!account} onClick={()=>void send()}>Retry same action</button></section>}
     {profile&&<section className="technician-profile"><h2>{profile.business_name}</h2><p>{profile.description}</p><p>{profile.services.map(service=>service==='repair'?'Repair':'Cleaning').join(' · ')} · Service postcodes: {profile.postcodes.join(', ')}</p></section>}
@@ -94,10 +103,10 @@ export function TechnicianInbox({id}:{id?:string}){
       {job.access==='selected'&&job.state==='scheduled'&&<section className="technician-panel"><h2>Start your confirmed work</h2><p>Start when you are ready to work at the confirmed appointment. The customer will see the saved progress.</p>{job.appointment&&Date.parse(job.appointment.starts_at)<=checkedAt?<form key={`${account}:${id}:start`} onSubmit={event=>{event.preventDefault();void send('start',{});}}><fieldset disabled={busy||uncertain||loading}><label className="technician-check"><input type="checkbox" required/> I am ready to start this confirmed job.</label><button type="submit">Start work</button></fieldset></form>:<p>Work can start at the appointment time. Refresh jobs when it is due.</p>}</section>}
       {job.access==='selected'&&['in_progress','completed'].includes(job.state)&&<section className="technician-panel">
         <h2>Completion evidence</h2>
-        {!!detail?.completion_photos?.length&&<div className="technician-photos">{detail.completion_photos.map(slot=><PrivatePhoto key={`${account}:${id}:completion:${slot}`} account={account} id={job.id} slot={slot} completion/>)}</div>}
+        {!!detail?.completion_photos?.length&&<div className="technician-photos">{detail.completion_photos.map(slot=><PrivatePhoto key={`${account}:${id}:completion:${slot}:${photoRevision}`} account={account} id={job.id} slot={slot} completion/>)}</div>}
         {job.state==='in_progress'&&<>
           <p>Save one to three clear photos of your finished work. The saved set cannot be replaced; select the original files in the same order to retry an interrupted upload.</p>
-          <DamagePhotos key={`${account}:${id}:completion`} purpose="completion" files={files} disabled={busy||uncertain||loading} onChange={setFiles} onProcessing={setPreparing}/>
+          <DamagePhotos key={`${account}:${id}:completion`} purpose="completion" files={files} disabled={busy||uncertain} onChange={setFiles} onProcessing={setPreparing}/>
           <button disabled={!files.length||busy||uncertain||loading||preparing} onClick={()=>void send('upload')}>Save completion photos</button>
           <form key={`${account}:${id}:complete`} onSubmit={event=>{event.preventDefault();void send('complete',{});}}>
             <fieldset disabled={!detail?.completion_photos?.length||busy||uncertain||loading||preparing}>
@@ -108,10 +117,11 @@ export function TechnicianInbox({id}:{id?:string}){
         </>}
         {job.state==='completed'&&<p>The completed work and photos are saved on the customer’s journey.</p>}
       </section>}
-      <section className="technician-panel"><h2>Private request photos</h2>{job.photos?.length?<div className="technician-photos">{job.photos.map(slot=><PrivatePhoto key={`${account}:${id}:${slot}`} account={account} id={job.id} slot={slot}/>)}</div>:<p>No request photos are saved.</p>}</section>
+      <section className="technician-panel"><h2>Private request photos</h2>{job.photos?.length?<div className="technician-photos">{job.photos.map(slot=><PrivatePhoto key={`${account}:${id}:${slot}:${photoRevision}`} account={account} id={job.id} slot={slot}/>)}</div>:<p>No request photos are saved.</p>}</section>
       <section className="technician-panel"><h2>Service contact</h2>{job.contact?<address>{job.contact.name}<br/>{job.contact.phone}<br/>{job.contact.address}<br/>{job.contact.suburb} {job.contact.postcode}</address>:<p>Contact and street address are shared with the selected technician after appointment confirmation.</p>}</section>
       <section className="technician-panel"><h2>Expected payout</h2><p>Unavailable. A technician payout has not been recorded for this job.</p></section>
       <p className="technician-note">An invitation and proposal do not reserve an appointment. Work updates and completion photos stay with this job.</p>
     </>}
+    </div>
   </main>;
 }

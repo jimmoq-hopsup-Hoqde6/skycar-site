@@ -124,6 +124,6 @@ get the chain through.
 
 ## Open questions / follow-ups
 
-- Through #76's RPC the new constraints surface as raw `23514` / `23P01` errors, because its `exception` handler does not map them. Mapping them to `VALIDATION_FAILED` needs another replacement of that function.
+- Direct RPC calls still surface the new constraints as raw `23514` / `23P01` errors. The availability HTTP repository now maps only the known availability instant-order and overlap constraints to non-retryable `VALIDATION_FAILED` errors, without exposing SQL details. The shared client/API validator rejects these invalid instant intervals before a write; changing the direct RPC error contract still requires a separate migration.
 - `AVAILABILITY_REQUIRED` means "no row". If product wants "revision 0 / never published" and "published empty" to behave the same, change the check.
 - `24:00` is not representable and windows end at `23:59` at the latest (#76's rule); a window cannot span local midnight.

@@ -20,6 +20,19 @@ export function availabilityFault(code) {
   return new ApiFault(Object.hasOwn(errors, code) ? code : 'TECHNICIAN_UNAVAILABLE', status, message);
 }
 
+// These constraints belong to the availability write RPC. Do not turn unrelated
+// integrity/database failures into validation errors or expose their SQL details.
+export function availabilityWriteFault(error) {
+  const constraints = {
+    '23514': ['care_technician_availability_exception_windows_instant_order'],
+    '23P01': ['care_technician_availability_windows_no_overlap', 'care_technician_availability_exception_windows_no_overlap'],
+  };
+  if (typeof error.message === 'string' && constraints[error.code]?.some(name => error.message.includes(`"${name}"`))) {
+    return availabilityFault('VALIDATION_FAILED');
+  }
+  return availabilityFault(error.code === 'P0001' && error.message ? error.message : 'UNAVAILABLE');
+}
+
 function identifier(value) {
   if (typeof value !== 'string' || !UUID.test(value)) throw availabilityFault('VALIDATION_FAILED');
   return value.toLowerCase();

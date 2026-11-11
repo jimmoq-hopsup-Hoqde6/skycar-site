@@ -61,6 +61,7 @@ function minutes(value) {
 function assertWindows(windows, label, boundary) {
   if (!Array.isArray(windows)) fail(`${label} must be a list.`);
   let previousEnd = null;
+  const instants = [];
   for (const window of windows) {
     const start = minutes(window?.starts_at);
     const end = minutes(window?.ends_at);
@@ -75,6 +76,15 @@ function assertWindows(windows, label, boundary) {
         || !adelaideBoundaryOk(boundary, window.ends_at, window.ends_at_offset)) {
         fail('That local time is missing or ambiguous in Adelaide. Choose the offset that matches the date.');
       }
+      // Both boundaries may be valid in the repeated fall-back hour while the
+      // selected offsets reverse the interval or overlap another wall-disjoint one.
+      const startsAt = Date.parse(`${boundary}T${window.starts_at}:00${window.starts_at_offset}`);
+      const endsAt = Date.parse(`${boundary}T${window.ends_at}:00${window.ends_at_offset}`);
+      if (endsAt <= startsAt) fail('With these Adelaide offsets, the end must be after the start.');
+      if (instants.some(other => startsAt < other.endsAt && other.startsAt < endsAt)) {
+        fail('These dated hours overlap after applying their Adelaide offsets.');
+      }
+      instants.push({ startsAt, endsAt });
     }
     previousEnd = end;
   }
@@ -164,21 +174,12 @@ export function readAvailabilitySchedule(value) {
     fail('The saved schedule could not be verified.');
   }
   weeklyWindows(value.weekly_windows);
+  if (!Array.isArray(value.exceptions) || value.exceptions.length > 366) fail('The saved schedule could not be verified.');
   for (const exception of value.exceptions) {
     if (!exactKeys(exception, EXCEPTION_KEYS) || !isoDate(exception.date) || !Array.isArray(exception.windows) || exception.windows.length > 8) {
       fail('The saved schedule could not be verified.');
     }
-    let previousEnd = null;
-    for (const window of exception.windows) {
-      const start = minutes(window?.starts_at);
-      const end = minutes(window?.ends_at);
-      if (!exactKeys(window, EXCEPTION_WINDOW_KEYS) || start === null || end === null || end - start < 15
-        || !OFFSETS.has(window.starts_at_offset) || !OFFSETS.has(window.ends_at_offset)
-        || (previousEnd !== null && start <= previousEnd)) {
-        fail('The saved schedule could not be verified.');
-      }
-      previousEnd = end;
-    }
+    assertWindows(exception.windows, exception.date, exception.date);
   }
   let previous = '';
   for (const exception of value.exceptions) {

@@ -46,3 +46,34 @@ Browser runner needs Playwright and Chromium installed externally. Run against t
 - Account-wide My Jobs is implemented separately in PR #22 against the published owner-scoped list contract. It shows request states rather than inventing booking groupings or lifecycle states.
 - Session entry and linked service-entry navigation remain follow-ups. The existing root navigation is unchanged.
 - Worker scheduling, response policy and notification delivery are backend/operations gates; the UI does not imply those processes are active.
+
+## Local request-status recovery follow-up, 11 November 2026
+
+The mounted `RequestStatus` regressions now cover request replacement, cleanup,
+read/retry ordering and interrupted reopening. Both operations use one current
+cancellable request; superseded responses cannot change the current receipt or
+its recovery state. A request ID change remounts the view immediately, before
+its next read completes. Lifecycle revalidation hides private details, while a
+transient manual refresh continues to label retained details as stale.
+
+Aborting a retry does not prove the server cancelled it. The original key stays
+available for explicit exact retry, including after reload where session storage
+is available. Blocked storage falls back to in-memory recovery with the existing
+keep-this-page-open warning. Retry responses must pass the published envelope
+and receipt validation. A valid replay acknowledges the original attempt even
+when its current receipt has since returned to `no_match`; the customer can then
+ask for another review with a new key. No reopening is triggered automatically.
+
+Quote-ready next action ownership is shown as the customer. For connected stages
+without known current ownership, the original request's role is not reused; the
+linked service journey remains authoritative. No deadline, notification delivery,
+matching activity, booking, or payment commitment is added.
+
+The 44 mounted status tests pass; 26 fail when run against baseline `9cd560e`.
+Both mounted component suites pass together (100 tests), and the existing UI
+acceptance workflow runs both suites at head and integration revisions.
+`npm run check` passes lint, TypeScript, 298 unit tests and the production build. See
+[component test instructions](../tests/components/README.md). This follow-up does
+not establish browser, physical-device, hosted-session or deployment acceptance;
+the available browser launch remains blocked by the environment's
+ProcessSingleton Unix-socket permission error.

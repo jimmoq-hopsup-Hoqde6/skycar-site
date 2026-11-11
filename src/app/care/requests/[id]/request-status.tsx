@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CareReceipt } from "@/domain/care/request";
 import { eventLabels, readReceipt, statusSummary } from "@/domain/care/presentation";
+import { readCareSubmission } from "@/domain/care/submission";
 import { clearPendingCareRetry, readPendingCareRetry, savePendingCareRetry } from "@/domain/care/retry-recovery";
 import styles from "./status.module.css";
 
@@ -22,7 +23,11 @@ async function load(id: string, retryKey?: string, signal?: AbortSignal): Promis
   });
   if (!response.ok) throw new RequestError(response.status);
   const body = await response.json();
-  return readReceipt(retryKey ? body.data?.request : body.data, id);
+  return readReceipt(retryKey ? readCareSubmission(body.data).request : body.data, id);
+}
+function retryStorage() {
+  // Some browser privacy settings throw when accessing the property itself.
+  try { return window.sessionStorage; } catch { return null; }
 }
 function errorMessage(error: unknown) {
   if (error instanceof RequestError) {
@@ -34,6 +39,12 @@ function errorMessage(error: unknown) {
 }
 
 export default function RequestStatus({ id }: { id: string }) {
+  // Request identity owns every receipt, in-flight operation and recovery flag.
+  // Remount before rendering another ID so old private data is never shown there.
+  return <RequestStatusView key={id} id={id} />;
+}
+
+function RequestStatusView({ id }: { id: string }) {
   const [receipt, setReceipt] = useState<CareReceipt | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
@@ -41,54 +52,77 @@ export default function RequestStatus({ id }: { id: string }) {
   const [now, setNow] = useState(0);
   const [uncertain, setUncertain] = useState(false);
   const [recoverable, setRecoverable] = useState(false);
-  const locked = useRef(false);
   const retryKey = useRef<string | null>(null);
   const controller = useRef<AbortController | null>(null);
-  const privacyEpoch = useRef(0);
 
-  const verify = useCallback(async (discard = false) => {
+  const verify = useCallback(async (reopen = false, discard = false) => {
+    // Reads and writes share one authority. Aborting a POST does not undo it:
+    // retain its exact key until a verified outcome or definitive error resolves it.
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
-    const epoch = discard ? ++privacyEpoch.current : privacyEpoch.current;
+    const isCurrent = () => controller.current === current && !current.signal.aborted;
     if (discard) {
       // Account/session revalidation is fail-closed: hide previously verified
       // private request details until the current session proves access again.
-      setReceipt(null); setChecked(null); setError("");
+      setReceipt(null); setChecked(null);
     }
-    setBusy(true);
+    setBusy(true); setError("");
     try {
-      const r = await load(id, undefined, current.signal);
-      if (current.signal.aborted || epoch !== privacyEpoch.current) return;
+      if (reopen) {
+        if (!retryKey.current) {
+          retryKey.current = crypto.randomUUID();
+          const store = retryStorage();
+          setRecoverable(store ? savePendingCareRetry(store, id, retryKey.current) : false);
+        }
+        setUncertain(true);
+      }
+      const r = await load(id, reopen ? retryKey.current! : undefined, current.signal);
+      if (!isCurrent()) return;
       setReceipt(r); setChecked(new Date().toISOString()); setNow(Date.now());
-      if (retryKey.current && r.customer_stage !== "no_match") {
-        clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
+      // A replay returns the *current* receipt, which may already be no_match
+      // again. A valid POST acknowledgement still resolves that original attempt.
+      if (reopen || r.customer_stage !== "no_match") {
+        const store = retryStorage();
+        if (store) clearPendingCareRetry(store, id);
+        retryKey.current = null;
+        setUncertain(false); setRecoverable(false);
+      } else setUncertain(!!retryKey.current);
+    } catch (e) {
+      if (!isCurrent()) return;
+      setError(errorMessage(e));
+      const accessLost = e instanceof RequestError && [400, 401, 403, 404].includes(e.status);
+      const definitiveRetry = reopen && e instanceof RequestError && e.status >= 400 && e.status < 500;
+      if (accessLost) { setReceipt(null); setChecked(null); }
+      if (accessLost || definitiveRetry) {
+        const store = retryStorage();
+        if (store) clearPendingCareRetry(store, id);
+        retryKey.current = null;
         setUncertain(false); setRecoverable(false);
       }
-    } catch (e) {
-      if (current.signal.aborted || epoch !== privacyEpoch.current) return;
-      setError(errorMessage(e));
-      if (e instanceof RequestError && [400, 401, 403, 404].includes(e.status)) {
-        clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
-        setReceipt(null); setUncertain(false); setRecoverable(false);
-      }
+      // Transient, malformed and interrupted responses leave the attempt intact.
     } finally {
-      if (!current.signal.aborted && epoch === privacyEpoch.current) setBusy(false);
+      if (isCurrent()) { controller.current = null; setBusy(false); }
     }
   }, [id]);
 
   useEffect(() => {
-    const recoveredKey = readPendingCareRetry(window.sessionStorage, id);
-    retryKey.current = recoveredKey;
-    if (recoveredKey) queueMicrotask(() => { setUncertain(true); setRecoverable(true); });
-    queueMicrotask(() => { void verify(); });
-    const revalidate = () => { void verify(true); };
+    let active = true;
+    const store = retryStorage();
+    retryKey.current = store ? readPendingCareRetry(store, id) : null;
+    queueMicrotask(() => {
+      if (!active) return;
+      setUncertain(!!retryKey.current); setRecoverable(!!retryKey.current);
+      if (!controller.current) void verify();
+    });
+    const revalidate = () => { void verify(false, true); };
     const revalidateVisible = () => { if (document.visibilityState === "visible") revalidate(); };
     window.addEventListener("focus", revalidate);
     window.addEventListener("pageshow", revalidate);
     document.addEventListener("visibilitychange", revalidateVisible);
     const timer = setInterval(() => setNow(Date.now()), 15000);
     return () => {
-      controller.current?.abort();
+      active = false;
+      controller.current?.abort(); controller.current = null;
       window.removeEventListener("focus", revalidate);
       window.removeEventListener("pageshow", revalidate);
       document.removeEventListener("visibilitychange", revalidateVisible);
@@ -96,46 +130,17 @@ export default function RequestStatus({ id }: { id: string }) {
     };
   }, [id, verify]);
 
-  async function update(reopen = false) {
-    if (locked.current) return;
-    locked.current = true;
-    const epoch = privacyEpoch.current;
-    setBusy(true); setError("");
-    try {
-      if (reopen && !retryKey.current) {
-        retryKey.current = crypto.randomUUID();
-        setRecoverable(savePendingCareRetry(window.sessionStorage, id, retryKey.current));
-      }
-      const r = await load(id, reopen ? retryKey.current! : undefined);
-      if (epoch !== privacyEpoch.current) return;
-      setReceipt(r); setChecked(new Date().toISOString()); setNow(Date.now());
-      if (r.customer_stage !== "no_match") {
-        clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
-        setUncertain(false); setRecoverable(false);
-      } else if (retryKey.current) setUncertain(true);
-    } catch (e) {
-      if (epoch !== privacyEpoch.current) return;
-      setError(errorMessage(e));
-      // Never retain previously loaded private details after access is lost.
-      if (e instanceof RequestError && [400, 401, 403, 404].includes(e.status)) {
-        setReceipt(null); clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
-        setUncertain(false); setRecoverable(false);
-      }
-      if (reopen) {
-        const definitive = e instanceof RequestError && e.status >= 400 && e.status < 500;
-        if (definitive) {
-          clearPendingCareRetry(window.sessionStorage, id); retryKey.current = null;
-          setUncertain(false); setRecoverable(false);
-        }
-        else setUncertain(true); // The write may have committed; reuse its key.
-      }
-    } finally {
-      locked.current = false;
-      if (epoch === privacyEpoch.current) setBusy(false);
-    }
+  function update(reopen = false) {
+    // The ref also rejects repeated clicks before React disables the button.
+    if (!controller.current) void verify(reopen);
   }
 
   const summary = receipt ? statusSummary(receipt, now) : null;
+  // Only known connected actions override the original request's responsibility.
+  // Later-stage ownership belongs to the authoritative service journey.
+  const nextOwner = summary?.connected === "quote_ready" ? "You"
+    : summary?.connected === "appointment_requested" ? "Skycar availability team"
+    : summary?.connected ? null : receipt?.responsible_role === "customer" ? "You" : "Skycar operations";
   return <main className={styles.shell}>
     <nav className={styles.nav} aria-label="Page"><Link href="/">SKYCAR</Link><Link href="/garage/jobs">My Jobs</Link><span>Care / Your request</span></nav>
     <header><p className={styles.eyebrow}>YOUR CARE REQUEST</p><h1>Every update,<br />in one place.</h1><p className={styles.intro}>What is recorded, what happens next, and when to expect an update.</p></header>
@@ -144,7 +149,7 @@ export default function RequestStatus({ id }: { id: string }) {
     {uncertain && <div className={styles.warning} role="status"><p>Reopening has not been confirmed. {recoverable ? "This tab saved the attempt and will reuse it after a reload." : "Keep this page open so the same attempt can be reused."}</p>{!receipt && <button disabled={busy} onClick={() => update(true)}>Check reopening</button>}</div>}
     {receipt && summary && <>
       <section className={styles.summary} aria-labelledby="current-status"><p className={styles.eyebrow}>CURRENT STATUS</p><h2 id="current-status">{summary.title}</h2><p>{summary.detail}</p>
-        <dl className={styles.facts}><div><dt>{summary.connected ? "Journey updated" : "Next update"}</dt><dd>{summary.connected ? date(receipt.updated_at) : receipt.next_update_at ? date(receipt.next_update_at) : "No time committed"}</dd></div><div><dt>Next action owner</dt><dd>{summary.connected === "appointment_requested" ? "Skycar availability team" : receipt.responsible_role === "customer" ? "You" : "Skycar operations"}</dd></div></dl>
+        <dl className={styles.facts}><div><dt>{summary.connected ? "Journey updated" : "Next update"}</dt><dd>{summary.connected ? date(receipt.updated_at) : receipt.next_update_at ? date(receipt.next_update_at) : "No time committed"}</dd></div>{nextOwner && <div><dt>Next action owner</dt><dd>{nextOwner}</dd></div>}</dl>
         <Link className={styles.journeyLink} href={`/care/journey/${encodeURIComponent(id)}`}>{summary.connected === "completed" ? "View completion record" : summary.connected === "quote_ready" ? "Review quotes" : "Open service journey"}</Link>
         {receipt.customer_stage === "no_match" && !summary.connected && <button disabled={busy || (!!error && !uncertain)} onClick={() => update(true)}>{uncertain ? "Check reopening" : "Ask for another review"}</button>}
       </section>

@@ -71,6 +71,10 @@ linked expert with the same key returns `IDEMPOTENCY_CONFLICT`. A stale
 - Exception offsets are `+09:30` or `+10:30` and must be the Adelaide offset at
   that wall time. A missing spring-forward time is rejected. An ambiguous
   fall-back time is accepted only with the offset that matches that instant.
+- Dated windows must end after they start and must not overlap in real time after
+  applying their offsets. Valid wall-clock boundaries alone are not enough during
+  the repeated fall-back hour. Invalid windows return non-retryable validation
+  errors; the editor keeps them editable for correction.
 - Weekly hours that would fall in a missing or ambiguous time are stored as
   wall-clock rules. This slice does not expand them into bookings.
 - Direct table and function access is revoked from `anon` and `authenticated`.
