@@ -1,6 +1,7 @@
 // Mocked transport isolates interrupted edits; API/DB authority is covered separately.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {availabilityOffsetLabels, availabilityReadSettled} from './support/availability-browser.mjs';
 
 const {chromium} = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const origin = 'http://127.0.0.1:3206';
@@ -72,7 +73,7 @@ try {
       } else window.dispatchEvent(new Event(event));
     }, event);
     await response;
-    await settled();
+    await page.waitForFunction(availabilityReadSettled);
   };
   const refresh = async (accept = true) => {
     page.once('dialog', dialog => accept ? dialog.accept() : dialog.dismiss());
@@ -112,13 +113,13 @@ try {
   const exception = page.locator('.availability-day').filter({has: page.getByLabel('Date', {exact: true})});
   await exception.getByLabel('Starts', {exact: true}).fill('11:30');
   await exception.getByLabel('Ends', {exact: true}).fill('15:45');
-  await exception.getByLabel('Start offset', {exact: true}).selectOption('+09:30');
-  await exception.getByLabel('End offset', {exact: true}).selectOption('+09:30');
+  await exception.getByLabel(availabilityOffsetLabels.start).selectOption('+09:30');
+  await exception.getByLabel(availabilityOffsetLabels.end).selectOption('+09:30');
   await trigger('pageshow');
   assert.equal(await exception.getByLabel('Starts', {exact: true}).inputValue(), '11:30');
   assert.equal(await exception.getByLabel('Ends', {exact: true}).inputValue(), '15:45');
-  assert.equal(await exception.getByLabel('Start offset', {exact: true}).inputValue(), '+09:30');
-  assert.equal(await exception.getByLabel('End offset', {exact: true}).inputValue(), '+09:30');
+  assert.equal(await exception.getByLabel(availabilityOffsetLabels.start).inputValue(), '+09:30');
+  assert.equal(await exception.getByLabel(availabilityOffsetLabels.end).inputValue(), '+09:30');
   await page.getByRole('button', {name: 'Remove date', exact: true}).click();
   await monday.getByRole('button', {name: 'Remove', exact: true}).click();
   await trigger();
