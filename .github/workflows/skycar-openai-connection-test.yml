@@ -1,0 +1,44 @@
+name: Skycar OpenAI runner connection test
+# Manually dispatched only. No checkout, no untrusted issue content, no code writes.
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: skycar-openai-smoke
+  cancel-in-progress: false
+jobs:
+  connection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - name: Verify OpenAI connection without exposing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::OPENAI_API_KEY is missing from repository Actions secrets"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, os, urllib.request, urllib.error
+          payload = {"model": "gpt-4.1-mini", "input": "Reply with exactly: SKYCAR_RUNNER_OK", "max_output_tokens": 100}
+          request = urllib.request.Request(
+              "https://api.openai.com/v1/responses",
+              data=json.dumps(payload).encode(),
+              headers={"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"],
+                       "Content-Type": "application/json"},
+              method="POST")
+          try:
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  result = json.load(response)
+          except urllib.error.HTTPError as error:
+              raise SystemExit(f"OpenAI connection test failed (HTTP {error.code}); check API billing/model access") from None
+          parts = [c.get("text","") for x in result.get("output",[]) for c in x.get("content",[]) if c.get("type")=="output_text"]
+          if "SKYCAR_RUNNER_OK" not in " ".join(parts):
+              raise SystemExit("OpenAI responded but expected marker was not returned")
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as report:
+              report.write("Skycar OpenAI connection test: PASS. No code changed.\n")
+          print("Skycar OpenAI connection test: PASS")
+          PY
