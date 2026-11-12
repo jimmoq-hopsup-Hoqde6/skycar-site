@@ -1,0 +1,45 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
+
+test('built Garage photo route fails closed without activation/configuration', { timeout: 30000 }, async () => {
+  for (const feature of ['false', 'true']) {
+    const port = feature === 'false' ? 3321 : 3322;
+    const base = `http://127.0.0.1:${port}`;
+    const server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', String(port)], {
+      env: { ...process.env, FEATURE_GARAGE: feature, SKYCAR_ENV: 'demo', NEXT_PUBLIC_SUPABASE_URL: '', NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: '' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    server.stdout.on('data', chunk => { output += chunk; });
+    server.stderr.on('data', chunk => { output += chunk; });
+    const exited = once(server, 'exit');
+    try {
+      let ready = false;
+      for (let i = 0; i < 75; i++) {
+        try {
+          const health = await fetch(`${base}/api/v1/health`, { signal: AbortSignal.timeout(500) });
+          await health.text();
+          ready = true;
+          break;
+        } catch { await delay(100); }
+      }
+      assert.ok(ready, `Local application failed to start: ${output}`);
+      const response = await fetch(`${base}/api/v1/garage/vehicles/11111111-1111-4111-8111-111111111111/photo`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(2000),
+      });
+      assert.equal(response.status, 503);
+      assert.equal(response.headers.get('cache-control'), 'private, no-store');
+      const body = await response.json();
+      assert.equal(body.error.code, 'GARAGE_UNAVAILABLE');
+      assert.ok(body.meta.requestId);
+      assert.equal(body.data, undefined);
+    } finally {
+      server.kill('SIGTERM');
+      await exited;
+    }
+  }
+});

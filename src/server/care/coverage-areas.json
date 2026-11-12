@@ -1,0 +1,1090 @@
+{
+ "version": "2026-11-01",
+ "areaId": "adelaide-metro-and-hills",
+ "decision": "Marcel: launch coverage is Adelaide metro plus Adelaide Hills",
+ "source": {
+  "publisher": "Australian Bureau of Statistics (ABS)",
+  "title": "ASGS Edition 3 (2021) Correspondence Files",
+  "datasetUrl": "https://data.gov.au/data/dataset/asgs-edition-3-2021-correspondences",
+  "downloadUrl": "https://data.gov.au/data/dataset/2c79581f-600e-4560-80a8-98adb1922dfc/resource/33d822ba-138e-47ae-a15f-460279c3acc3/download/asgs2021correspondences.zip",
+  "absPageUrl": "https://www.abs.gov.au/statistics/standards/australian-statistical-geography-standard-asgs/edition-3-july-2021-june-2026/access-and-downloads/correspondences",
+  "licence": "CC BY 4.0",
+  "retrievedOn": "2026-11-01",
+  "zipSha256": "3c4ca9307b86dd9c51626920ddbb64fbe38936fd30f4e2c846eb71569dcb1c60",
+  "files": {
+   "CG_POA_2021_GCCSA_2021.xlsx": "edf86d172ec6a14be820630a27e7a46752755e35ffed5a882224bc3fe7493ea0",
+   "CG_POA_2021_LGA_2022.xlsx": "c0b4797bc4bc37cdbf8fd2645ca42abc0f759bf18401881db9719e7a3b81f3bf"
+  }
+ },
+ "rule": {
+  "threshold": 0.5,
+  "text": "Include a postal area (POA 2021, used as the postcode) when its ABS population-weighted share in GCCSA 4GADE Greater Adelaide is >= threshold, or its combined share in LGA 40120 Adelaide Hills and LGA 44550 Mount Barker is >= threshold."
+ },
+ "services": {
+  "repair": [
+   "adelaide-metro-and-hills"
+  ],
+  "cleaning": [
+   "adelaide-metro-and-hills"
+  ]
+ },
+ "candidates": [
+  {
+   "postcode": "5000",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5006",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5007",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5008",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5009",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5010",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5011",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5012",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5013",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5014",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5015",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5016",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5017",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5018",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5019",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5020",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5021",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5022",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5023",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5024",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5025",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5031",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5032",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5033",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5034",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5035",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5037",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5038",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5039",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5040",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5041",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5042",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5043",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5044",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5045",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5046",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5047",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5048",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5049",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5050",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5051",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5052",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0007458,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5061",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5062",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5063",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5064",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5065",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5066",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5067",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5068",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5069",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5070",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5072",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.1329482,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5073",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0220623,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5074",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5075",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5076",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0018725,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5081",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5082",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5083",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5084",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5085",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5086",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5087",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5088",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5089",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5090",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5091",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5092",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5093",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5094",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5095",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5096",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5097",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5098",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5106",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5107",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5108",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5109",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5110",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5111",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5112",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5113",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5114",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0048266,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5115",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5116",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5117",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5118",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5120",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5121",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5125",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5126",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5127",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5131",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.7471869,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5132",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.930058,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5133",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5134",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5136",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5137",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5138",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5139",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5140",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5141",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5142",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5144",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5150",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5151",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5152",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.9874828,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5153",
+   "gccsa_greater_adelaide": 0.9937391,
+   "lga_adelaide_hills": 0.4467257,
+   "lga_mount_barker": 0.5176508,
+   "included": true
+  },
+  {
+   "postcode": "5154",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5155",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5156",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.8260144,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5157",
+   "gccsa_greater_adelaide": 0.8631837,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0429448,
+   "included": true
+  },
+  {
+   "postcode": "5158",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5159",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5160",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5161",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5162",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5163",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5164",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5165",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5166",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5167",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5168",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5169",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5170",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5171",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5172",
+   "gccsa_greater_adelaide": 0.7952307,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5173",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5174",
+   "gccsa_greater_adelaide": 0.9927003,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5201",
+   "gccsa_greater_adelaide": 0.8835255,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.8594589,
+   "included": true
+  },
+  {
+   "postcode": "5231",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5232",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5233",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5234",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5235",
+   "gccsa_greater_adelaide": 0.0205712,
+   "lga_adelaide_hills": 0.0205712,
+   "lga_mount_barker": 0.0,
+   "included": false
+  },
+  {
+   "postcode": "5240",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5241",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5242",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5243",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 1.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5244",
+   "gccsa_greater_adelaide": 0.9862763,
+   "lga_adelaide_hills": 0.8877429,
+   "lga_mount_barker": 0.0985334,
+   "included": true
+  },
+  {
+   "postcode": "5245",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0564442,
+   "lga_mount_barker": 0.9435558,
+   "included": true
+  },
+  {
+   "postcode": "5250",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 1.0,
+   "included": true
+  },
+  {
+   "postcode": "5251",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 1.0,
+   "included": true
+  },
+  {
+   "postcode": "5252",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 1.0,
+   "included": true
+  },
+  {
+   "postcode": "5254",
+   "gccsa_greater_adelaide": 0.1541059,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.1541059,
+   "included": false
+  },
+  {
+   "postcode": "5351",
+   "gccsa_greater_adelaide": 1.6e-06,
+   "lga_adelaide_hills": 1.6e-06,
+   "lga_mount_barker": 0.0,
+   "included": false
+  },
+  {
+   "postcode": "5371",
+   "gccsa_greater_adelaide": 0.7853884,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5400",
+   "gccsa_greater_adelaide": 0.0217949,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": false
+  },
+  {
+   "postcode": "5501",
+   "gccsa_greater_adelaide": 0.7979988,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  },
+  {
+   "postcode": "5950",
+   "gccsa_greater_adelaide": 1.0,
+   "lga_adelaide_hills": 0.0,
+   "lga_mount_barker": 0.0,
+   "included": true
+  }
+ ]
+}

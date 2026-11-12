@@ -1,0 +1,42 @@
+name: Care database acceptance
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  care-postgres:
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [head, integration]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_test_only
+          POSTGRES_DB: skycar_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.revision == 'head' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Verify tested revision
+        run: node scripts/verify-ci-checkout.mjs
+        env:
+          CI_CHECKOUT_MODE: ${{ matrix.revision }}
+      - name: Exercise migrations, SQL permissions and concurrent Care operations
+        run: node --test tests/integration/care-db.test.mjs
+        env:
+          CARE_TEST_DATABASE_URL: postgresql://postgres:disposable_test_only@localhost:5432/skycar_test

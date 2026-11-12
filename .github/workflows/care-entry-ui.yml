@@ -1,0 +1,77 @@
+name: Customer journey UI acceptance
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  care-entry-ui:
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [head, integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.revision == 'head' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Verify tested revision
+        run: node scripts/verify-ci-checkout.mjs
+        env:
+          CI_CHECKOUT_MODE: ${{ matrix.revision }}
+      - name: Install application dependencies
+        run: npm ci --ignore-scripts
+      - name: Install pinned Playwright browser runner
+        run: |
+          npm install --prefix "$RUNNER_TEMP/skycar-browser" --ignore-scripts --no-audit --no-fund playwright@1.55.0 happy-dom@20.8.4
+          "$RUNNER_TEMP/skycar-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Build
+        run: npm run build
+        env:
+          SKYCAR_ENV: demo
+      - name: Run mounted draft and authority regressions
+        run: |
+          export HAPPY_DOM_MODULE="$RUNNER_TEMP/skycar-browser/node_modules/happy-dom/lib/index.js"
+          node --test tests/components/*.test.mjs
+          node tests/ui/technician-availability-state.mjs
+      - name: Run all customer browser regressions
+        run: |
+          export PLAYWRIGHT_MODULE="$RUNNER_TEMP/skycar-browser/node_modules/playwright/index.mjs"
+          node tests/ui/care-entry.mjs
+          node tests/ui/care-my-jobs.mjs
+          node tests/ui/care-status.mjs
+          node tests/ui/customer-journey.mjs
+          node tests/ui/guest-photo-recovery.mjs
+          node tests/ui/booking-photo-intake.mjs
+          node tests/ui/care-coverage.mjs
+          node tests/ui/care-coverage-stale.mjs
+          node tests/ui/care-journey-privacy.mjs
+          node tests/ui/care-operations.mjs
+          node tests/ui/technician-inbox.mjs
+          node tests/ui/technician-quotes.mjs
+          node tests/ui/technician-completion.mjs
+          node tests/ui/customer-completion-review.mjs
+          node tests/ui/photo-picker-refresh.mjs
+          node tests/ui/technician-availability-refresh.mjs
+          node tests/ui/care-connected-customer.mjs
+          npm run start -- --hostname 127.0.0.1 -p 3100 > "$RUNNER_TEMP/skycar-garage.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:3100/ >/dev/null && break; sleep 1; done
+          GARAGE_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE" node tests/e2e/garage.browser.mjs
+          GARAGE_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE" node tests/e2e/garage-recovery.browser.mjs
+        env:
+          SKYCAR_ENV: demo
+      - name: Preserve synthetic browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: customer-ui-${{ matrix.revision }}
+          path: |
+            docs/qa/
+            .garage-qa/
+          include-hidden-files: true
