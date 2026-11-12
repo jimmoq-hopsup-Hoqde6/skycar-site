@@ -8,17 +8,21 @@ concurrency:
   cancel-in-progress: false
 jobs:
   connection:
+    # Main-only run and protected environment are defense in depth.
+    # The environment must independently enforce owner review + main-only refs.
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    environment: skycar-agent-pilot
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.SKYCAR_OPENAI_SMOKE_KEY }}
     steps:
       - name: Verify OpenAI connection without exposing credentials
         shell: bash
         run: |
           set -euo pipefail
           if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::error::OPENAI_API_KEY is missing from repository Actions secrets"
+            echo "::error::SKYCAR_OPENAI_SMOKE_KEY is missing from the protected environment"
             exit 1
           fi
           python3 - <<'PY'
