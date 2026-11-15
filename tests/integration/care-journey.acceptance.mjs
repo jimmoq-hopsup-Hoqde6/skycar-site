@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {tomorrowAt,publishAvailability} from './availability-fixture.mjs';
 
 // Disposable PostgreSQL acceptance. Auth and storage are local shims; this is
 // not evidence of hosted Supabase, email delivery, AI assessment or payment.
@@ -30,6 +31,11 @@ export async function verifyCareJourney({sql,auth,quote,garageCreate,carePayload
   equal(json(service(actor('create_expert',null,admin,null,expertKey,expertPayload))).replayed,true,'expert creation replays');
   fails(service(actor('create_expert',null,admin,null,expertKey,{...expertPayload,business_name:'Changed'})),'IDEMPOTENCY_CONFLICT');
   equal(sql(`select count(*) from public.care_experts where id=${quote(expertId)}::uuid`),'1');
+  // 20261115090000: every bookable expert has a linked technician login with published availability.
+  const expertTech=randomUUID();
+  sql(`insert into auth.users(id) values (${quote(expertTech)}); insert into public.user_roles(user_id,role) values (${quote(expertTech)},'technician');
+    insert into public.care_technician_accounts(expert_id,user_id) values (${quote(expertId)},${quote(expertTech)});`);
+  sql(publishAvailability(quote,expertTech));
 
   const vehicle=garageCreate(owner,randomUUID(),'Connected journey');
   const request=json(auth(owner,`select public.care_submit_request(gen_random_uuid(),${quote(carePayload(vehicle.id))}::jsonb)`)).request;
@@ -44,8 +50,8 @@ export async function verifyCareJourney({sql,auth,quote,garageCreate,carePayload
 
   const times=json(`select jsonb_build_object(
     'expiry',date_trunc('seconds',clock_timestamp()+interval '1 hour'),
-    'start',date_trunc('seconds',clock_timestamp()+interval '1 day'),
-    'end',date_trunc('seconds',clock_timestamp()+interval '1 day 2 hours'))`);
+    'start',${tomorrowAt(10)},
+    'end',${tomorrowAt(12)})`);
   const quotePayload={expert_id:expertId,scope_summary:'Repair and refinish the visible bumper damage',total_price_cents:49500,expires_at:times.expiry,starts_at:times.start,ends_at:times.end};
   const published=json(command('publish_quote',requestId,admin,quotePayload).sql);
   equal(published.state,'quotes_ready');

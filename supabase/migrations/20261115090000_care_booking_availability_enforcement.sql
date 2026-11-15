@@ -19,10 +19,14 @@ begin;
 --                                  crosses local midnight, DST-ambiguous weekly boundary, ...).
 -- Capacity overlap with another booking keeps its existing code SLOT_UNAVAILABLE.
 --
--- Scope: only experts with an active, technician-role account are checked. An expert with no such
--- account is operations-managed: nobody can publish a schedule for it (the replace RPC needs the
--- technician's own account), so operations attest availability with confirm's
--- {"availability_confirmed":true}, as before.
+--   EXPERT_ACCOUNT_REQUIRED        the expert has never had a linked technician account (no
+--                                  care_technician_accounts row). A linked account that is inactive, or
+--                                  whose user lost the technician role, keeps the existing code
+--                                  EXPERT_UNAVAILABLE. Decision (Marcel, 15 Nov 2026, relayed): "Every
+--                                  technician needs a login." No operations-managed exemption: confirm's
+--                                  {"availability_confirmed":true} is still required but is no longer a
+--                                  substitute for a published schedule.
+-- Checked in this order: account, then schedule (AVAILABILITY_REQUIRED), then slot.
 --
 -- Lock order (canonical: advisory -> vehicle -> care_requests -> care_journeys -> quote/expert ->
 -- expert-capacity advisory). The helper takes no lock: plain reads of care_technician_accounts,
@@ -60,7 +64,13 @@ begin
     join public.user_roles r on r.user_id = a.user_id and r.role = 'technician'
     where a.expert_id = p_expert_id and a.active
   ) then
-    return; -- operations-managed expert: no schedule can exist (see header)
+    -- Linked before but now inactive or without the technician role: the existing "expert unavailable"
+    -- answer (same code the selection guard and the technician RPCs already use). Never linked: the
+    -- expert cannot be booked until a technician login is linked.
+    if exists(select 1 from public.care_technician_accounts a where a.expert_id = p_expert_id) then
+      raise exception using errcode = 'P0001', message = 'EXPERT_UNAVAILABLE';
+    end if;
+    raise exception using errcode = 'P0001', message = 'EXPERT_ACCOUNT_REQUIRED';
   end if;
   outcome := public.care_technician_availability_check(p_expert_id, p_starts, p_ends);
   if outcome = 'AVAILABLE' then

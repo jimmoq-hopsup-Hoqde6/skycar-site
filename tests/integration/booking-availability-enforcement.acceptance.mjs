@@ -89,13 +89,45 @@ export async function verifyBookingAvailabilityEnforcement({sql, quote, result})
   const replay = json(journey('confirm', a, {availability_confirmed: true}, admin, confirmKey));
   equal([replay.replayed, replay.state, state(a)], [true, 'scheduled', 'scheduled'], 'a confirmed booking replays after the schedule changes');
 
-  // ---- 5. Operations-managed expert (no technician account) keeps the operations attestation path. ------
+  // ---- 5. Expert with no linked technician login: refused at every entry point (Marcel, 15 Nov 2026:
+  // "Every technician needs a login"). No operations fallback: availability_confirmed does not help.
   const b = vehicleFor();
-  const opsQuote = json(journey('publish_quote', b, {expert_id: opsExpert, ...slot(false)}));
-  equal(opsQuote.state, 'quotes_ready');
-  const opsQuoteId = sql(`select id from public.care_reviewed_quotes where journey_id=${quote(b)}::uuid and status='issued'`);
-  json(journey('select_quote', b, {quote_id: opsQuoteId, address: '2 King William St'}, customer));
-  equal(json(journey('confirm', b, {availability_confirmed: true})).state, 'scheduled');
+  const quotesFor = id => sql(`select count(*) from public.care_reviewed_quotes where journey_id=${quote(id)}::uuid`);
+  // (a) admin publish_quote
+  fails(journey('publish_quote', b, {expert_id: opsExpert, ...slot()}), 'EXPERT_ACCOUNT_REQUIRED', 'publish for an unlinked expert');
+  equal([quotesFor(b), state(b)], ['0', 'review'], 'nothing published');
+  // (b) customer select_quote of a quote that names an unlinked expert (inserted directly: it can no longer be published)
+  const unlinkedQuote = randomUUID();
+  sql(`insert into public.care_reviewed_quotes(id,journey_id,expert_id,expert_name,expert_description,scope_summary,total_price_cents,status,expires_at,starts_at,ends_at)
+     values(${quote(unlinkedQuote)},${quote(b)},${quote(opsExpert)},'Operations managed','Synthetic','Synthetic legacy quote',10000,'issued',${quote(times.expiry)},${quote(times.in_start)},${quote(times.in_end)});
+    update public.care_journeys set state='quotes_ready' where id=${quote(b)}::uuid;`);
+  fails(journey('select_quote', b, {quote_id: unlinkedQuote, address: '2 King William St'}, customer), 'EXPERT_ACCOUNT_REQUIRED', 'select of an unlinked expert');
+  equal([state(b), sql(`select status from public.care_reviewed_quotes where id=${quote(unlinkedQuote)}::uuid`)], ['quotes_ready', 'issued']);
+  // (c) admin confirm of a booking request that names an unlinked expert (pre-existing row shape)
+  sql(`update public.care_reviewed_quotes set status='selected' where id=${quote(unlinkedQuote)}::uuid;
+    update public.care_journeys set state='booking_requested',selected_quote_id=${quote(unlinkedQuote)},expert_id=${quote(opsExpert)},
+      starts_at=${quote(times.in_start)},ends_at=${quote(times.in_end)},customer_details=customer_details||'{"address":"2 King William St"}' where id=${quote(b)}::uuid;`);
+  const unlinkedConfirmKey = randomUUID();
+  fails(journey('confirm', b, {availability_confirmed: true}, admin, unlinkedConfirmKey), 'EXPERT_ACCOUNT_REQUIRED', 'confirm of an unlinked expert, even with the operations attestation');
+  equal(state(b), 'booking_requested');
+  equal(sql(`select count(*) from public.care_journey_commands where idempotency_key=${quote(unlinkedConfirmKey)}::uuid`), '0', 'the refused confirm stored no command');
+  // (d) technician quote: a technician login with no linked expert cannot quote at all (existing FORBIDDEN), so an
+  // unlinked expert is unreachable here; the helper itself answers EXPERT_ACCOUNT_REQUIRED.
+  sql(`insert into public.user_roles(user_id,role) values(${quote(opsOnlyTech)},'technician') on conflict do nothing;`);
+  fails(service(`select public.care_technician_job_command(${quote(opsOnlyTech)}::uuid,gen_random_uuid(),'quote',${quote(b)}::uuid,${quote(JSON.stringify(slot()))}::jsonb)`), 'FORBIDDEN', 'unlinked technician login');
+  fails(service(`select public.care_assert_expert_slot_available(${quote(opsExpert)}::uuid,${quote(times.in_start)}::timestamptz,${quote(times.in_end)}::timestamptz)`), 'EXPERT_ACCOUNT_REQUIRED', 'helper: never linked');
+  // A linked account that is deactivated keeps the existing EXPERT_UNAVAILABLE answer (technician quote included).
+  const c0 = vehicleFor();
+  json(adminCommand('invite_technician', c0, {expert_id: expert}));
+  sql(`update public.care_technician_accounts set active=false where expert_id=${quote(expert)}::uuid`);
+  fails(service(`select public.care_assert_expert_slot_available(${quote(expert)}::uuid,${quote(times.in_start)}::timestamptz,${quote(times.in_end)}::timestamptz)`), 'EXPERT_UNAVAILABLE', 'helper: linked but inactive');
+  assert.throws(() => sql(techCommand(slot(), c0)), /EXPERT_UNAVAILABLE|FORBIDDEN/, 'technician quote while the link is inactive'); checks++;
+  equal(quotesFor(c0), '0');
+  sql(`update public.care_technician_accounts set active=true where expert_id=${quote(expert)}::uuid`);
+  // Linking a technician login (and publishing) makes the same unlinked-expert booking confirmable.
+  sql(`insert into public.care_technician_accounts(expert_id,user_id) values(${quote(opsExpert)},${quote(opsOnlyTech)});`);
+  json(publishAvailability(quote, opsOnlyTech, hours('09:00', '12:00')));
+  equal(json(journey('confirm', b, {availability_confirmed: true}, admin, unlinkedConfirmKey)).state, 'scheduled', 'the refused key is reusable once linked');
 
   // ---- 6. Concurrency: confirm and replace serialise on the schedule advisory lock. -----------------------
   // (i) replace removing the slot holds its locks; confirm waits, then refuses (never books outside).

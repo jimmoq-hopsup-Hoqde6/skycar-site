@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {tomorrowAt,publishAvailability} from './availability-fixture.mjs';
 
 export async function verifyCustomerCompletionReview({sql,auth,quote,result,waitForQuery}){
  let checks=0;const run=s=>Promise.resolve().then(()=>sql(s));const json=async s=>JSON.parse((await run(s)).split('\n')[0]);
@@ -130,13 +131,17 @@ export async function verifyCustomerCompletionReview({sql,auth,quote,result,wait
   // never deadlock, duplicate a mutation or silently reuse another action.
   for(const reviewFirst of [true,false]){
    const review=await fixture(),selection=await fixture('account','in_progress');
-   const expert=randomUUID(),quoteId=randomUUID(),sharedKey=randomUUID();
+   const expert=randomUUID(),expertTech=randomUUID(),quoteId=randomUUID(),sharedKey=randomUUID();
    await run(`update public.care_requests set vehicle_id=${quote(review.vehicle)} where id=${quote(selection.id)};
     update public.care_journeys set state='quotes_ready',customer_details='{"postcode":"5000"}' where id=${quote(selection.id)};
     insert into public.care_experts(id,business_name,description,services,postcodes,insurance_valid_until)
      values(${quote(expert)},'Synthetic expert','Synthetic concurrency fixture',array['repair'],array['5000'],current_date+30);
+    insert into auth.users(id) values(${quote(expertTech)}); insert into public.user_roles(user_id,role) values(${quote(expertTech)},'technician');
+    insert into public.care_technician_accounts(expert_id,user_id) values(${quote(expert)},${quote(expertTech)});
     insert into public.care_reviewed_quotes(id,journey_id,expert_id,expert_name,expert_description,scope_summary,total_price_cents,expires_at,starts_at,ends_at)
-     values(${quote(quoteId)},${quote(selection.id)},${quote(expert)},'Synthetic expert','Synthetic fixture','Inspect synthetic repair work',10000,now()+interval '1 day',now()+interval '2 days',now()+interval '2 days 1 hour');`);
+     values(${quote(quoteId)},${quote(selection.id)},${quote(expert)},'Synthetic expert','Synthetic fixture','Inspect synthetic repair work',10000,now()+interval '1 hour',${tomorrowAt(10)},${tomorrowAt(11)});`);
+   // 20261115090000: the expert has a linked technician login with published availability.
+   await run(publishAvailability(quote,expertTech));
    const reviewCommand=command(review.id,customer,null,'confirm_completion',{},sharedKey);
    const selectCommand=service(`select public.care_journey_command('select_quote',${quote(selection.id)}::uuid,${quote(customer)}::uuid,null,${quote(sharedKey)}::uuid,${quote(JSON.stringify({quote_id:quoteId,address:'1 Synthetic Street'}))}::jsonb)`);
    const tag=`review_select_${reviewFirst?'review':'select'}_first`;
