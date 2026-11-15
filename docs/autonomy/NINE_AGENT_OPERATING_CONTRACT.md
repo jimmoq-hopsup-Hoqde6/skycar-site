@@ -28,7 +28,7 @@ Never automatically transition to MERGED, PRODUCTION_DEPLOYED, PAYMENT_ENABLED, 
 - Work selection: GitHub issues explicitly labeled for agent execution, excluding security-sensitive and production tasks.
 - Isolation: one issue per ephemeral runner/worktree/branch; no cross-agent mutable workspace.
 - Permissions: default read-only; short-lived narrowly scoped write token only for code branch/draft PR operations.
-- Credentials: GitHub Actions secret OPENAI_API_KEY; never print, commit, or expose to PR jobs from forks.
+- Credentials: dedicated minimal-scope secret bound only to an administrator-verified protected GitHub Actions environment, after owner approval; no general repository-scoped OPENAI_API_KEY fallback. Do not print, commit, or expose tokens to untrusted PR jobs. A YAML environment declaration alone does not establish protection.
 - Model access: bounded token/request budgets, per-task cap, daily cap, retries and kill switch.
 - Logging: issue ID, role, commit SHA, model usage estimate, CI evidence, QA/Security verdict, errors.
 - Independence: implementer cannot sign off their own QA or Security review.
@@ -39,11 +39,11 @@ Never automatically transition to MERGED, PRODUCTION_DEPLOYED, PAYMENT_ENABLED, 
 ## Activation checklist (ALL must be verified)
 - [ ] Audit existing workflows and repository protection/rulesets.
 - [ ] Implement and review actual runner + queue + agent prompts/config.
-- [ ] Verify secret access without exposing secret values.
+- [ ] Verify credential *scope and protection rules* without accessing secret values.
 - [ ] Verify budget limits, failure handling, audit trail, and emergency stop.
 - [ ] Execute isolated manual pilot and verify draft PR creation.
 - [ ] Obtain independent QA and Security verdicts on exact SHA.
 - [ ] Obtain explicit owner authorization to enable unattended execution.
 - [ ] Enable schedule/runner and monitor first unattended cycle.
 
-**Current state:** staged design only. This file intentionally contains no executable automation.
+**Current state:** staged nine-role design only. A successful connection-only smoke test on main is not evidence that an autonomous Codex executor is operating.
