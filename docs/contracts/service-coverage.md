@@ -254,3 +254,27 @@ A five-key in-area create must still succeed, and a five-key out-of-area create 
 - A present postcode is area-checked (`OUT_OF_AREA` or `COVERAGE_UNAVAILABLE`), including after the cap.
 - A three-key body, or a four-key body plus an unknown key, remains `VALIDATION_FAILED`.
 
+
+## 10. Stored request postcode and the update-details re-check (`20261115100000`)
+
+Forward-only. `care_submit_request` (sunset body from `20261108120000`) and `care_journey_command` are not
+re-created; both are reached through triggers.
+
+- `care_requests.service_postcode` (nullable, 4 digits) and `service_postcode_source`:
+  `submit` (written in the submit transaction from the submit command's postcode, which that function had
+  just area-checked), `update_details` (an accepted journey postcode change, checked below), `backfill`
+  (copied once by the migration from the saved journey postcode, else the submit command postcode; not
+  re-checked, so pre-existing out-of-area journeys keep their value and are visible by this label), or
+  `unknown` (no postcode: signed-in legacy four-key creates). `unknown` if and only if the postcode is null.
+  The migration raises a NOTICE with the backfilled and unknown counts.
+- Legacy semantics are unchanged: a four-key create is still allowed only while `care_legacy_create_open`
+  is true (before `2026-11-21T13:30:00Z` with the switch on) and is stored as `unknown`. The compat and audit
+  rows are not read or written by this migration.
+- `care_journey_command('update_details')`: when the postcode changes, `care_assert_postcode_covered` runs for
+  the journey's service (the request, or the guest payload) with the same codes as submit:
+  `OUT_OF_AREA` (HTTP 422) or `COVERAGE_UNAVAILABLE` (HTTP 503, fail closed, `retryable: false`), plus
+  `VALIDATION_FAILED` for an unknown service. The command is aborted as a whole: no journey change, no quote
+  withdrawal, no event, no idempotency row, so the customer can retry the same key with a covered postcode.
+  A change that keeps the postcode (name, phone, suburb) is not an area decision and is not re-checked.
+- Lock order: the check is plain reads. The account-journey sync writes the `care_requests` row that
+  `care_journey_command` already holds `FOR UPDATE` (tier 3) before it locks the journey, so no edge is added.

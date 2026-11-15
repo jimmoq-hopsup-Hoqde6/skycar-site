@@ -3,13 +3,15 @@ export type CareInput = {
   service: "repair" | "cleaning";
   description: string;
   preferred_window: "one_to_two_business_days" | "seven_to_fourteen_days" | "flexible";
-  // Four digits. Checked against the service area by care_submit_request (OUT_OF_AREA), not stored on the request.
+  // Four digits. Checked against the service area by care_submit_request (OUT_OF_AREA) and, since 20261115100000,
+  // stored on the request (care_requests.service_postcode) and re-checked when the journey postcode changes.
   // Absent only in the legacy four-key shape sent by a form that predates the check (a stale tab, or a retry of
   // a request it created): the database replays those and, while its compatibility switch is on, creates them.
   postcode?: string;
 };
 
-// What a request looks like once created: the postcode is only used for the area check.
+// What a request looks like once created. The stored service postcode (care_requests.service_postcode and
+// service_postcode_source) also appears in the request snapshot but is not part of this typed contract.
 export type CareRequestFields = Omit<CareInput, "postcode">;
 
 export type CareEvent = {

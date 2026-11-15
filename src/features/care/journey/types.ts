@@ -25,6 +25,6 @@ export async function api(path:string,options:RequestInit={}) {
  let response:Response;
  try{response=await fetch(path,{...options,cache:'no-store',credentials:'same-origin',signal:options.signal?AbortSignal.any([options.signal,AbortSignal.timeout(30000)]):AbortSignal.timeout(30000)});}catch{throw new JourneyApiError('We could not confirm the result. Please retry the same action.',0,true);}
  let envelope;try{envelope=await response.json();}catch{throw new JourneyApiError('We could not verify the response. Please refresh or retry the same action.',response.status,true);}
- if(!response.ok)throw new JourneyApiError(envelope.error?.message||'The request could not be completed.',response.status,envelope.error?.retryable===true||response.status>=500);
+ if(!response.ok)throw new JourneyApiError(envelope.error?.message||'The request could not be completed.',response.status,envelope.error?.retryable===true||(response.status>=500&&envelope.error?.code!=='COVERAGE_UNAVAILABLE'));
  return {data:envelope.data,account:response.headers.get('X-Skycar-Account')};
 }

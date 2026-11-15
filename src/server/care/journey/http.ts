@@ -14,11 +14,17 @@ const errors: Record<string,[number,string]> = {
  EXPERT_UNAVAILABLE:[409,'The expert’s service area, insurance or availability needs review.'],
  EVIDENCE_REQUIRED:[409,'Upload completion evidence before marking the work complete.'],
  LINK_CONFLICT:[409,'This technician account or expert already has a different link.'],
+ // 20261115100000: update_details re-checks the service area with the same codes as submit.
+ OUT_OF_AREA:[422,'Skycar does not cover that postcode yet. Your service details were not changed.'],
+ COVERAGE_UNAVAILABLE:[503,"We can't check your service area right now. Your service details were not changed. Please try again in a moment."],
  DETAILS_REQUIRED:[409,'The customer must save a service postcode before a technician is invited.'],
  PAYLOAD_TOO_LARGE:[413,'Choose up to three smaller photos.'],
  RATE_LIMITED:[429,'Too many photo uploads. Wait a little, then retry the same photos.'],
  UNAVAILABLE:[503,'We could not confirm the result. Retry the same action safely.'],
 };
+// Same as submit (src/server/care/http.ts): an unavailable coverage list is a fail-closed answer, not an
+// uncertain write, so the client must not keep the key for a blind retry.
+const NOT_RETRYABLE=new Set(['COVERAGE_UNAVAILABLE']);
 export function journeyJson(data:unknown,status=200,account?:string) {return Response.json({data},{status,headers:{'Cache-Control':'private, no-store','Vary':'Cookie','X-Content-Type-Options':'nosniff',...(account ? {'X-Skycar-Account':account} : {})}});}
 export async function journeyBoundary(action:()=>Promise<Response>) {
  try{return await action();}catch(error){
@@ -26,7 +32,7 @@ export async function journeyBoundary(action:()=>Promise<Response>) {
   const code=known && error.code in errors ? error.code : 'UNAVAILABLE';
   const [status,message]=errors[code];
   const retryAfter:Record<string,string>=known && code==='RATE_LIMITED' && Number.isInteger(error.retryAfter) ? {'Retry-After':String(error.retryAfter)} : {};
-  return Response.json({error:{code,message,retryable:status>=500||status===429}},{status,headers:{'Cache-Control':'private, no-store','Vary':'Cookie','X-Content-Type-Options':'nosniff',...retryAfter}});
+  return Response.json({error:{code,message,retryable:(status>=500&&!NOT_RETRYABLE.has(code))||status===429}},{status,headers:{'Cache-Control':'private, no-store','Vary':'Cookie','X-Content-Type-Options':'nosniff',...retryAfter}});
  }
 }
 export async function boundedBody(request:Request,limit=16384) {
