@@ -204,6 +204,8 @@ export async function verifyRequestPhotoMarker({ sql, auth, quote, run, carePayl
     `begin; grant create on schema public to photo_nousage_owner;
      alter function public.care_backfill_legacy_photo_markers() owner to photo_nousage_owner;
      alter function public.care_observed_request_photo_count(uuid, text) owner to photo_nousage_owner;
+     -- 20261115110000: the observation calls care_photo_storage_visibility(), owned by the same migration role.
+     alter function public.care_photo_storage_visibility() owner to photo_nousage_owner;
      ${body}; rollback;`], { encoding: 'utf8' });
   const noUsageBefore = sql('select count(*) from public.care_request_photo_sets');
   const noUsage = asNoUsageOwner('select public.care_backfill_legacy_photo_markers()');
