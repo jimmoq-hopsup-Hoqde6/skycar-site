@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {tomorrowAt,publishAvailability} from './availability-fixture.mjs';
 export async function verifyTechnicianQuotes({sql,auth,quote,result,waitForQuery}){
  let checks=0;const run=s=>Promise.resolve().then(()=>sql(s));const json=async s=>JSON.parse((await run(s)).split('\n')[0]);
  const equal=(a,b,label)=>{assert.deepEqual(a,b,label);checks++;};const fail=async(s,code)=>{await assert.rejects(()=>run(s),e=>`${e.message}\n${e.stderr||''}`.includes(code),code);checks++;};
@@ -15,7 +16,9 @@ export async function verifyTechnicianQuotes({sql,auth,quote,result,waitForQuery
  const journey=(action,id,payload,actor=admin,guestKey=null)=>service(`select public.care_journey_command(${quote(action)},${quote(id)}::uuid,${actor?`${quote(actor)}::uuid`:'null'},${guestKey?`${quote(guestKey)}::uuid`:'null'},gen_random_uuid(),${quote(JSON.stringify(payload))}::jsonb)`);
  const status=id=>run(`select status from public.care_reviewed_quotes where id=${quote(id)}::uuid`);
  await json(adminCommand('bind_technician',null,{expert_id:expertA,user_id:techA}));await json(adminCommand('bind_technician',null,{expert_id:expertB,user_id:techB}));
- const times=await json("select jsonb_build_object('expiry',date_trunc('seconds',clock_timestamp()+interval '1 hour'),'start',date_trunc('seconds',clock_timestamp()+interval '1 day'),'end',date_trunc('seconds',clock_timestamp()+interval '1 day 2 hours'))");
+ // 20261115090000: both technicians publish availability that covers the quoted slot.
+ await run(publishAvailability(quote,techA));await run(publishAvailability(quote,techB));
+ const times=await json(`select jsonb_build_object('expiry',date_trunc('seconds',clock_timestamp()+interval '1 hour'),'start',${tomorrowAt(10)},'end',${tomorrowAt(12)})`);
  const payload={scope_summary:'Inspect and repair the bumper scratch',total_price_cents:49500,expires_at:times.expiry,starts_at:times.start,ends_at:times.end};
  await fail(auth(techA,`select public.care_technician_job_command(${quote(techA)},gen_random_uuid(),'decline',${quote(guest)},'{}')`),'permission denied');
  await fail(command(customer,'quote',guest,payload),'FORBIDDEN');await fail(command(unlinked,'quote',guest,payload),'FORBIDDEN');await fail(command(techA,'quote',guest,payload),'NOT_FOUND');

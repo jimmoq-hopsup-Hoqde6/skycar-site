@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {weekOf,tomorrowAt,publishAvailability} from './availability-fixture.mjs';
 
 // Cross-feature lock order on the integrated chain. care_journey_command takes
 //   advisory(scope:key) -> vehicle FOR UPDATE -> care_requests FOR UPDATE -> care_journeys FOR UPDATE
@@ -15,7 +16,7 @@ import {randomUUID} from 'node:crypto';
 // (expected isolation). Every concurrent outcome and final state must equal running the same two commands serially
 // in the same order, and nothing may raise 40P01 or 55P03. A negative control with a genuinely inverted pair of
 // plain row locks proves the harness does detect a deadlock.
-const SLEEP = 'skycar.lock_test_sleep', SLEEP_EXPERT = 'skycar.lock_test_sleep_expert', SECONDS = '1.5';
+const SLEEP = 'skycar.lock_test_sleep', SLEEP_EXPERT = 'skycar.lock_test_sleep_expert', SLEEP_AVAIL = 'skycar.lock_test_sleep_avail', SECONDS = '1.5';
 const SIGS = {
  journey: 'public.care_journey_command(text,uuid,uuid,uuid,uuid,jsonb)',
  submit: 'public.care_submit_request(uuid,jsonb)',
@@ -33,6 +34,8 @@ function injectAfter(definition, anchor, guc, from = 0) {
 }
 const INJECT = {
  journey: d => injectAfter(d, 'select * into journey from public.care_journeys where id=p_id for update;', SLEEP),
+ // 20261115090000: confirm sleeps right after its availability check, i.e. while it holds the schedule advisory lock.
+ journeyAvail: d => injectAfter(d, 'perform public.care_assert_expert_slot_available(journey.expert_id,journey.starts_at,journey.ends_at);', SLEEP_AVAIL),
  journeyExpert: d => {
   const lock = d.indexOf("perform pg_advisory_xact_lock(hashtextextended('care:expert-capacity:'");
   assert.ok(lock > 0, 'confirm expert-capacity lock not found');
@@ -51,7 +54,9 @@ const classify = outcome => {
  return match ? match[1] : `OTHER:${output.split('\n')[0]}`;
 };
 const HASH = 'ab'.repeat(32);
-const EVIDENCE_FREE = JSON.stringify({timezone: 'Australia/Adelaide', weekly_windows: [{weekday: 1, starts_at: '09:00', ends_at: '17:00'}], exceptions: []});
+// Fixtures publish 09:00-17:00 every day (revision 1) and book tomorrow 10:00-11:00 Adelaide. The replace commands
+// rewrite revision 1: KEEP still covers the slot, AWAY (00:00-09:00) no longer does (20261115090000).
+const KEEP = weekOf('08:00', '18:00'), AWAY = weekOf('00:00', '09:00');
 
 export async function verifyCrossLockOrder({sql, quote, result}) {
  const originals = Object.fromEntries(Object.entries(SIGS).map(([name, signature]) => [name, sql(`select pg_get_functiondef(${quote(signature)}::regprocedure)`)]));
@@ -79,10 +84,11 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
    insert into public.care_requests(id,customer_id,vehicle_id,service,description,preferred_window,next_update_at,escalation_minutes)
     values(${quote(f.id)},${quote(f.customer)},${quote(f.vehicle)},'repair','Synthetic cross lock order','flexible',clock_timestamp()+interval '1 hour',30);
    insert into public.care_journeys(id,account_request_id,customer_details,state,expert_id,starts_at,ends_at)
-    values(${quote(f.id)},${quote(f.id)},'{"postcode":"5000"}','booking_requested',${quote(f.expert)},clock_timestamp()+interval '1 day',clock_timestamp()+interval '1 day 1 hour');
+    values(${quote(f.id)},${quote(f.id)},'{"postcode":"5000"}','booking_requested',${quote(f.expert)},${tomorrowAt(10)},${tomorrowAt(11)});
    insert into public.care_reviewed_quotes(id,journey_id,expert_id,expert_name,expert_description,scope_summary,total_price_cents,status,expires_at,starts_at,ends_at)
-    values(${quote(f.quoteId)},${quote(f.id)},${quote(f.expert)},'Cross lock technician','Synthetic isolated expert','Synthetic repair',10000,'selected',clock_timestamp()+interval '1 hour',clock_timestamp()+interval '1 day',clock_timestamp()+interval '1 day 1 hour');
+    values(${quote(f.quoteId)},${quote(f.id)},${quote(f.expert)},'Cross lock technician','Synthetic isolated expert','Synthetic repair',10000,'selected',clock_timestamp()+interval '1 hour',${tomorrowAt(10)},${tomorrowAt(11)});
    update public.care_journeys set selected_quote_id=${quote(f.quoteId)} where id=${quote(f.id)};`);
+  sql(publishAvailability(quote, f.tech, weekOf('09:00', '17:00')));
   return f;
  }
  const snapshot = f => sql(`select concat_ws('|',
@@ -102,7 +108,8 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
   submit: postcode => (f, label, g) => `${head(label, customerRole(f), Object.entries(g ?? {}).map(([k, v]) => `set local ${k}='${v}';`).join(''))}select public.care_submit_request(${quote(randomUUID())}::uuid,${quote(submitBody(f, postcode))}::jsonb);commit;`,
   record: (f, label, g) => service(label, `select public.care_record_request_photos(${quote(f.id)}::uuid,1,${quote(HASH)},'account')`, g),
   heal: (f, label, g) => service(label, `select public.care_heal_request_photo_marker(${quote(f.id)}::uuid,'account')`, g),
-  availability: (f, label, g) => service(label, `select public.care_technician_replace_availability(${quote(f.tech)}::uuid,${quote(randomUUID())}::uuid,0,${quote(EVIDENCE_FREE)}::jsonb)`, g),
+  availability: (f, label, g) => service(label, `select public.care_technician_replace_availability(${quote(f.tech)}::uuid,${quote(randomUUID())}::uuid,1,${quote(KEEP)}::jsonb)`, g),
+  availabilityAway: (f, label, g) => service(label, `select public.care_technician_replace_availability(${quote(f.tech)}::uuid,${quote(randomUUID())}::uuid,1,${quote(AWAY)}::jsonb)`, g),
  };
  const run = (builder, f, label, gucs) => result(builder(f, label, gucs));
  const serial = async (first, second) => {
@@ -143,6 +150,7 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
 
  try {
   sql(INJECT.journey(originals.journey)); sql(INJECT.journeyExpert(sql(`select pg_get_functiondef(${quote(SIGS.journey)}::regprocedure)`)));
+  sql(INJECT.journeyAvail(sql(`select pg_get_functiondef(${quote(SIGS.journey)}::regprocedure)`)));
   sql(INJECT.submit(originals.submit)); sql(INJECT.photo(originals.record)); sql(INJECT.photo(originals.heal)); sql(INJECT.availability(originals.availability));
 
   // (a) journey vs care_submit_request with the coverage check, both directions.
@@ -161,13 +169,28 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
    await pair(`${name} (holds request key share) then journey cancel`, builder, cmd.cancel, SLEEP, 'contention');
   }
 
-  // (c) journey vs the availability RPC: the confirm sleeps after it holds journey, expert key share and the
-  // capacity advisory lock; availability takes expert FOR SHARE (compatible) and its own advisories. Neither waits.
-  const c1 = await pair('journey confirm (holds request,journey,expert key share,capacity advisory) then availability replace', cmd.confirm, cmd.availability, SLEEP_EXPERT, 'isolation');
+  // (c) journey confirm vs the availability RPC. Since 20261115090000, confirm takes, after the capacity advisory
+  // lock, the schedule advisory lock that care_technician_replace_availability holds while it rewrites windows,
+  // then checks the slot. So the two serialise on that lock (contention, never a deadlock) and the check sees the
+  // schedule that is current when it runs.
+  // c0: confirm sleeps BEFORE the schedule lock (after the expert check): replace does not wait for it.
+  const c0 = await pair('journey confirm (holds request,journey,expert key share,capacity advisory) then availability replace', cmd.confirm, cmd.availability, SLEEP_EXPERT, 'isolation');
+  assert.deepEqual(c0.outcomes, ['ok', 'ok']);
+  // c1: confirm sleeps AFTER its check, holding the schedule lock: replace waits for it.
+  const c1 = await pair('journey confirm (holds schedule advisory after its availability check) then availability replace', cmd.confirm, cmd.availability, SLEEP_AVAIL, 'contention');
   assert.deepEqual(c1.outcomes, ['ok', 'ok']);
-  const c2 = await pair('availability replace (holds expert share, schedule advisory and row) then journey confirm', cmd.availability, cmd.confirm, SLEEP, 'isolation');
+  assert.equal(c1.snapshot.split('|')[0], 'scheduled');
+  // c2: replace sleeps holding the schedule lock and row: confirm waits for it, then checks the new schedule.
+  const c2 = await pair('availability replace (holds expert share, schedule advisory and row) then journey confirm', cmd.availability, cmd.confirm, SLEEP, 'contention');
   assert.deepEqual(c2.outcomes, ['ok', 'ok']);
-  assert.equal(c2.snapshot.split('|')[3], '1', 'availability revision advanced exactly once');
+  assert.equal(c2.snapshot.split('|')[3], '2', 'availability revision advanced exactly once');
+  // c3: a replace that removes the slot commits while confirm waits: confirm must refuse, not book.
+  const c3 = await pair('availability replace removing the slot (holds schedule lock) then journey confirm', cmd.availabilityAway, cmd.confirm, SLEEP, 'contention');
+  assert.deepEqual(c3.outcomes, ['ok', 'AVAILABILITY_SLOT_UNAVAILABLE']);
+  assert.equal(c3.snapshot.split('|')[0], 'booking_requested', 'nothing was booked outside the new schedule');
+  // c4: confirm decided first and holds the lock: the later schedule change waits and does not undo the booking.
+  const c4 = await pair('journey confirm (holds schedule advisory) then availability replace removing the slot', cmd.confirm, cmd.availabilityAway, SLEEP_AVAIL, 'contention');
+  assert.deepEqual(c4.outcomes, ['ok', 'ok']);
  } finally {
   restore();
  }

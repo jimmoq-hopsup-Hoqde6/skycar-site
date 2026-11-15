@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {tomorrowAt,publishAvailability} from './availability-fixture.mjs';
 import {readFileSync} from 'node:fs';
 
 // Canonical lock order for care_journey_command (and its peers):
@@ -70,8 +71,8 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
   const future = ['booking_requested', 'quotes_ready'].includes(state);
   const requestFulfilment = {scheduled: 'scheduled', in_progress: 'in_progress', completed: 'completed'}[state] ?? null;
   const quoteStatus = state === 'quotes_ready' ? 'issued' : 'selected';
-  const startsAt = future ? "clock_timestamp()+interval '1 day'" : "clock_timestamp()-interval '1 hour'";
-  const endsAt = future ? "clock_timestamp()+interval '1 day 1 hour'" : "clock_timestamp()+interval '1 hour'";
+  const startsAt = future ? tomorrowAt(10) : "clock_timestamp()-interval '1 hour'";
+  const endsAt = future ? tomorrowAt(11) : "clock_timestamp()+interval '1 hour'";
   const expiresAt = future ? "clock_timestamp()+interval '1 hour'" : "clock_timestamp()-interval '2 hours'";
   const insertState = state === 'completed' ? 'in_progress' : state;
   const hasExpert = state !== 'quotes_ready';
@@ -93,6 +94,8 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
    ${hasExpert ? `update public.care_journeys set selected_quote_id=${quote(f.quoteId)} where id=${quote(f.id)};` : ''}
    ${state === 'quotes_ready' ? `update public.care_journeys set state='quotes_ready' where id=${quote(f.id)};` : ''}
    ${state === 'completed' ? `update public.care_journeys set state='completed' where id=${quote(f.id)};` : ''}`);
+  // 20261115090000: the linked technician publishes availability covering the fixture slot.
+  sql(publishAvailability(quote, f.tech));
   return f;
  }
  function snapshot(f) {
