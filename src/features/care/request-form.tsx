@@ -110,6 +110,8 @@ export function CareRequestForm({ supportContact = null }: { supportContact?: Su
   const [coverage, setCoverage] = useState<Extract<CoverageOutcome, { kind: "out_of_area" | "unknown" }> | null>(null);
   const [areaStatus, setAreaStatus] = useState<"in_area" | null>(null);
   const checkingNow = useRef(false);
+  const moveFocusRef = useRef(false);
+  const formShownRef = useRef(false);
   const decided = useRef(new Set<string>());
   const latestArea = useRef({ service: "repair" as CareInput["service"], postcode: "" });
   const selectedVehicle = useRef("");
@@ -152,7 +154,9 @@ export function CareRequestForm({ supportContact = null }: { supportContact?: Su
     validation.current = validationRun;
     const current = new AbortController(); controller.current = current;
     const previousVehicle = selectedVehicle.current;
-    setLoading(true); setAccess("ready");
+    // Keep an already-shown form mounted during a same-session revalidation so a window-focus
+    // reload does not drop the customer's caret. The response still updates vehicles and access.
+    if (!formShownRef.current) { setLoading(true); setAccess("ready"); }
     try {
       const result = await loadActiveVehicles(current.signal);
       if (current.signal.aborted) return;
@@ -246,7 +250,7 @@ export function CareRequestForm({ supportContact = null }: { supportContact?: Su
         checkingNow.current = false; setChecking(false);
         if (`${latestArea.current.service}:${latestArea.current.postcode}` !== areaKey) return;
         if (outcome.kind === "invalid_input") { setPostcodeError(true); return; }
-        if (outcome.kind === "out_of_area" || outcome.kind === "unknown") { setCoverage(outcome); return; }
+        if (outcome.kind === "out_of_area" || outcome.kind === "unknown") { moveFocusRef.current = true; setCoverage(outcome); return; }
         decided.current.add(areaKey);
       }
       setAreaStatus("in_area");
@@ -290,6 +294,7 @@ export function CareRequestForm({ supportContact = null }: { supportContact?: Su
   }
 
   const disabled = saving || uncertain || checking;
+  formShownRef.current = !loading && access === "ready" && vehicles.length > 0;
   return <main className="care-entry-shell" aria-busy={loading || saving}>
     <nav className="care-entry-nav" aria-label="Main navigation"><Link className="care-entry-wordmark" href="/">skycar<span>●</span></Link><div><Link href="/garage">Garage</Link><Link href="/garage/jobs">My Jobs</Link><span aria-current="page">Request care</span></div></nav>
     <header className="care-entry-header"><p className="eyebrow">REPAIR &amp; CLEANING</p><h1>What does your car<br /><span>need today?</span></h1><p>Start with the outcome you need. Skycar records your request for review—this is not an instant quote or confirmed booking.</p></header>
@@ -312,7 +317,7 @@ export function CareRequestForm({ supportContact = null }: { supportContact?: Su
       <fieldset disabled={disabled}><legend>4. Preferred timing</legend><label className="care-field" htmlFor="care-window">When would you prefer the work?<select id="care-window" value={preferredWindow} onChange={event => setPreferredWindow(event.target.value as CareInput["preferred_window"])}><option value="one_to_two_business_days">Within 1–2 business days</option><option value="seven_to_fourteen_days">Within 7–14 days</option><option value="flexible">I’m flexible</option></select></label><p className="care-help">This is a preference only, reviewed in Australia/Adelaide. It does not reserve a technician or a time.</p></fieldset>
       <fieldset disabled={disabled}><legend>5. Check your service area</legend><div className="care-field coverage-field"><label htmlFor="care-postcode">Where will the work happen? Postcode</label><input id="care-postcode" name="postcode" inputMode="numeric" autoComplete="postal-code" maxLength={4} placeholder="4-digit postcode" value={postcode} onChange={event => changePostcode(event.target.value)} aria-invalid={postcodeError} aria-describedby={postcodeError ? "care-postcode-error" : "care-postcode-help"} /></div>{postcodeError ? <CoveragePostcodeError id="care-postcode-error" /> : <p className="care-help" id="care-postcode-help">Used only to check that Skycar services your area. It is not saved with this request.</p>}</fieldset>
       {areaStatus === "in_area" && <CoverageConfirmed postcode={normalisePostcode(postcode)} />}
-      {coverage && <CoverageNotice outcome={coverage} contact={supportContact} busy={checking} onRetry={() => void startSubmit()} onChangePostcode={() => document.getElementById("care-postcode")?.focus()} />}
+      {coverage && <CoverageNotice outcome={coverage} contact={supportContact} busy={checking} onRetry={() => void startSubmit()} onChangePostcode={() => document.getElementById("care-postcode")?.focus()} moveFocusRef={moveFocusRef} />}
       {error && <div className="care-entry-warning" role="alert"><strong>{uncertain ? "Submission not confirmed" : "Request not submitted"}</strong><p>{error.message}</p>{uncertain && <p>Use “Check same request” to safely repeat the exact attempt. Do not change the details yet.</p>}{error.status === 404 && <button type="button" onClick={() => void loadVehicles()}>Reload active vehicles</button>}</div>}
       <div className="care-entry-actions"><button className="care-entry-button" type="submit" disabled={saving || checking}>{checking ? "Checking your area…" : saving ? "Submitting…" : uncertain ? "Check same request" : "Submit for review"}</button><Link href="/garage">Back to Garage</Link></div>
       <p className="care-entry-boundary">Submission records a request and next-update deadline. It does not confirm coverage, a price, technician, appointment or payment.<br /><Link href="/auth/sign-out">Sign out on this device</Link></p>

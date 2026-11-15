@@ -276,6 +276,27 @@ try {
     await page.close();
   }
 
+  // 8. Signed-in remount: window focus reloads vehicles and remounts the form while the notice is
+  // already showing. Focus must stay in the description; the notice heading must not take it back.
+  {
+    const { page } = await signedIn(answerFor('out_of_area'));
+    await postcodeField(page).fill('5999');
+    await postcodeField(page).press('Enter');
+    await NOTICE(page).waitFor();
+    await frames(page);
+    await page.locator('#care-description').focus();
+    assert.equal((await focused(page)).id, 'care-description', 'signed-in remount: description is focused before the window focus event');
+    const refresh = page.waitForResponse(response => response.url().includes('/api/v1/garage/vehicles?') && response.request().method() === 'GET');
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await refresh;
+    await page.locator('#care-description').waitFor();
+    await frames(page);
+    const after = await focused(page);
+    assert.equal(after.id, 'care-description', `signed-in remount: focus stays in the description after window focus, not ${after.tag}#${after.id}`);
+    assert.equal(await NOTICE(page).count(), 1, 'signed-in remount: the out-of-area notice is still showing');
+    await page.close();
+  }
+
   console.log('PASS: stale coverage answers (guest + signed-in) and signed-in postcode hand-off');
 } finally {
   await browser?.close();
