@@ -242,6 +242,61 @@ try {
     assert.deepEqual(errors, []);
     await page.close();
   }
+  // 7. A1: after Enter on an out-of-area or unknown postcode, the checking fieldset is disabled and
+  // browsers drop focus to BODY. Once the notice is on screen, focus must move to its heading (tabIndex -1)
+  // so the customer is not left on the document. role=alert on the notice is left in place.
+  const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))));
+  const focused = page => page.evaluate(() => {
+    const el = document.activeElement;
+    return { tag: el?.tagName ?? null, id: el?.id ?? '', inNotice: Boolean(el?.closest('.coverage-notice')) };
+  });
+  for (const kind of ['out_of_area', 'unknown']) {
+    const { page } = await guest(answerFor(kind));
+    await page.getByLabel('Postcode', { exact: true }).press('Enter');
+    await NOTICE(page).waitFor();
+    await frames(page);
+    const guestFocus = await focused(page);
+    assert.equal(guestFocus.id, 'coverage-notice-title', `guest ${kind}: Enter moves focus to the notice heading, not ${guestFocus.tag}`);
+    assert.equal(guestFocus.tag, 'H3');
+    assert.equal(guestFocus.inNotice, true);
+    assert.equal(await NOTICE(page).getAttribute('role'), 'alert', `guest ${kind}: role=alert remains on the notice`);
+    await page.close();
+  }
+  for (const kind of ['out_of_area', 'unknown']) {
+    const { page } = await signedIn(answerFor(kind));
+    await postcodeField(page).fill('5999');
+    await postcodeField(page).press('Enter');
+    await NOTICE(page).waitFor();
+    await frames(page);
+    const signedFocus = await focused(page);
+    assert.equal(signedFocus.id, 'coverage-notice-title', `signed-in ${kind}: Enter moves focus to the notice heading, not ${signedFocus.tag}`);
+    assert.equal(signedFocus.tag, 'H3');
+    assert.equal(signedFocus.inNotice, true);
+    assert.equal(await NOTICE(page).getAttribute('role'), 'alert', `signed-in ${kind}: role=alert remains on the notice`);
+    await page.close();
+  }
+
+  // 8. Signed-in remount: window focus reloads vehicles and remounts the form while the notice is
+  // already showing. Focus must stay in the description; the notice heading must not take it back.
+  {
+    const { page } = await signedIn(answerFor('out_of_area'));
+    await postcodeField(page).fill('5999');
+    await postcodeField(page).press('Enter');
+    await NOTICE(page).waitFor();
+    await frames(page);
+    await page.locator('#care-description').focus();
+    assert.equal((await focused(page)).id, 'care-description', 'signed-in remount: description is focused before the window focus event');
+    const refresh = page.waitForResponse(response => response.url().includes('/api/v1/garage/vehicles?') && response.request().method() === 'GET');
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await refresh;
+    await page.locator('#care-description').waitFor();
+    await frames(page);
+    const after = await focused(page);
+    assert.equal(after.id, 'care-description', `signed-in remount: focus stays in the description after window focus, not ${after.tag}#${after.id}`);
+    assert.equal(await NOTICE(page).count(), 1, 'signed-in remount: the out-of-area notice is still showing');
+    await page.close();
+  }
+
   console.log('PASS: stale coverage answers (guest + signed-in) and signed-in postcode hand-off');
 } finally {
   await browser?.close();

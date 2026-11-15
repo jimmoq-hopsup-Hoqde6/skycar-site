@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { hasSupportContact, telHref, type SupportContact } from "@/domain/care/support-contact";
 import { type CoverageOutcome } from "@/domain/care/coverage";
 import "./coverage-notice.css";
@@ -8,16 +9,25 @@ type Blocking = Extract<CoverageOutcome, { kind: "out_of_area" | "unknown" }>;
 
 // Shown when the area check did not return "in area". `invalid_input` is shown on the field
 // itself (see CoveragePostcodeError), and "in area" needs no notice beyond CoverageConfirmed.
-export function CoverageNotice({ outcome, contact, busy, onRetry, onChangePostcode }: {
+export function CoverageNotice({ outcome, contact, busy, onRetry, onChangePostcode, moveFocusRef }: {
   outcome: Blocking;
   contact?: SupportContact | null;
   busy?: boolean;
   onRetry: () => void;
   onChangePostcode: () => void;
+  // Set by the check handler when a blocking answer has just arrived; consumed once here so a later
+  // remount (signed-in vehicle reload on window focus) cannot pull focus back to the heading.
+  moveFocusRef?: { current: boolean };
 }) {
   const out = outcome.kind === "out_of_area";
+  const title = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!moveFocusRef?.current) return;
+    moveFocusRef.current = false;
+    title.current?.focus();
+  }, [outcome, moveFocusRef]);
   return <section className="coverage-notice" data-coverage={out ? "out_of_area" : "unknown"} data-contact={contact?.email && contact.phone ? "email-phone" : contact?.email ? "email" : contact?.phone ? "phone" : "none"} role="alert" aria-labelledby="coverage-notice-title">
-    <h3 id="coverage-notice-title">{out ? `We don’t cover ${outcome.postcode} yet` : "We can’t check your area right now"}</h3>
+    <h3 id="coverage-notice-title" ref={title} tabIndex={-1}>{out ? `We don’t cover ${outcome.postcode} yet` : "We can’t check your area right now"}</h3>
     {out
       ? <p>Skycar is starting in Adelaide and the Adelaide Hills, so we can’t take a request for {outcome.postcode} yet. Check the postcode, or get in touch and we’ll tell you when we reach your area. Nothing has been submitted.</p>
       : <p>We couldn’t confirm whether we cover your postcode, so nothing has been submitted. Please try again in a moment{hasSupportContact(contact) ? ", or contact us" : ""}.</p>}
