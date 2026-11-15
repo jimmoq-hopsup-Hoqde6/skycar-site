@@ -5,7 +5,9 @@ import {spawnSync} from 'node:child_process';
 // 20261115110000_care_photo_storage_visibility.sql (gap audit #3). A local MODEL of hosted Supabase
 // Storage, built inside one transaction and rolled back, on disposable PostgreSQL only:
 //   * storage.objects owned by supabase_storage_admin, RLS enabled and not forced (8 Nov gate capture);
-//   * the one recorded policy, private_media_read_own: SELECT to authenticated, own folder only;
+//   * the one recorded policy, private_media_read_own: SELECT to authenticated, own folder only (the
+//     installed policy, pinned below; never a copy made inside a test transaction);
+//   * the private-media bucket is private (public = false);
 //   * the care photo functions owned by a non-superuser "migration role", with or without USAGE on
 //     storage, SELECT on storage.objects and BYPASSRLS (the hosted value of rolbypassrls for the real
 //     owner is NOT known here; see /workspace/audit/proposed-devops-storage-readability-check.md).
@@ -35,9 +37,8 @@ export async function verifyStorageReadability({sql, quote, database}) {
   const hosted = ({owner, usage = true, select = true, policies = ''}) => `
     alter table storage.objects owner to supabase_storage_admin;
     alter table storage.objects enable row level security;
-    drop policy if exists private_media_read_own on storage.objects;
-    create policy private_media_read_own on storage.objects for select to authenticated
-      using (bucket_id = 'private-media' and (storage.foldername(name))[1] = (auth.uid())::text);
+    -- private_media_read_own is NOT re-created here: every scenario runs against the installed policy,
+    -- which section 0 pins (qual, roles, command) and exercises across two customers.
     ${policies}
     revoke all on schema storage from ${owner}; revoke all on storage.objects from ${owner};
     ${usage ? `grant usage on schema storage to ${owner};` : ''}
@@ -70,6 +71,39 @@ export async function verifyStorageReadability({sql, quote, database}) {
     equal([result.state, result.healed, result.photo_count, result.manifest_sha256, out.rows[1]], ['legacy_unknown', true, 2, null, '1'], `${label}: heals the set`);
     equal(/CARE_PHOTO_STORAGE_UNREADABLE/.test(out.stderr), false, `${label}: no warning`);
   };
+
+  // 0. Installed state, read outside any test transaction (QA PR #112 condition 2).
+  // 0a. The bucket is private.
+  equal(sql("select coalesce(string_agg(public::text, ','), 'missing') from storage.buckets where id = 'private-media'"), 'false', 'private-media has public = false');
+  // 0b. The installed private_media_read_own is exactly own-folder SELECT for authenticated, and it is the only
+  //     SELECT/ALL policy on storage.objects that applies to authenticated, anon or PUBLIC.
+  equal(sql(`select polcmd::text || '|' || polpermissive::text || '|' || polroles::regrole[]::text || '|' || pg_get_expr(polqual, polrelid)
+      from pg_policy where polrelid = 'storage.objects'::regclass and polname = 'private_media_read_own'`),
+    `r|true|{authenticated}|((bucket_id = 'private-media'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text))`,
+    'installed private_media_read_own qual, roles and command');
+  equal(sql(`select string_agg(polname, ',' order by polname) from pg_policy p where p.polrelid = 'storage.objects'::regclass and p.polcmd in ('r', '*')
+      and (0::oid = any(p.polroles) or exists (select 1 from unnest(p.polroles) r where r in ('authenticated'::regrole, 'anon'::regrole)))`),
+    'private_media_read_own', 'no other read policy reaches API roles');
+  // 0c. Behaviour of the installed policy: customer A reads only A's private-media object; customer B and anon read
+  //     nothing of A's. Only the hosted baseline grants (USAGE on storage, SELECT on objects) are added for the
+  //     API roles inside a rolled-back transaction; the policy itself is the installed one.
+  {
+    const [customerA, customerB] = [randomUUID(), randomUUID()];
+    const asCustomer = sub => `set local role authenticated; select set_config('request.jwt.claim.sub', ${quote(sub)}, true);
+      select count(*) from storage.objects where (storage.foldername(name))[1] = ${quote(customerA)}; reset role;`;
+    const out = run(`grant usage on schema storage to authenticated, anon; grant select on storage.objects to authenticated, anon;
+      insert into storage.objects(bucket_id, name) values ('private-media', ${quote(`${customerA}/vehicle.jpg`)}), ('other-bucket', ${quote(`${customerA}/elsewhere.jpg`)})`,
+      `${asCustomer(customerA)} ${asCustomer(customerB)}
+       set local role anon; select count(*) from storage.objects where (storage.foldername(name))[1] = ${quote(customerA)}; reset role`);
+    equal(out.rows.filter(row => /^\d+$/.test(row)), ['1', '0', '0'], 'A sees only its own private-media object; B and anon see none of it');
+  }
+
+  // 1a. Role target: an unconditional policy granted to some OTHER role does not cover the caller ...
+  unreadable('using(true) granted to another role', hosted({owner: 'photo_owner_plain', policies: 'create policy care_photo_other_read on storage.objects for select to photo_owner_bypass using (true);'}), 'rls_hidden');
+  // 1b. ... while one granted to PUBLIC, or to a role the caller is a member of, does.
+  readable('using(true) granted to PUBLIC', hosted({owner: 'photo_owner_plain', policies: 'create policy care_photo_public_read on storage.objects for select using (true);'}));
+  readable('using(true) granted to a parent role', hosted({owner: 'photo_owner_plain', policies: `create role photo_parent_role nologin; grant photo_parent_role to photo_owner_plain;
+    create policy care_photo_parent_read on storage.objects for select to photo_parent_role using (true);`}));
 
   // 1. Grants present but RLS hides every row from a plain (no BYPASSRLS) owner: before this migration the
   //    heal returned {"state":"none"} silently, as if there were no photos.
