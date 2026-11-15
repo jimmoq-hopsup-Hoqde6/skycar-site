@@ -276,5 +276,6 @@ re-created; both are reached through triggers.
   `VALIDATION_FAILED` for an unknown service. The command is aborted as a whole: no journey change, no quote
   withdrawal, no event, no idempotency row, so the customer can retry the same key with a covered postcode.
   A change that keeps the postcode (name, phone, suburb) is not an area decision and is not re-checked.
+- The request receipt (`care_request_snapshot`) returns both columns; the app types and validates them (`CareServicePostcode`, `validServicePostcode`, used by `readReceipt`).
 - Lock order: the check is plain reads. The account-journey sync writes the `care_requests` row that
   `care_journey_command` already holds `FOR UPDATE` (tier 3) before it locks the journey, so no edge is added.

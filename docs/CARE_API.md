@@ -96,9 +96,16 @@ individual details below after selecting an authorised request from that list.
   "created_at":"2026-09-20T13:00:00Z",
   "updated_at":"2026-09-20T13:00:00Z",
   "next_update_at":"2026-09-20T14:00:00Z",
+  "service_postcode":"5000",
+  "service_postcode_source":"submit",
   "events":[{"id":"33333333-3333-4333-8333-333333333333","sequence":1,"type":"request_received","occurred_at":"2026-09-20T13:00:00Z"}]
 }
 ```
+
+`service_postcode` / `service_postcode_source` (20261115100000) are typed as `CareServicePostcode` in
+`src/domain/care/request.ts`. The source is `submit`, `update_details`, `backfill` or `unknown`; `unknown`
+if and only if the postcode is `null`, otherwise four digits. `readReceipt` rejects a receipt that has only
+one of the two fields or breaks that rule, and accepts one with neither (a database without that migration).
 
 Times above are examples, not an approved SLA. Events are chronologically
 ordered by per-request sequence. Next update is authoritative; if overdue the

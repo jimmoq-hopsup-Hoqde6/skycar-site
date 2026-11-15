@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {readReceipt} from '../../src/domain/care/presentation.ts';
 
 // 20261115100000_care_request_postcode_and_update_recheck.sql. Regression for gap-audit probe P1
 // (15 Nov 2026): update_details moved an account journey to 5290 (outside the service area) and it
@@ -67,6 +68,9 @@ export async function verifyRequestPostcodeRecheck({sql, auth, quote, garageCrea
   const submitKey = randomUUID();
   const created = submit(submitKey, body('5000'));
   equal(stored(created.id), '5000|submit');
+  // The typed app contract reads the real snapshot: both fields present and valid.
+  equal([created.service_postcode, created.service_postcode_source], ['5000', 'submit'], 'the submit receipt carries the stored postcode');
+  equal(readReceipt(created, created.id).service_postcode_source, 'submit', 'readReceipt accepts the database receipt');
   equal(submit(submitKey, body('5000')).id, created.id, 'replay is unchanged');
   equal(stored(created.id), '5000|submit');
   fails(auth(owner, `select public.care_submit_request(gen_random_uuid(),${quote(body(outside))}::jsonb)`), 'OUT_OF_AREA', 'submit still rejects out of area');
@@ -111,6 +115,8 @@ export async function verifyRequestPostcodeRecheck({sql, auth, quote, garageCrea
   sql(`insert into public.care_requests(id,customer_id,vehicle_id,service,description,preferred_window,next_update_at,escalation_minutes)
       values(${quote(legacy)},${quote(owner)},${quote(vehicle.id)},'cleaning','Synthetic legacy request','flexible',clock_timestamp()+interval '1 hour',30);`);
   equal(stored(legacy), '-|unknown', 'a request created without a postcode (legacy shape) is unknown');
+  const legacyReceipt = JSON.parse(sql(auth(owner, `select public.care_get_request(${quote(legacy)}::uuid)`)));
+  equal([legacyReceipt.service_postcode, readReceipt(legacyReceipt, legacy).service_postcode_source], [null, 'unknown'], 'a legacy receipt (null, unknown) is readable');
   fails(journey(legacy, 'update_details', details(outside)), 'OUT_OF_AREA');
   equal(stored(legacy), '-|unknown');
   sql(journey(legacy, 'update_details', details('5000')));

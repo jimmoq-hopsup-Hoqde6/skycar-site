@@ -1,3 +1,4 @@
+import { validServicePostcode } from "./request.ts";
 import type { CareReceipt, CareEvent } from "./request.ts";
 
 type CareProgress = Pick<CareReceipt, "quote_state" | "assignment_state" | "fulfilment_state">;
@@ -55,6 +56,7 @@ export function readReceipt(value: unknown, id: string): CareReceipt {
     || r.money_state !== null || !["review_request", "review_overdue_request", "choose_recovery"].includes(r.next_action)
     || !["operations", "customer"].includes(r.responsible_role)
     || !date(r.created_at) || !date(r.updated_at) || !(r.next_update_at === null || date(r.next_update_at))
+    || !validServicePostcode(r as unknown as Record<string, unknown>)
     || !Array.isArray(r.events) || r.events.some(e => !e || typeof e.id !== "string" || !Number.isSafeInteger(e.sequence)
       || !Object.hasOwn(eventLabels, e.type) || !date(e.occurred_at))) throw new Error("Unsupported response");
   return r;
