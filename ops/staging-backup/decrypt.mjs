@@ -3,10 +3,12 @@ import { gunzipSync } from 'node:zlib';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ARCHIVE_FORMAT, RECOVERY_CONTRACT_VERSION, RECOVERY_ORACLE_NAME, parseRecoveryOracle } from './recovery-contract.mjs';
 
 export function decryptBundle(envelope, privateKey) {
-  if (envelope.header.format !== 'skycar-backup-v1' || envelope.header.cipher !== 'AES-256-GCM' || envelope.header.wrapping !== 'RSA-OAEP-SHA256') throw new Error('Invalid format');
-  // v1 archives require the writer's full 128-bit GCM tag, in canonical base64.
+  if (envelope?.header?.format !== ARCHIVE_FORMAT || envelope.header.recoveryContractVersion !== RECOVERY_CONTRACT_VERSION ||
+      envelope.header.cipher !== 'AES-256-GCM' || envelope.header.wrapping !== 'RSA-OAEP-SHA256') throw new Error('Invalid format');
+  // v2 archives require the writer's full 128-bit GCM tag, in canonical base64.
   if (typeof envelope.tag !== 'string' || !/^[A-Za-z0-9+/]{22}==$/.test(envelope.tag)) throw new Error('Invalid authentication tag');
   const tag = Buffer.from(envelope.tag, 'base64');
   if (tag.length !== 16 || tag.toString('base64') !== envelope.tag) throw new Error('Invalid authentication tag');
@@ -17,11 +19,12 @@ export function decryptBundle(envelope, privateKey) {
     decipher.setAuthTag(tag);
     const plain = Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64')), decipher.final()]);
     const files = JSON.parse(gunzipSync(plain, { maxOutputLength: 160 * 1024 * 1024 }).toString());
-    if (Object.keys(files).sort().join(',') !== 'data.sql,roles.sql,schema.sql') throw new Error('Invalid inventory');
+    if (Object.keys(files).sort().join(',') !== ['data.sql', RECOVERY_ORACLE_NAME, 'roles.sql', 'schema.sql'].sort().join(',')) throw new Error('Invalid inventory');
     for (const [name, bytes] of Object.entries(files)) {
       const digest = createHash('sha256').update(Buffer.from(bytes, 'base64')).digest('hex');
       if (envelope.header.files.find(f => f.name === name)?.sha256 !== digest) throw new Error('Invalid checksum');
     }
+    parseRecoveryOracle(files[RECOVERY_ORACLE_NAME], files);
     return files;
   } finally { key.fill(0); }
 }

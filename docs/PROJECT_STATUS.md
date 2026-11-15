@@ -1,6 +1,44 @@
 # Skycar V2 — Project Status
 
-Last updated: 2026-09-21
+Last updated: 2026-11-01
+
+## Latest verified checkpoint — 2026-11-01
+
+Phase 1 security gate: PASS. Independent review on PR #74, exact head `18240dc137a66660ef9251101df906159ffae9a4`, submitted 2026-11-01T05:18:11Z by `jimmoq-hopsup-Hoqde6`. The review states the role recheck now happens after the journey row lock, closing the race that blocked PR #72. PR #74 was open, mergeable, and not merged when this checkpoint was written.
+
+Exact-head CI observed green on that revision: Skycar CI run `41266842783`, Care database `41266842778`, Garage PostgreSQL `41266842692`, Garage Care integration `41266842656`, Care entry UI `41266842658`, and the Vercel preview check. `main` remained `7912bc9c3375b713fa2e879ba66387d5a8f79feb` (foundation scaffold plus the protected staging-backup merge). Feature work, including this slice, is not on `main`.
+
+The accepted journey install is nine forward migrations, in filename order, after the eight earlier foundation/Garage/Care files. Do not install the previous eight-file journey manifest unchanged:
+
+1. `20261003064126_care_connected_journey.sql`
+2. `20261004090000_technician_inbox.sql`
+3. `20261004124000_technician_quotes.sql`
+4. `20261004133000_technician_work_start.sql`
+5. `20261004140000_technician_completion.sql`
+6. `20261004150000_customer_completion_review.sql`
+7. `20261020183000_completion_review_security_fix.sql`
+8. `20261020183001_completion_review_replay_authority.sql`
+9. `20261101024732_completion_review_final_lock_authority.sql`
+
+This branch starts at that exact head because availability and My Jobs have to sit next to those booking locks. Branching from `main` would not contain the journey, the locks, or the My Jobs reader.
+
+App-developer slice on this branch, not yet independently reviewed:
+
+- Technician availability contract, `PUT`/`GET /api/v1/technician/availability`, forward migration `20261101062300_technician_availability.sql`, and `/technician/availability`. Schedules use their own advisory locks. They do not lock `care_journeys` or `care:expert-capacity`. Confirmed jobs stay on the journey ledger.
+- My Jobs reads `journey_state` and `completion_review_state` from the existing journey row via forward migration `20261101062400_my_jobs_journey_status.sql`. Cancellation requested, paused work, and completion review are visible. Private issue text is not added to the list.
+- Service-request copy now says the preferred window is an Australia/Adelaide preference and not a reserved appointment. No staging secret was used.
+
+Quote and confirmation commands still do not consult the saved hours. That wiring is a later reviewed change to the journey command, not part of this slice.
+
+### Next handoff
+
+- BLOCKED BY: independent review of this draft branch. The author does not approve or merge it.
+- BLOCKED BY: staging migration install. The protected `skycar-staging` environment secrets are not available here and were not requested. Do not apply the two new migrations to staging until review accepts them. The cleared Phase 1 install remains the nine journey migrations above, on top of the earlier eight files, in filename order.
+- WHY: Phase 1 acceptance explicitly left staging installation and hosted/device proof outside the security verdict. This availability slice is additional unreviewed schema.
+- OWNER: independent QA/security reviewer for the draft; founder or DevOps for staging credentials and any later install.
+- REQUIRED ACTION: record PASS or a reproducible block on the exact commit. Do not treat local disposable PostgreSQL results as hosted Supabase, Auth, private-storage, or physical-device proof. Issue #8 remains open for those gates.
+
+No production change, protected-environment change, merge, or self-approval is included.
 
 ## Current product direction
 Skycar V2 uses services as the acquisition engine and the Garage as the retention engine. Public entry is service-led around immediate cosmetic Care needs; after acquisition, the free Garage becomes the persistent customer home and must remain useful even when the customer is not booking a technician.
@@ -18,19 +56,52 @@ Core product areas:
 ## Current repository state
 The repository contains the legacy small public website plus the merged Skycar V2 modular-monolith application scaffold. The V2 foundation is not production-ready and has not been deployed. Executable Garage and Repair & Cleaning work exists in open pull requests, but none of those feature PRs has been merged to `main` or accepted for production use.
 
-Active implementation evidence:
-- PR #16: durable Care request receipt, authoritative status/events, overdue/no-match recovery and restricted worker contract.
-- PR #17: ownership-scoped Garage vehicle list/create/detail/edit/archive/history with audited mutation controls and responsive UI.
-- PR #19: customer Care request status/timeline UI with overdue/no-match handling and committed synthetic desktop/mobile evidence, stacked on #16.
-- PR #20: owner-scoped My Jobs/Care request list API with pagination, vehicle filtering and overdue summaries, stacked on #16.
-- PR #21: combined Garage/Care integration-verification branch applying every public migration together and testing the shared vehicle/permission boundary; Technical Lead accepted this combined boundary evidence only, not the full feature/release scope.
-- PR #22: authenticated Garage-linked My Jobs UI, reload-safe Care reopening and authenticated service-first Care entry. Technical Lead accepted the bounded My Jobs and reload-recovery slices. Exact head `cef948a` fixes the same-account focus/page-return draft-loss and duplicate-key issue, but re-review found a remaining pending-session privacy/stale-navigation blocker: pending/uncertain state can suppress identity revalidation, leaving prior-account data visible or allowing an old response to navigate a changed session. Service-entry acceptance remains blocked.
-- PR #23: server-owned Repair/Cleaning service catalogue plus a strict coverage contract that fails closed with `COVERAGE_UNAVAILABLE` until an authoritative coverage resolver is approved and connected. Corrective head `a0f2aed` is technically accepted for the bounded catalogue/coverage contract. No resolver/provider, real coverage area, price or appointment is approved or connected.
-- PR #24: first private Garage vehicle-photo intake contract and backend implementation. Security-correction head `4a2900d` moves all photo mutation behind a server-only trusted client, revokes authenticated Storage/RPC mutation, reserves authoritative metadata before upload, and adds durable reconciliation/quarantine behavior. Exact-head application, Garage PostgreSQL, Care database and combined Garage/Care checks are green. Technical Lead re-review and hosted Supabase two-account/private-Storage plus signed-in-device verification remain open; no frontend or derivative processor may consume the contract before review clears.
-- PR #25: new main-based foundation observability draft at `11a53dd` adds server-owned request IDs, canonical API envelopes, no-store headers, redacted allow-listed completion logs, logging-failure isolation, and first adoption by `GET /api/v1/health`. Exact-head application CI is green. Technical Lead review and hosted log collection/retention/access/alerting remain open; it is unmerged and undeployed.
+## Current integration candidate
+
+PR #27 (`fix/customer-journey-integration`) combines the accepted input route
+#26 → #25 → #17 → #16 → #20 → #19 → #21 evidence only → #23 → #24 → #22.
+PR #9 is closed as superseded; #21 remains open for evidence traceability.
+Original feature branches are inputs, not separate current integration candidates.
+
+The correction at `bdd1fdff4228e655c249cb878208836a1f3ed37e` fixes the three
+blocking findings from `b880b6e`: archived My Jobs filtering, late Garage archive
+completion, and loss of pending/uncertain Garage saves on focus/page return.
+It retains the earlier account-switch privacy corrections in My Jobs, Garage,
+Care entry and request status. The API now reports the caller's own account ID
+and accepts an account precondition on writes; see `GARAGE_API.md`.
+
+Both exact source head and merge candidate passed all five workflows (10 jobs):
+87 unit/API tests, lint/types/build and two built API smoke tests; Garage, Care
+and combined PostgreSQL acceptance; six browser suites including 43 new Garage
+recovery scenarios. Exact evidence is in `PR27_RECOVERY.md` and the PR conversation.
+Documentation-only follow-up revisions must also pass the configured matrix.
+
+| Delivery state | Current evidence |
+| --- | --- |
+| Implemented | Combined journey and three recovery corrections in PR #27 |
+| CI verified | Both source head and merge candidate green; synthetic browser evidence |
+| Independently accepted | Pending qualified Technical Lead/QA review of this correction |
+| Merged | No V2 feature merge to main |
+| Deployed | No V2 deployment |
 
 ## Immediate priority
-Correct PR #22 so pending/in-flight/uncertain Care attempts preserve the exact idempotency key/body for the same account while still revalidating current session and vehicle ownership on focus/page return; account/access changes must clear prior-account UI and ignore stale outcomes. Obtain Technical Lead re-review of PR #24's corrected trusted photo boundary and Technical Lead review of PR #25's observability boundary. The Project Manager still needs to publish the reviewed dependency/integration sequence for #16/#20/#17/#19/#21/#22/#23/#24 and decide the safe reviewed merge/rebase point for independent main-based PR #25 before feature integration. PR #9 also needs an explicit corrected or superseded disposition. Hosted Supabase/session/private-storage verification, signed-in device QA, hosted logging controls and remaining #1/#8 release gates are still open.
+
+Review the corrected PR #27 revision after the writer's explicit handoff in its
+conversation. Do not retain an abandoned exclusive-writer reservation after that
+handoff. Any subsequent source correction must be acknowledged by one writer and
+rerun against both exact head and merge candidate.
+
+Main merge/release remains blocked by authenticated Pages publishing controls and
+required-check enforcement (#8), isolated hosted Supabase/auth/private-storage and
+signed-in physical-device evidence, and independent acceptance. The browser settings
+session is signed out; the connected GitHub app has no settings-mutation tool.
+No hosted test project or test-account credentials were available to this recovery.
+
+Next product work after integration acceptance: reviewed quotes → technician
+availability → customer booking confirmation → payments → completion evidence.
+No coverage provider, payment flow, membership pricing or live activation is approved
+by this repair. Catalogue #23, photo #24 and observability #25 are present as bounded
+inputs; their outstanding hosted/provider/release gates are not waived by CI.
 
 ### Phase 0 — Foundation
 Status: IN PROGRESS

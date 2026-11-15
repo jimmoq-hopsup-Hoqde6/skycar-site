@@ -136,6 +136,11 @@ Use stable error codes, bounded cursor pagination and strict validation. Unknown
 
 Cookie-authenticated writes require same-origin/CSRF protections appropriate to the chosen implementation.
 
+The executable request/error/logging boundary is documented in
+[FOUNDATION_OBSERVABILITY.md](FOUNDATION_OBSERVABILITY.md). Application logs use a
+fixed allow-list and static route templates; protected domain changes continue to
+use transactional `audit_events` records.
+
 ## 8. Concurrency and side effects
 
 Sensitive operations use idempotency keys scoped to actor + operation + payload hash. Reuse with a different payload is a conflict.

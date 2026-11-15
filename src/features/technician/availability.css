@@ -1,0 +1,1 @@
+.availability-day{padding:16px 0;border-top:1px solid #dde6e8}.availability-day h3{margin:0}.availability-window{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;gap:12px;align-items:end}.availability-window button,.availability-day>button{justify-self:start}@media(max-width:600px){.availability-window{grid-template-columns:1fr}}

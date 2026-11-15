@@ -60,6 +60,8 @@ jobs:
         run: node ops/staging-backup/backup.mjs --capture
         env:
           STAGING_SUPABASE_DB_PASSWORD: ${{ secrets.STAGING_SUPABASE_DB_PASSWORD }}
+          STAGING_SUPABASE_DB_CA_CERT_B64: ${{ secrets.STAGING_SUPABASE_DB_CA_CERT_B64 }}
+          STAGING_SUPABASE_DB_CA_SHA256: ${{ secrets.STAGING_SUPABASE_DB_CA_SHA256 }}
           STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
           STAGING_SUPABASE_DB_HOST: ${{ secrets.STAGING_SUPABASE_DB_HOST }}
           STAGING_SUPABASE_DB_USER: ${{ secrets.STAGING_SUPABASE_DB_USER }}
@@ -75,7 +77,8 @@ jobs:
           retention-days: 7
       - name: Record limited evidence
         run: |
-          echo 'Encrypted roles/schema/data export captured. Administrator must privately retrieve, decrypt, verify and retain it before expiry.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Encrypted recovery-contract v2 roles/schema/data export plus authenticated source oracle captured. Administrator must privately retrieve, decrypt, verify and retain it before expiry.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Recovery must stop on legacy/missing oracle, changed CLI output, or source/target version/baseline mismatch.' >> "$GITHUB_STEP_SUMMARY"
           echo 'Restore rehearsal, hosted acceptance, migration and deployment: NOT RUN. This workflow authorises none of them.' >> "$GITHUB_STEP_SUMMARY"
       - name: Clean temporary encrypted output
         if: always()

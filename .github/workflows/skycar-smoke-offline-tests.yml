@@ -1,0 +1,29 @@
+name: Skycar offline OpenAI smoke contract tests
+# Exercises the manual OpenAI smoke workflow's safety and response parsing
+# using mocked network and fake credentials. Does not call the OpenAI API.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/skycar-openai-connection-test.yml'
+      - '.github/workflows/skycar-smoke-offline-tests.yml'
+      - 'tests/test_smoke_workflow.py'
+permissions:
+  contents: read
+concurrency:
+  group: skycar-smoke-offline-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  offline-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      OPENAI_API_KEY: ''
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify exact tested revision
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Run credential-free smoke workflow contract tests
+        run: python3 -m unittest discover -s tests -p 'test_smoke_workflow.py' -v

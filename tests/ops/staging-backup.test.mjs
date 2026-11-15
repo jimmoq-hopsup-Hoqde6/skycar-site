@@ -1,13 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { generateKeyPairSync, createHash, X509Certificate } from 'node:crypto';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { APPLICATION_SHA, CLI_VERSION, validateGate, validateConfig, dumpPlan, prepareDumpScript, encryptBundle, capture, runQuiet } from '../../ops/staging-backup/backup.mjs';
+import { APPLICATION_SHA, CLI_VERSION, EMPTY_TARGET_SQL, validateGate, validateConfig, dumpPlan, prepareDumpScript, encryptBundle, capture, runQuiet, formatFailure, classifyPsqlFailure } from '../../ops/staging-backup/backup.mjs';
 import { decryptBundle } from '../../ops/staging-backup/decrypt.mjs';
+import { RECOVERY_MANIFEST_SQL, RECOVERY_ORACLE_NAME, createRecoveryOracle } from '../../ops/staging-backup/recovery-contract.mjs';
+
+// Public synthetic CA only; its generated private key was discarded. Never a hosted CA.
+const syntheticCA = `-----BEGIN CERTIFICATE-----
+MIIBpjCCAUugAwIBAgIUeTKIAMg/Jrtjosxx3gMlOs8DldMwCgYIKoZIzj0EAwIw
+KDEmMCQGA1UEAwwdU2t5Y2FyIHN5bnRoZXRpYyB0ZXN0IENBIG9ubHkwHhcNMjYw
+OTI4MTM1MzUyWhcNMzYwOTI1MTM1MzUyWjAoMSYwJAYDVQQDDB1Ta3ljYXIgc3lu
+dGhldGljIHRlc3QgQ0Egb25seTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABMf9
+kFoXbqiKHiW7Z+C1LX++OS+/Vb6VD+9VglZz53cFMDcW+iXtuMnhDuCCRSA69CyL
+HWjddNmfglYqqGm4k+qjUzBRMB0GA1UdDgQWBBRcuBdp+9af8s8agEpqn54emzJo
+hDAfBgNVHSMEGDAWgBRcuBdp+9af8s8agEpqn54emzJohDAPBgNVHRMBAf8EBTAD
+AQH/MAoGCCqGSM49BAMCA0kAMEYCIQDHNo+Hlui5R/KXoDyLfvhqC58hor8gKcbf
+xGBYObCOXQIhAOmvaybNpBERw9cnprUcALtqfLrqvFKwLv+FbSoZxwse
+-----END CERTIFICATE-----
+`;
+const caBase64 = Buffer.from(syntheticCA).toString('base64');
+const caFingerprint = createHash('sha256').update(new X509Certificate(syntheticCA).raw).digest('hex');
 
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 3072 });
 const fingerprint = createHash('sha256').update(publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
@@ -25,6 +42,8 @@ function environment() {
     STAGING_SUPABASE_DB_PASSWORD: 'synthetic /:#?%@ quote\'"& password',
     STAGING_BACKUP_PUBLIC_KEY: publicKey.export({ type: 'spki', format: 'pem' }),
     STAGING_BACKUP_KEY_SHA256: fingerprint,
+    STAGING_SUPABASE_DB_CA_CERT_B64: caBase64,
+    STAGING_SUPABASE_DB_CA_SHA256: caFingerprint,
   };
 }
 
@@ -36,6 +55,51 @@ test('valid approved dispatch and target; URL safely encodes password without sh
   assert.equal(u.hostname, e.STAGING_SUPABASE_DB_HOST);
   assert.equal(u.pathname, '/postgres');
   assert.equal(u.port, '5432');
+});
+
+const invalidCAs = [
+  ['missing', undefined], ['null', null], ['non-string', {}], ['empty', ''],
+  ['malformed base64', '!private-certificate-sentinel!'],
+  ['whitespace', `${caBase64}\n`], ['extra padding', `${caBase64}=`],
+  ['oversized', 'A'.repeat(32772)],
+  ['not PEM', Buffer.from('private-certificate-sentinel').toString('base64')],
+  ['DER instead of PEM', new X509Certificate(syntheticCA).raw.toString('base64')],
+  ['two certificates', Buffer.from(syntheticCA + syntheticCA).toString('base64')],
+  ['leading text', Buffer.from('private-certificate-sentinel\n' + syntheticCA).toString('base64')],
+  ['trailing text', Buffer.from(syntheticCA + 'private-certificate-sentinel').toString('base64')],
+  ['noncanonical PEM', Buffer.from(syntheticCA.replaceAll('\n', '\r\n')).toString('base64')],
+  ['invalid certificate', Buffer.from('-----BEGIN CERTIFICATE-----\nYWJj\n-----END CERTIFICATE-----\n').toString('base64')],
+];
+for (const [label, value] of invalidCAs) {
+  test(`CA ${label} rejects before any subprocess or output directory`, () => {
+    let calls = 0; let error;
+    try { capture({ ...environment(), STAGING_SUPABASE_DB_CA_CERT_B64: value }, () => { calls++; }); }
+    catch (caught) { error = caught; }
+    assert.equal(calls, 0);
+    assert.equal(formatFailure(error), 'SKYCAR_BACKUP_FAILURE phase=configuration category=validation');
+  });
+}
+
+test('CA pin is required, canonical lowercase DER SHA-256, and must match', () => {
+  for (const value of [undefined, null, {}, '', '0'.repeat(64), caFingerprint.toUpperCase(), `${caFingerprint}\n`,
+    createHash('sha256').update(syntheticCA).digest('hex')]) {
+    let calls = 0; let error;
+    try { capture({ ...environment(), STAGING_SUPABASE_DB_CA_SHA256: value }, () => { calls++; }); }
+    catch (caught) { error = caught; }
+    assert.equal(calls, 0);
+    assert.equal(formatFailure(error), 'SKYCAR_BACKUP_FAILURE phase=configuration category=validation');
+  }
+});
+
+test('invalid private CA content is never printed by the capture CLI', () => {
+  const helper = fileURLToPath(new URL('../../ops/staging-backup/backup.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [helper, '--capture'], {
+    env: { ...environment(), STAGING_SUPABASE_DB_CA_CERT_B64: Buffer.from('private-certificate-sentinel').toString('base64') },
+    encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'SKYCAR_BACKUP_FAILURE phase=configuration category=validation\n');
 });
 
 for (const [name, value] of Object.entries({
@@ -50,7 +114,9 @@ for (const [name, value] of Object.entries({
 })) {
   test(`reject ${name} before invoking commands`, () => {
     let calls = 0;
-    assert.throws(() => capture({ ...environment(), [name]: value }, () => { calls++; }), /BACKUP_GATE_REJECTED/);
+    let error;
+    try { capture({ ...environment(), [name]: value }, () => { calls++; }); } catch (caught) { error = caught; }
+    assert.equal(formatFailure(error), 'SKYCAR_BACKUP_FAILURE phase=configuration category=validation');
     assert.equal(calls, 0);
   });
 }
@@ -74,9 +140,24 @@ test('only reviewed read-only dump inventory; no linked project or migration com
 
 function fixture() {
   const files = Object.fromEntries(['roles.sql', 'schema.sql', 'data.sql'].map(name => [name, Buffer.from(`private synthetic ${name}`).toString('base64')]));
+  const manifest = {
+    serverVersion: '17.6', roles: [], memberships: [], schemas: [], extensions: [],
+    parameterPrivileges: [], providerObjects: [], customObjects: [],
+    postgres17Boundary: { ltreeIndexes: 0, btreeGistFloatIndexes: 0, customEstimatorOperators: 0 },
+  };
+  const dumpHashes = Object.entries(files).map(([name, bytes]) => ({ name, sha256: createHash('sha256').update(Buffer.from(bytes, 'base64')).digest('hex') }));
+  const oracle = createRecoveryOracle({ sourceBaseline: manifest, expectedState: manifest, dumpHashes,
+    toolchain: { cliVersion: CLI_VERSION, pgDumpVersion: 'pg_dump (PostgreSQL) 17.6', psqlVersion: 'psql (PostgreSQL) 17.6', serverVersion: '17.6' } });
+  files[RECOVERY_ORACLE_NAME] = Buffer.from(JSON.stringify(oracle)).toString('base64');
   const metadata = { files: Object.entries(files).map(([name, bytes]) => ({ name, sha256: createHash('sha256').update(Buffer.from(bytes, 'base64')).digest('hex') })) };
   return { files, metadata };
 }
+
+test('v2 capture rejects the previous unauthenticated three-file recovery packet', () => {
+  const { files, metadata } = fixture();
+  delete files[RECOVERY_ORACLE_NAME];
+  assert.throws(() => encryptBundle(files, publicKey, metadata), /RECOVERY_ORACLE_MISSING/);
+});
 
 test('encrypted export round-trips with owner key and rejects tampering', () => {
   const { files, metadata } = fixture();
@@ -98,7 +179,10 @@ test('recovery rejects wrong hashes and unexpected file inventory', () => {
   const { files, metadata } = fixture();
   metadata.files[0].sha256 = '0'.repeat(64);
   assert.throws(() => decryptBundle(encryptBundle(files, publicKey, metadata), privateKey), /checksum/);
-  assert.throws(() => decryptBundle(encryptBundle({ '../escape': 'eA==' }, publicKey, {}), privateKey), /inventory/);
+  const legacy = structuredClone(encryptBundle(files, publicKey, metadata));
+  legacy.header.format = 'skycar-backup-v1';
+  legacy.header.recoveryContractVersion = undefined;
+  assert.throws(() => decryptBundle(legacy, privateKey), /format/);
 });
 
 const invalidTagSizes = [...Array(16).keys(), 17, 32];
@@ -158,14 +242,31 @@ test('F1: offline CLI rejects invalid tags before creating any plaintext; full t
 });
 
 function fakeCommand(command, args, options) {
-  if (args[0] === '--version') return command === 'pg_dump' ? 'pg_dump (PostgreSQL) 17.6' : CLI_VERSION;
+  assert.equal(options.env.PGSSLROOTCERT, join(options.env.HOME, 'database-ca.pem'));
+  assert.equal(readFileSync(options.env.PGSSLROOTCERT, 'utf8'), syntheticCA);
+  if (args[0] === '--version') {
+    if (command === 'pg_dump') return 'pg_dump (PostgreSQL) 17.6';
+    if (command === 'psql') return 'psql (PostgreSQL) 17.6';
+    return CLI_VERSION;
+  }
   assert.equal(options.env.PGSSLMODE, 'verify-full');
-  assert.equal(options.env.PGSSLROOTCERT, '/etc/ssl/certs/ca-certificates.crt');
+  assert.equal(options.env.PGSSLROOTCERT, join(options.env.HOME, 'database-ca.pem'));
+  assert.equal(readFileSync(options.env.PGSSLROOTCERT, 'utf8'), syntheticCA);
+  assert.equal(statSync(options.env.PGSSLROOTCERT).mode & 0o777, 0o600);
+  assert.equal(statSync(options.env.HOME).mode & 0o777, 0o700);
+  assert.ok(!('STAGING_SUPABASE_DB_CA_CERT_B64' in options.env));
+  assert.ok(!('STAGING_SUPABASE_DB_CA_SHA256' in options.env));
+  assert.ok(!args.join(' ').includes(syntheticCA));
   assert.match(options.env.PGOPTIONS, /default_transaction_read_only=on/);
   assert.ok(!('STAGING_SUPABASE_DB_PASSWORD' in options.env));
   if (command === 'psql') {
     assert.equal(options.env.PGPASSWORD, environment().STAGING_SUPABASE_DB_PASSWORD);
     assert.ok(!args.includes(options.env.PGPASSWORD));
+    if (options.input === RECOVERY_MANIFEST_SQL) return `${JSON.stringify({
+      serverVersion: '17.6', roles: [], memberships: [], schemas: [], extensions: [],
+      parameterPrivileges: [], providerObjects: [], customObjects: [],
+      postgres17Boundary: { ltreeIndexes: 0, btreeGistFloatIndexes: 0, customEstimatorOperators: 0 },
+    })}\n`;
     return 'EMPTY_STAGING_CONFIRMED\n';
   }
   if (command === 'bash') {
@@ -188,7 +289,7 @@ test('capture writes only encrypted artifact, decrypts all dumps, and cleans pla
   let workingDirectory;
   try {
     const output = capture({ ...environment(), RUNNER_TEMP: temp }, (command, args, options) => {
-      workingDirectory = options.cwd || workingDirectory;
+      workingDirectory = options.env.HOME;
       return fakeCommand(command, args, options);
     });
     assert.deepEqual(readdirSync(output), ['backup.enc.json']);
@@ -198,7 +299,11 @@ test('capture writes only encrypted artifact, decrypts all dumps, and cleans pla
     const envelope = JSON.parse(bytes);
     assert.equal(envelope.header.restoreStatus, 'NOT_RUN');
     assert.equal(envelope.header.storageObjects, 'NOT_INCLUDED');
-    assert.equal(Object.keys(decryptBundle(envelope, privateKey)).length, 3);
+    assert.equal(Object.keys(decryptBundle(envelope, privateKey)).length, 4);
+    assert.ok(!bytes.includes('serverVersion'));
+    assert.ok(!bytes.includes(syntheticCA));
+    assert.ok(!bytes.includes(caBase64));
+    assert.ok(!bytes.includes(caFingerprint));
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -208,7 +313,7 @@ for (const failure of ['roles', 'schema', 'data', 'empty', 'version', 'nonempty-
     let dump = 0; let work; let probes = 0;
     try {
       assert.throws(() => capture({ ...environment(), RUNNER_TEMP: temp }, (command, args, options) => {
-        work = options.cwd || work;
+        work = options.env.HOME;
         if (failure === 'version' && args[0] === '--version') return 'unexpected-version';
         if (command === 'psql') {
           probes++;
@@ -227,8 +332,172 @@ for (const failure of ['roles', 'schema', 'data', 'empty', 'version', 'nonempty-
   });
 }
 
-test('command errors never return child diagnostics', () => {
-  assert.throws(() => runQuiet(process.execPath, ['-e', "console.error('private-sentinel'); process.exit(1)"]), /^Error: BACKUP_COMMAND_FAILED$/);
+test('subprocess failures expose only allowlisted phase/category tokens', () => {
+  let commandError; let spawnError;
+  try { runQuiet(process.execPath, ['-e', "console.error('private-sentinel'); process.exit(1)"], {}, 'roles-export'); } catch (error) { commandError = error; }
+  try { runQuiet('/nonexistent-skycar-review-binary', [], {}, 'schema-export'); } catch (error) { spawnError = error; }
+  assert.equal(formatFailure(commandError), 'SKYCAR_BACKUP_FAILURE phase=roles-export category=command');
+  assert.equal(formatFailure(spawnError), 'SKYCAR_BACKUP_FAILURE phase=schema-export category=spawn');
+  assert.doesNotMatch(`${formatFailure(commandError)}${formatFailure(spawnError)}`, /private-sentinel|nonexistent-skycar-review-binary/);
+});
+
+const diagnosticSentinel = 'private-SQL-password-key-path-sentinel';
+const connectionPrefix = 'psql: error: connection to server at "' + diagnosticSentinel + '" (192.0.2.1), port 5432 failed: ';
+const tlsDiagnostic = connectionPrefix + 'SSL error: certificate verify failed\n';
+const authDiagnostic = connectionPrefix + 'FATAL:  password authentication failed for user "' + diagnosticSentinel + '"\n';
+const baselineDiagnostic = 'ERROR:  Unexpected staging baseline\nCONTEXT:  PL/pgSQL function inline_code_block line 10 at RAISE\n';
+const diagnosticCases = [
+  ['certificate verification', 2, tlsDiagnostic, 'tls'],
+  ['hostname mismatch', 2, connectionPrefix + 'server certificate for "' + diagnosticSentinel + '" does not match host name "synthetic.invalid"\n', 'tls'],
+  ['password rejection', 2, authDiagnostic, 'authentication'],
+  ['missing password', 2, connectionPrefix + 'fe_sendauth: no password supplied\n', 'authentication'],
+  ['connection refused', 2, connectionPrefix + 'Connection refused\n\tIs the server running on that host and accepting TCP/IP connections?\n', 'connection'],
+  ['network unreachable', 2, connectionPrefix + 'Network is unreachable\n\tIs the server running on that host and accepting\n\tTCP/IP connections?\n', 'connection'],
+  ['no route', 2, connectionPrefix + 'No route to host\n', 'connection'],
+  ['connection timeout', 2, connectionPrefix + 'Connection timed out\n', 'connection'],
+  ['libpq timeout', 2, connectionPrefix + 'timeout expired\n', 'connection'],
+  ['DNS failure', 2, 'psql: error: could not translate host name "' + diagnosticSentinel + '" to address: Name or service not known\n', 'connection'],
+  ['temporary DNS failure', 2, 'psql: error: could not translate host name "' + diagnosticSentinel + '" to address: Temporary failure in name resolution\n', 'connection'],
+  ['baseline command rejection', 1, baselineDiagnostic, 'baseline'],
+  ['baseline script rejection', 3, baselineDiagnostic, 'baseline'],
+  ['migration baseline rejection', 1, 'ERROR:  Unexpected migration history\n', 'baseline'],
+  ['unknown server error', 3, 'ERROR:  permission denied for table ' + diagnosticSentinel + '\n', 'command'],
+  ['unknown connection error', 2, connectionPrefix + diagnosticSentinel + '\n', 'command'],
+  ['ambiguous attempts', 2, tlsDiagnostic + authDiagnostic, 'command'],
+  ['repeated attempts', 2, tlsDiagnostic + tlsDiagnostic, 'command'],
+  ['recognised error plus unknown detail', 2, tlsDiagnostic + diagnosticSentinel, 'command'],
+  ['recognised error with extra suffix', 2, tlsDiagnostic.trimEnd() + ' ' + diagnosticSentinel, 'command'],
+  ['misleading hostname', 2, 'psql: error: connection to server at "certificate verify failed" (192.0.2.1), port 5432 failed: ' + diagnosticSentinel, 'command'],
+  ['misleading error text', 2, diagnosticSentinel + ' password authentication failed', 'command'],
+  ['baseline plus unknown detail', 1, baselineDiagnostic + diagnosticSentinel, 'command'],
+  ['baseline text in unrelated SQL', 3, 'ERROR:  syntax error at or near "Unexpected staging baseline"\n', 'command'],
+  ['baseline with connection status', 2, baselineDiagnostic, 'command'],
+  ['TLS with query status', 3, tlsDiagnostic, 'command'],
+  ['unknown exit status', 42, tlsDiagnostic, 'command'],
+  ['localized output', 2, 'psql: Fehler: ' + diagnosticSentinel, 'command'],
+  ['empty output', 2, '', 'command'],
+];
+
+for (const [label, status, stderr, category] of diagnosticCases) {
+  test('baseline diagnostics: ' + label + ' emits only the fixed token', () => {
+    assert.equal(classifyPsqlFailure({ status, stderr }), category);
+    const helper = new URL('../../ops/staging-backup/backup.mjs', import.meta.url).href;
+    const child = 'process.stdout.write(' + JSON.stringify(diagnosticSentinel) + '); process.stderr.write(' + JSON.stringify(stderr) + '); process.exit(' + status + ')';
+    // Exercise the real subprocess wrapper and public formatter in a separate
+    // process: neither captured channel may escape, even on unknown failures.
+    const harness = 'import {runQuiet,formatFailure,classifyPsqlFailure} from ' + JSON.stringify(helper) + ';' +
+      'try { runQuiet(process.execPath,["-e",' + JSON.stringify(child) + '],{},"baseline-before",classifyPsqlFailure); }' +
+      'catch(error) { console.error(formatFailure(error)); process.exitCode=1; }';
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', harness], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, 'SKYCAR_BACKUP_FAILURE phase=baseline-before category=' + category + '\n');
+  });
+}
+
+test('malformed, oversized and successful results never imply a failure class', () => {
+  for (const result of [null, {}, { status: 2, stderr: null }, { status: 2, stderr: Buffer.from(tlsDiagnostic) },
+    { status: 2, stderr: tlsDiagnostic + ' '.repeat(16385) }, { status: 0, stderr: tlsDiagnostic },
+    { status: null, stderr: tlsDiagnostic }]) {
+    assert.equal(classifyPsqlFailure(result), 'command');
+  }
+});
+
+test('classifier errors and non-allowlisted results remain generic and redacted', () => {
+  for (const classifier of [() => diagnosticSentinel, () => { throw new Error(diagnosticSentinel); }]) {
+    let error;
+    try { runQuiet(process.execPath, ['-e', 'process.exit(2)'], {}, 'baseline-before', classifier); }
+    catch (caught) { error = caught; }
+    assert.equal(formatFailure(error), 'SKYCAR_BACKUP_FAILURE phase=baseline-before category=command');
+  }
+});
+
+for (const phase of ['baseline-before', 'baseline-after']) {
+  for (const [label, status, stderr, category] of diagnosticCases) {
+    test(phase + ' ' + label + ' stops capture, publishes nothing and removes private files', () => {
+      const temp = mkdtempSync(join(tmpdir(), 'backup-diagnostic-test-'));
+      let work; let error; const calls = [];
+      try {
+        try {
+          capture({ ...environment(), RUNNER_TEMP: temp }, (command, args, options, actualPhase, classifier) => {
+            work = options.env.HOME;
+            calls.push(actualPhase);
+            const value = fakeCommand(command, args, options); // Also checks TLS/CA/read-only invariants.
+            if (actualPhase.startsWith('baseline-')) assert.equal(classifier, classifyPsqlFailure);
+            else assert.equal(classifier, undefined);
+            if (actualPhase === phase) {
+              assert.ok(args.includes(EMPTY_TARGET_SQL));
+              const child = 'process.stdout.write(' + JSON.stringify(diagnosticSentinel) + '); process.stderr.write(' + JSON.stringify(stderr) + '); process.exit(' + status + ')';
+              return runQuiet(process.execPath, ['-e', child], {}, actualPhase, classifier);
+            }
+            return value;
+          });
+        } catch (caught) { error = caught; }
+        assert.equal(formatFailure(error), 'SKYCAR_BACKUP_FAILURE phase=' + phase + ' category=' + category);
+        assert.equal(calls.at(-1), phase);
+        assert.deepEqual(readdirSync(temp), []);
+        assert.equal(existsSync(work), false);
+      } finally { rmSync(temp, { recursive: true, force: true }); }
+    });
+  }
+}
+
+function classifiedCapture({ mutateEnvironment, intercept, internal } = {}) {
+  const temp = mkdtempSync(join(tmpdir(), 'backup-classification-test-'));
+  let error;
+  try {
+    const e = { ...environment(), RUNNER_TEMP: temp };
+    if (mutateEnvironment) mutateEnvironment(e);
+    capture(e, (command, args, options, phase) => {
+      if (intercept) {
+        const value = intercept({ command, args, options, phase });
+        if (value !== undefined) return value;
+      }
+      return fakeCommand(command, args, options);
+    }, internal);
+  } catch (caught) { error = caught; }
+  const token = formatFailure(error);
+  assert.deepEqual(readdirSync(temp), []);
+  rmSync(temp, { recursive: true, force: true });
+  return token;
+}
+
+test('representative capture failures are precisely classified without private values', () => {
+  const privateSentinel = 'private-host password SQL key path sentinel';
+  const results = [];
+  results.push(classifiedCapture({ mutateEnvironment: e => { e.STAGING_SUPABASE_DB_HOST = privateSentinel; } }));
+  results.push(classifiedCapture({ intercept: ({ phase }) => phase === 'toolchain' ? 'unexpected-version' : undefined }));
+  let baselines = 0;
+  results.push(classifiedCapture({ intercept: ({ args, phase }) => {
+    if (phase.startsWith('baseline-') && args.includes(EMPTY_TARGET_SQL) && ++baselines === 1) return privateSentinel;
+  } }));
+  results.push(classifiedCapture({ intercept: ({ phase }) => phase === 'roles-script' ? privateSentinel : undefined }));
+  results.push(classifiedCapture({ intercept: ({ phase }) => {
+    if (phase === 'schema-export') throw new Error(privateSentinel);
+  } }));
+  results.push(classifiedCapture({ internal: { createRecoveryOracle: () => { throw new Error(privateSentinel); } } }));
+  results.push(classifiedCapture({ internal: { encryptBundle: () => { throw new Error(privateSentinel); } } }));
+  results.push(classifiedCapture({ internal: { writeOutput: () => { throw new Error(privateSentinel); } } }));
+  assert.deepEqual(results, [
+    'SKYCAR_BACKUP_FAILURE phase=configuration category=validation',
+    'SKYCAR_BACKUP_FAILURE phase=toolchain category=validation',
+    'SKYCAR_BACKUP_FAILURE phase=baseline-before category=validation',
+    'SKYCAR_BACKUP_FAILURE phase=roles-script category=validation',
+    'SKYCAR_BACKUP_FAILURE phase=schema-export category=unknown',
+    'SKYCAR_BACKUP_FAILURE phase=oracle category=unknown',
+    'SKYCAR_BACKUP_FAILURE phase=encryption category=unknown',
+    'SKYCAR_BACKUP_FAILURE phase=output category=unknown',
+  ]);
+  assert.doesNotMatch(results.join('\n'), /private-host|password|SQL|key|path|sentinel/);
+});
+
+test('unknown exceptions collapse to the fixed unknown token and CLI emits no raw error', () => {
+  assert.equal(formatFailure(new Error('private-sentinel')), 'SKYCAR_BACKUP_FAILURE phase=unknown category=unknown');
+  const helper = fileURLToPath(new URL('../../ops/staging-backup/backup.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [helper, '--unsupported'], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'SKYCAR_BACKUP_FAILURE phase=configuration category=validation\n');
 });
 
 test('workflow contract: manual protected backup, no raw artifact, secretless PR tests', () => {
@@ -239,6 +508,11 @@ test('workflow contract: manual protected backup, no raw artifact, secretless PR
   assert.match(workflow, /environment: skycar-staging/);
   assert.match(workflow, /refs\/heads\/fix\/phone-test-delivery/);
   assert.match(workflow, /backup\.enc\.json/);
+  const [beforeCapture, captureStep] = workflow.split('      - name: Capture encrypted read-only export');
+  assert.doesNotMatch(beforeCapture, /STAGING_SUPABASE_DB_CA/);
+  for (const name of ['STAGING_SUPABASE_DB_CA_CERT_B64', 'STAGING_SUPABASE_DB_CA_SHA256']) {
+    assert.ok(captureStep.includes(name + ': ${{ secrets.' + name + ' }}'));
+  }
   assert.doesNotMatch(workflow, /path:.*(\.sql|\*|\.log)/);
   assert.doesNotMatch(checks, /secrets\.|environment:/);
   assert.match(checks, /revision: \[head, integration\]/);

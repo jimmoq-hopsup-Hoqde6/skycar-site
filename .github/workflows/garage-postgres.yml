@@ -1,0 +1,49 @@
+name: Garage PostgreSQL verification
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  garage-database:
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [head, integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_garage_test_only
+          POSTGRES_DB: garage_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.revision == 'head' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Verify tested revision
+        run: node scripts/verify-ci-checkout.mjs
+        env:
+          CI_CHECKOUT_MODE: ${{ matrix.revision }}
+      - name: Install isolated PostgreSQL test driver
+        run: npm install --prefix "$RUNNER_TEMP/garage-validation" --ignore-scripts --no-audit --no-fund pg@8.16.3
+      - name: Verify migration, ownership, atomic rollback and independent-session races
+        env:
+          # Disposable CI service only. Never substitute a live connection.
+          GARAGE_TEST_DATABASE_URL: postgresql://postgres:disposable_garage_test_only@127.0.0.1:5432/garage_test
+        run: |
+          export GARAGE_PG_MODULE="$RUNNER_TEMP/garage-validation/node_modules/pg/lib/index.js"
+          node tests/rls/garage.postgres.mjs
+          node tests/rls/garage.concurrent.mjs
