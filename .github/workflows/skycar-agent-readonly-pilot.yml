@@ -1,0 +1,47 @@
+name: Skycar agent read-only pilot
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "GitHub issue number to audit"
+        required: true
+        default: "88"
+        type: string
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+concurrency:
+  group: skycar-readonly-pilot
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate issue number and retrieve read-only metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$ISSUE_NUMBER" =~ ^[0-9]{1,6}$ ]]; then
+            echo "Invalid issue number" >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --retry 2 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/issues/$ISSUE_NUMBER" > issue.json
+          jq -e '.number and .title and .state' issue.json >/dev/null
+          jq '{number, title, state, html_url, updated_at, labels: [.labels[].name]}' issue.json > issue-summary.json
+          printf '## Skycar read-only pilot\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf 'Repository: %s\n\nIssue: #%s\n\nCommit: %s\n\n' "$REPO" "$ISSUE_NUMBER" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          cat issue-summary.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Save evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skycar-readonly-issue-evidence
+          path: issue-summary.json
+          retention-days: 7

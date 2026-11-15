@@ -1,0 +1,39 @@
+name: Skycar nine-agent queue dry run
+# Manual-only, no secrets, no OpenAI calls, no repository writes.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: skycar-queue-dry-run
+  cancel-in-progress: false
+jobs:
+  simulate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Simulate nine-agent routing without execution
+        run: |
+          cat > /tmp/skycar-issues.json <<'JSON'
+          [
+            {"number": 101, "labels": ["agent-approved", "mobile-ready"]},
+            {"number": 102, "labels": ["agent-approved", "security-passed"]},
+            {"number": 103, "labels": ["agent-approved", "backend-ready", "production"]},
+            {"number": 104, "labels": ["backlog"]}
+          ]
+          JSON
+          python3 scripts/autonomy/queue_dry_run.py /tmp/skycar-issues.json | tee /tmp/skycar-routing.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open("/tmp/skycar-routing.json"))
+          assert len(d["roles"]) == 9
+          assert [t["decision"] for t in d["tasks"]] == ["DRY_RUN_ONLY","DRY_RUN_ONLY","BLOCK","SKIP"]
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skycar-agent-routing-dry-run
+          path: /tmp/skycar-routing.json
+          retention-days: 7

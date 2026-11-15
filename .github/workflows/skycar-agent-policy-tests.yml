@@ -1,0 +1,16 @@
+name: Skycar autonomous routing policy tests
+# Manual-only. Does not run an AI model, access secrets, or change code.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  policy-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate nine-agent routes and protected-task blocking
+        run: python3 -m unittest discover -s tests/autonomy -p 'test_*.py' -v
