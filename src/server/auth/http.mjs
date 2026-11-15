@@ -8,6 +8,7 @@ import {
 
 const MAX_BODY_BYTES = 8192;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const JOURNEY_RETURN_PATH = /^\/care\/journey\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SAFE_RETURN_ROOTS = ['/garage', '/care/request', '/care/requests', '/technician'];
 
 function fault(code, status, message, options = {}) {
@@ -69,7 +70,8 @@ export function safeReturnPath(value, fallback = '/garage') {
   try { parsed = new URL(value, 'https://skycar.invalid'); }
   catch { fault('VALIDATION_FAILED', 400, 'Choose a valid Skycar return page.'); }
   if (parsed.origin !== 'https://skycar.invalid'
-    || !SAFE_RETURN_ROOTS.some(root => parsed.pathname === root || parsed.pathname.startsWith(`${root}/`))) {
+    || !(JOURNEY_RETURN_PATH.test(parsed.pathname)
+      || SAFE_RETURN_ROOTS.some(root => parsed.pathname === root || parsed.pathname.startsWith(`${root}/`)))) {
     fault('VALIDATION_FAILED', 400, 'Choose a valid Skycar return page.');
   }
   return `${parsed.pathname}${parsed.search}${parsed.hash}`;

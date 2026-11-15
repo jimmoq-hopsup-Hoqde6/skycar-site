@@ -152,3 +152,34 @@ test('sign-out provider failure is retryable and redacted', async () => {
   assert.equal(body.error.retryable, true);
   assert.doesNotMatch(JSON.stringify(body), /private token/);
 });
+
+test('customer journey recovery link survives sign-in with its exact request path', async () => {
+  const path = '/care/journey/11111111-1111-4111-8111-111111111111';
+  const recoveryLink = new URL('/auth/sign-in?next=' + encodeURIComponent(path), 'https://skycar.test');
+  const { calls, handlers } = setup();
+  const response = await handlers.signIn(request('/api/v1/auth/sign-in', {
+    email: 'person@example.test', password: 'secret', next: recoveryLink.searchParams.get('next'),
+  }));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).data.redirectTo, path);
+  assert.equal(calls.length, 1);
+  assert.equal(safeReturnPath(path + '?from=receipt#photos'), path + '?from=receipt#photos');
+});
+
+test('journey lookalikes and traversal cannot authorize a sign-in return', async () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  for (const next of [
+    '/care/journey', '/care/journey/not-a-uuid', '/care/journey-other/' + id,
+    '/care/journey/' + id + '/extra', '/care/journey/' + id + '/../../operations',
+    '/care/journey/%2e%2e/operations', '//evil.test/care/journey/' + id,
+    'https://evil.test/care/journey/' + id,
+  ]) {
+    const { calls, handlers } = setup();
+    const response = await handlers.signIn(request('/api/v1/auth/sign-in', {
+      email: 'person@example.test', password: 'secret', next,
+    }));
+    assert.equal(response.status, 400, next);
+    assert.equal((await response.json()).error.code, 'VALIDATION_FAILED', next);
+    assert.equal(calls.length, 0, next);
+  }
+});
