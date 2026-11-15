@@ -242,6 +242,40 @@ try {
     assert.deepEqual(errors, []);
     await page.close();
   }
+  // 7. A1: after Enter on an out-of-area or unknown postcode, the checking fieldset is disabled and
+  // browsers drop focus to BODY. Once the notice is on screen, focus must move to its heading (tabIndex -1)
+  // so the customer is not left on the document. role=alert on the notice is left in place.
+  const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))));
+  const focused = page => page.evaluate(() => {
+    const el = document.activeElement;
+    return { tag: el?.tagName ?? null, id: el?.id ?? '', inNotice: Boolean(el?.closest('.coverage-notice')) };
+  });
+  for (const kind of ['out_of_area', 'unknown']) {
+    const { page } = await guest(answerFor(kind));
+    await page.getByLabel('Postcode', { exact: true }).press('Enter');
+    await NOTICE(page).waitFor();
+    await frames(page);
+    const guestFocus = await focused(page);
+    assert.equal(guestFocus.id, 'coverage-notice-title', `guest ${kind}: Enter moves focus to the notice heading, not ${guestFocus.tag}`);
+    assert.equal(guestFocus.tag, 'H3');
+    assert.equal(guestFocus.inNotice, true);
+    assert.equal(await NOTICE(page).getAttribute('role'), 'alert', `guest ${kind}: role=alert remains on the notice`);
+    await page.close();
+  }
+  for (const kind of ['out_of_area', 'unknown']) {
+    const { page } = await signedIn(answerFor(kind));
+    await postcodeField(page).fill('5999');
+    await postcodeField(page).press('Enter');
+    await NOTICE(page).waitFor();
+    await frames(page);
+    const signedFocus = await focused(page);
+    assert.equal(signedFocus.id, 'coverage-notice-title', `signed-in ${kind}: Enter moves focus to the notice heading, not ${signedFocus.tag}`);
+    assert.equal(signedFocus.tag, 'H3');
+    assert.equal(signedFocus.inNotice, true);
+    assert.equal(await NOTICE(page).getAttribute('role'), 'alert', `signed-in ${kind}: role=alert remains on the notice`);
+    await page.close();
+  }
+
   console.log('PASS: stale coverage answers (guest + signed-in) and signed-in postcode hand-off');
 } finally {
   await browser?.close();

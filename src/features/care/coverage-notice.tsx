@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { hasSupportContact, telHref, type SupportContact } from "@/domain/care/support-contact";
 import { type CoverageOutcome } from "@/domain/care/coverage";
 import "./coverage-notice.css";
@@ -16,8 +17,12 @@ export function CoverageNotice({ outcome, contact, busy, onRetry, onChangePostco
   onChangePostcode: () => void;
 }) {
   const out = outcome.kind === "out_of_area";
+  const title = useRef<HTMLHeadingElement>(null);
+  // Enter on the postcode disables the checking fieldset, so the browser drops focus to BODY.
+  // After the notice is painted, move focus to the heading (not in the tab order). role=alert stays on the section.
+  useEffect(() => { title.current?.focus(); }, [outcome]);
   return <section className="coverage-notice" data-coverage={out ? "out_of_area" : "unknown"} data-contact={contact?.email && contact.phone ? "email-phone" : contact?.email ? "email" : contact?.phone ? "phone" : "none"} role="alert" aria-labelledby="coverage-notice-title">
-    <h3 id="coverage-notice-title">{out ? `We don’t cover ${outcome.postcode} yet` : "We can’t check your area right now"}</h3>
+    <h3 id="coverage-notice-title" ref={title} tabIndex={-1}>{out ? `We don’t cover ${outcome.postcode} yet` : "We can’t check your area right now"}</h3>
     {out
       ? <p>Skycar is starting in Adelaide and the Adelaide Hills, so we can’t take a request for {outcome.postcode} yet. Check the postcode, or get in touch and we’ll tell you when we reach your area. Nothing has been submitted.</p>
       : <p>We couldn’t confirm whether we cover your postcode, so nothing has been submitted. Please try again in a moment{hasSupportContact(contact) ? ", or contact us" : ""}.</p>}
