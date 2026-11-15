@@ -24,6 +24,7 @@ import { verifyRequestPhotoMarker } from "./request-photo-marker.acceptance.mjs"
 import { proveLegacyBypassThenSunset, verifyCoverageEnforcement } from "./coverage-enforcement.acceptance.mjs";
 import { verifyCrossLockOrder } from "./week1-cross-lock-order.acceptance.mjs";
 import { verifyCrossLockStress } from "./week1-cross-lock-stress.acceptance.mjs";
+import { seedRequestPostcodeBackfill, verifyRequestPostcodeRecheck } from "./request-postcode-recheck.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
@@ -134,15 +135,20 @@ before(() => {
     '20261101150000_request_photo_marker_legacy_state_and_cleanup.sql',
     '20261101160000_care_service_coverage_enforcement.sql',
     '20261108120000_care_legacy_create_sunset.sql',
+    '20261115100000_care_request_postcode_and_update_recheck.sql',
   ], 'combined verification must include every public migration in filename order');
   const sunset = '20261108120000_care_legacy_create_sunset.sql';
+  // Files after the sunset (forward-only follow-ups) are applied after it, in filename order, below.
   for (const migration of migrations) {
-    if (migration === sunset) continue;
+    if (migration >= sunset) continue;
     file(`supabase/migrations/${migration}`);
   }
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
   // Show the pre-fix bypass on 20261101160000 alone, then apply the sunset before any later test.
   proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, file });
+  // Pre-migration rows for the 20261115100000 backfill.
+  seedRequestPostcodeBackfill({ sql, quote });
+  for (const migration of migrations.filter(name => name > sunset)) file(`supabase/migrations/${migration}`);
 });
 
 test('combined Garage and Care migrations preserve ownership, history, retries, races and atomic writes', async () => {
@@ -352,4 +358,8 @@ test('Journey RPCs share no lock inversion with care_submit_request, the photo-m
 });
 test('Concurrent sessions queued behind one journey lock never deadlock (real lock-order stress)', async () => {
   await verifyCrossLockStress({ database });
+});
+
+test('Request postcode is persisted and update_details re-checks coverage (20261115100000)', async () => {
+  await verifyRequestPostcodeRecheck({ sql, auth, quote, garageCreate, result });
 });

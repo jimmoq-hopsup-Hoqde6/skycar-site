@@ -61,6 +61,17 @@ export function proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, fi
   equal(sql(`select legacy_create_deadline = timestamptz ${quote(CAP)} from public.care_service_coverage_compat`), 't', 'deadline probes roll back to the cap');
   fails(`begin; update public.care_service_coverage_compat set legacy_create_deadline = timestamptz ${quote(CAP)} + interval '1 microsecond'; commit;`, 'care_service_coverage_compat_deadline_cap', 'the deadline cannot be extended past the cap');
   equal(sql(`select legacy_create_deadline = timestamptz ${quote(CAP)} from public.care_service_coverage_compat`), 't', 'a rejected extension leaves the cap in place');
+  // The function's own cap constant, independent of the stored deadline and the column CHECK: with the constraint
+  // dropped and the deadline moved a week later (rolled back), least(deadline, cap) must still close at CAP.
+  // A mutant that moves only the constant in care_legacy_create_open is killed here.
+  equal(sql(`begin; alter table public.care_service_coverage_compat drop constraint care_service_coverage_compat_deadline_cap;
+    update public.care_service_coverage_compat set legacy_create_deadline = timestamptz ${quote(CAP)} + interval '7 days';
+    select public.care_legacy_create_open(timestamptz ${quote(CAP)} - interval '1 microsecond');
+    select public.care_legacy_create_open(timestamptz ${quote(CAP)});
+    select public.care_legacy_create_open(timestamptz ${quote(CAP)} + interval '1 day');
+    rollback;`).split('\n'), ['t', 'f', 'f'], 'the function caps at 2026-11-21T13:30:00Z even when the stored deadline is later and the CHECK is gone');
+  equal(sql(`select count(*) from pg_constraint where conname = 'care_service_coverage_compat_deadline_cap'`), '1', 'the CHECK drop rolled back');
+  equal(sql(`select legacy_create_deadline = timestamptz ${quote(CAP)} from public.care_service_coverage_compat`), 't', 'the later deadline rolled back');
   if (sql('select public.care_legacy_create_open(clock_timestamp())') === 't') {
     const rolled = JSON.parse(sql(asOwner(submit(randomUUID(), legacy))).split('\n')[0]);
     equal(rolled.replayed, false, 'before the cap a legacy create still succeeds inside its transaction');

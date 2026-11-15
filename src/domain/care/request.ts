@@ -3,14 +3,34 @@ export type CareInput = {
   service: "repair" | "cleaning";
   description: string;
   preferred_window: "one_to_two_business_days" | "seven_to_fourteen_days" | "flexible";
-  // Four digits. Checked against the service area by care_submit_request (OUT_OF_AREA), not stored on the request.
+  // Four digits. Checked against the service area by care_submit_request (OUT_OF_AREA) and, since 20261115100000,
+  // stored on the request (care_requests.service_postcode) and re-checked when the journey postcode changes.
   // Absent only in the legacy four-key shape sent by a form that predates the check (a stale tab, or a retry of
   // a request it created): the database replays those and, while its compatibility switch is on, creates them.
   postcode?: string;
 };
 
-// What a request looks like once created: the postcode is only used for the area check.
+// What a request looks like once created. The submitted postcode is not echoed as `postcode`; the stored
+// service postcode comes back as service_postcode / service_postcode_source (see CareReceipt).
 export type CareRequestFields = Omit<CareInput, "postcode">;
+
+// care_requests.service_postcode_source (20261115100000): submit and update_details were coverage-checked when
+// written; backfill was copied by the migration without a re-check; unknown is a legacy create with no postcode.
+export const SERVICE_POSTCODE_SOURCES = ["submit", "update_details", "backfill", "unknown"] as const;
+export type ServicePostcodeSource = (typeof SERVICE_POSTCODE_SOURCES)[number];
+export type CareServicePostcode = { service_postcode: string | null; service_postcode_source: ServicePostcodeSource };
+
+// Both fields or neither: a receipt from a database without 20261115100000 has neither and stays readable.
+// When present they must satisfy the database invariant: unknown if and only if the postcode is null, otherwise
+// four digits.
+export function validServicePostcode(value: Record<string, unknown>): boolean {
+  const hasPostcode = Object.hasOwn(value, "service_postcode"), hasSource = Object.hasOwn(value, "service_postcode_source");
+  if (!hasPostcode && !hasSource) return true;
+  const postcode = value.service_postcode, source = value.service_postcode_source;
+  if (typeof source !== "string" || !(SERVICE_POSTCODE_SOURCES as readonly string[]).includes(source)) return false;
+  if (source === "unknown") return postcode === null;
+  return typeof postcode === "string" && /^[0-9]{4}$/.test(postcode);
+}
 
 export type CareEvent = {
   id: string;
@@ -32,7 +52,7 @@ export type CareReceipt = CareRequestFields & {
   updated_at: string;
   next_update_at: string | null;
   events: CareEvent[];
-};
+} & Partial<CareServicePostcode>;
 
 export class CareError extends Error {
   code: string;
