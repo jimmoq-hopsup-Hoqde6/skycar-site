@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import resource
 import subprocess
 import signal
 import tempfile
@@ -14,6 +15,12 @@ from technician_tasks import select, TEST_COMMAND
 
 IMAGE = 'node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54'
 MAX_EVIDENCE_BYTES = 200_000
+MAX_LOG_BYTES = 1_000_000
+
+
+def bound_log():
+    # Bound writes even if a hostile candidate exits before the polling loop runs.
+    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_LOG_BYTES, MAX_LOG_BYTES))
 
 
 def read_json(path, maximum=MAX_EVIDENCE_BYTES):
@@ -66,7 +73,7 @@ def validate_run(root, sha, task_id, evidence, fingerprint, run_id):
 
 
 def docker_command(workspace, acceptance, name='skycar-validation-unit'):
-    return ['docker','run','--rm','--name',name,'--network','none','--read-only','--cap-drop','ALL',
+    return ['docker','run','--rm','--name',name,'--log-driver','none','--network','none','--read-only','--cap-drop','ALL',
             '--security-opt','no-new-privileges','--pids-limit','64','--memory','512m',
             '--cpus','1','--ulimit','nofile=128:128','--user','65534:65534',
             '--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=64m',
@@ -101,13 +108,13 @@ def validate(root, sha, task_id, evidence, fingerprint, run_id, output):
         try:
           with log.open('wb') as stream:
             process = subprocess.Popen(docker_command(workspace,acceptance,name),stdout=stream,stderr=subprocess.STDOUT,
-                                       env={'PATH':os.environ.get('PATH','/usr/bin:/bin'),'HOME':tmp})
+                                       env={'PATH':os.environ.get('PATH','/usr/bin:/bin'),'HOME':tmp},preexec_fn=bound_log)
             try:
                 while process.poll() is None:
-                    if log.stat().st_size > 1_000_000 or time.monotonic()-started > 180:
+                    if log.stat().st_size >= MAX_LOG_BYTES or time.monotonic()-started > 180:
                         raise PilotError("Candidate test exceeded time/output bounds")
                     time.sleep(0.1)
-                if process.returncode != 0:
+                if process.returncode != 0 or log.stat().st_size >= MAX_LOG_BYTES:
                     raise PilotError("Candidate failed independent isolated acceptance")
             finally:
                 if process.poll() is None:

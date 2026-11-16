@@ -20,7 +20,7 @@ from executor_billing import ProviderBilling, validate_proof
 from executor_github import GitHub, GitHubError, PREFIX
 from executor_ledger import Ledger, REF, month_now, reserve, validate_state
 from executor_pipeline import coding_run, prepare, publish, workflow_context
-from executor_validation import IMAGE, docker_command, read_json, verify_validation
+from executor_validation import IMAGE, MAX_LOG_BYTES, bound_log, docker_command, read_json, verify_validation
 from technician_tasks import TECHNICIAN, approved_issue, select, TASK_ID
 from test_bounded_coding_pilot import fake_client
 
@@ -391,11 +391,21 @@ class PipelineTests(unittest.TestCase):
 
 
 class EvidenceAndContainerTests(unittest.TestCase):
+    def test_fast_output_cannot_bypass_log_file_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log=Path(tmp)/'output'
+            with log.open('wb') as stream:
+                result=subprocess.run([sys.executable,'-c',"import os;os.write(1,b'x'*2000000);os.write(1,b'x')"],
+                    stdout=stream,stderr=subprocess.DEVNULL,preexec_fn=bound_log,timeout=10)
+            self.assertNotEqual(result.returncode,0)
+            self.assertLessEqual(log.stat().st_size,MAX_LOG_BYTES)
+
     def test_container_has_no_host_credentials_network_capabilities_or_writable_source(self):
         command=docker_command('/candidate','/trusted-acceptance')
         self.assertIn('--read-only',command);self.assertIn('--cap-drop',command)
         self.assertEqual(command[command.index('--network')+1],'none')
         self.assertIn('no-new-privileges',command)
+        self.assertEqual(command[command.index('--log-driver')+1],'none')
         self.assertNotIn('--env',command);self.assertFalse(any('docker.sock' in x for x in command))
         self.assertTrue(all(x.endswith(',readonly') for x in command if x.startswith('type=bind,')))
         self.assertIn('@sha256:',IMAGE)
