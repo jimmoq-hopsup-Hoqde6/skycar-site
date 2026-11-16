@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {lockGate, heldRace} from './lock-test-gate.mjs';
 import {randomUUID} from 'node:crypto';
 export async function verifyTechnicianCompletion({sql,auth,quote,result,waitForQuery}){
  let checks=0;const run=s=>Promise.resolve().then(()=>sql(s));const json=async s=>JSON.parse((await run(s)).split('\n')[0]);
@@ -47,9 +48,12 @@ export async function verifyTechnicianCompletion({sql,auth,quote,result,waitForQ
  await run('drop trigger completion_test_audit_fail on public.audit_events;drop function public.completion_test_audit_fail()');
  const accountKey=randomUUID();equal((await json(command(account.id,accountKey))).state,'completed');equal((await json(command(account.id,accountKey))).replayed,true);equal(await run(`select fulfilment_state from public.care_requests where id=${quote(account.id)}`),'completed');equal(await run(`select count(*) from public.vehicle_history where vehicle_id=${quote(account.vehicle)} and event_type='care_service_completed'`),'1');
  if(result&&waitForQuery){
-  const race=await fixture('account'),raceKey=randomUUID(),tag='technician_completion_exact_key';const one=result(command(race.id,raceKey).replace(';commit;',`;select pg_sleep(1);/* ${tag} */commit;`));await waitForQuery(tag);const two=result(command(race.id,raceKey));const [a,b]=await Promise.all([one,two]);equal(a.error,undefined);equal(b.error,undefined);equal(JSON.parse(b.value.split('\n')[0]).replayed,true);equal(await run(`select count(*) from public.vehicle_history where vehicle_id=${quote(race.vehicle)} and event_type='care_service_completed'`),'1');
+  // Ordered races: the first holds its locks in lock_test.hold until the second is blocked by it (pg_blocking_pids).
+  const gate=lockGate({exec:sql,quote});gate.setup();
+  const race=await fixture('account'),raceKey=randomUUID(),tag='technician_completion_exact_key';const [a,b]=await heldRace(gate,result,{label:tag,first:command(race.id,raceKey).replace(';commit;',`;${gate.holdCall(tag)};/* ${tag} */commit;`),second:command(race.id,raceKey)});equal(a.error,undefined);equal(b.error,undefined);equal(JSON.parse(b.value.split('\n')[0]).replayed,true);equal(await run(`select count(*) from public.vehicle_history where vehicle_id=${quote(race.vehicle)} and event_type='care_service_completed'`),'1');
   const ops=await fixture('account'),opsTag='operations_completion_blocks_technician';const opsCommand=service(`select public.care_journey_command('complete',${quote(ops.id)},${quote(admin)},null,gen_random_uuid(),${quote(JSON.stringify({evidence}))}::jsonb)`);
-  const first=result(opsCommand.replace(';commit;',`;select pg_sleep(1);/* ${opsTag} */commit;`));await waitForQuery(opsTag);const second=result(command(ops.id));const [c,d]=await Promise.all([first,second]);equal(c.error,undefined);assert.ok(d.output?.includes('INVALID_TRANSITION'));checks++;equal(await run(`select count(*) from public.vehicle_history where vehicle_id=${quote(ops.vehicle)} and event_type='care_service_completed'`),'1');
+  const [c,d]=await heldRace(gate,result,{label:opsTag,first:opsCommand.replace(';commit;',`;${gate.holdCall(opsTag)};/* ${opsTag} */commit;`),second:command(ops.id)});equal(c.error,undefined);assert.ok(d.output?.includes('INVALID_TRANSITION'));checks++;equal(await run(`select count(*) from public.vehicle_history where vehicle_id=${quote(ops.vehicle)} and event_type='care_service_completed'`),'1');
+  gate.teardown();
  }
  console.log(`PASS: ${checks} technician completion authority, evidence metadata, replay, shared state, history, rollback and race assertions (disposable database; actual bytes verified separately).`);
 }

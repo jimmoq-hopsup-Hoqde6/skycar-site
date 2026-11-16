@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { lockGate, heldRace, whileHolding } from './lock-test-gate.mjs';
 import { randomUUID } from 'node:crypto';
 
 export async function verifyTechnicianAvailability({ sql, quote, result, waitForQuery }) {
@@ -79,15 +80,16 @@ export async function verifyTechnicianAvailability({ sql, quote, result, waitFor
   equal(await run(`select revision::text from public.care_technician_availability where expert_id=${quote(expert)}::uuid`), '3');
   await run('drop trigger availability_test_audit_failure on public.audit_events; drop function public.availability_test_audit_failure()');
   const tag = 'availability_does_not_wait_on_journey_lock';
-  const held = result(`begin; select id from public.care_journeys where id=${quote(guest)}::uuid for update; select pg_sleep(2); /* ${tag} */ commit;`);
-  await waitForQuery(tag);
-  const started = Date.now();
-  const duringLock = await result(replace(payload(), tech, 3));
-  const elapsed = Date.now() - started;
+  // The holder keeps the journey row lock (lock_test.hold) until released; the write must finish while it is still held.
+  const gate = lockGate({ exec: sql, quote });
+  gate.setup();
+  const { held, value: duringLock } = await whileHolding(gate, result, { label: tag,
+    first: `begin; select id from public.care_journeys where id=${quote(guest)}::uuid for update; ${gate.holdCall(tag)}; /* ${tag} */ commit;` },
+    () => result(replace(payload(), tech, 3)));
   assert.equal(duringLock.error, undefined, duringLock.output);
-  assert.ok(elapsed < 1500, `availability waited on the journey lock for ${elapsed}ms`);
+  assert.equal(held.error, undefined, held.output);
   checks += 2;
-  await held;
+  gate.teardown();
   equal(await run(`select state || '|' || starts_at::text || '|' || ends_at::text from public.care_journeys where id=${quote(guest)}::uuid`), before, 'schedule writes do not change the booking');
   equal(await run('select count(*) from public.care_journey_commands'), journeyCommands, 'schedule writes do not append journey commands');
   await run(`update public.care_technician_accounts set active=false where expert_id=${quote(expert)}::uuid`);

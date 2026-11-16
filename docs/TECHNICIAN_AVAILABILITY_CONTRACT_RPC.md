@@ -34,12 +34,40 @@ A published-but-empty schedule (revision 1, no windows) is a deliberate statemen
 - Windows are half-open: a slot may end exactly at a window's end.
 - Plain `SELECT`s only: no advisory lock, no row lock, no write, no read of `care_journeys`. It cannot join the journey lock order (advisory, vehicle, request, journey) and cannot deadlock with it.
 
-### Wiring still to do (not in this delta)
+### Wiring (`20261115090000_care_booking_availability_enforcement.sql`)
 
-Calling it from `care_journey_command` (quote/select/confirm) is a separate change to that function.
-It should be called inside the existing confirmation transaction. Confirmed-booking overlap stays with
-the existing atomic confirmation check and the `care:expert-capacity` advisory lock; the check only
-answers "did the technician offer this time".
+`public.care_assert_expert_slot_available(expert, starts, ends)` (service_role only, SECURITY INVOKER,
+empty `search_path`, no locks) wraps the check and raises P0001 with a stable message:
+
+| Result of the check | Raised | HTTP (journey and technician routes) |
+| --- | --- | --- |
+| no technician account ever linked | `EXPERT_ACCOUNT_REQUIRED` | 409 |
+| linked account inactive or role lost | `EXPERT_UNAVAILABLE` | 409 |
+| `AVAILABLE` | nothing | - |
+| `AVAILABILITY_REQUIRED` (no published schedule, revision 0) | `AVAILABILITY_REQUIRED` | 409 |
+| `SLOT_UNAVAILABLE` (outside windows, exception day, crosses midnight) | `AVAILABILITY_SLOT_UNAVAILABLE` | 409 |
+
+The check's `SLOT_UNAVAILABLE` is renamed so it never collides with the confirm capacity code
+`SLOT_UNAVAILABLE` (another confirmed booking overlaps, or the start has passed).
+
+Called from: `care_technician_job_command` quote, `care_journey_command` `publish_quote` and
+`select_quote` (after the expert `KEY SHARE`), and `confirm`. In confirm it is the last check: after the
+`care:expert-capacity` advisory lock and the capacity overlap check, confirm takes the
+`care:technician-availability-schedule:<expert>` advisory lock (the one `care_technician_replace_availability`
+holds while it rewrites the schedule) and then checks. That lock is the last tier of confirm's order, and
+the replace RPC never takes journey, request, vehicle or capacity locks, so the new edge cannot form a
+cycle. Confirm therefore decides on the schedule that is committed when it runs, and a replace that starts
+later waits for the confirm to commit.
+
+Scope: every expert. Decision (Marcel, 15 Nov 2026, relayed by App Developer Bot): "Every technician
+needs a login." An expert that has never had a `care_technician_accounts` row is refused with
+`EXPERT_ACCOUNT_REQUIRED` (P0001, HTTP 409) at quote, publish, select and confirm; there is no
+operations fallback, and `availability_confirmed: true` on confirm is still required but is not a
+substitute. A linked account that is inactive, or whose user lost the `technician` role, keeps the
+existing `EXPERT_UNAVAILABLE`. Order: account, then schedule, then slot. Idempotent replays return before any of these checks, so a replay of an
+accepted command still succeeds after the schedule changes.
+
+Not covered: a schedule change committed after a booking is confirmed does not cancel or flag that booking.
 
 ## Constraints added
 

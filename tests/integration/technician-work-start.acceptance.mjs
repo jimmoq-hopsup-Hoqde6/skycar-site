@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {lockGate, heldRace} from './lock-test-gate.mjs';
 import {randomUUID} from 'node:crypto';
 export async function verifyTechnicianWorkStart({sql,auth,quote,result,waitForQuery}){
  let checks=0;const run=s=>Promise.resolve().then(()=>sql(s));const json=async s=>JSON.parse((await run(s)).split('\n')[0]);
@@ -60,10 +61,13 @@ export async function verifyTechnicianWorkStart({sql,auth,quote,result,waitForQu
  await run('drop trigger work_start_test_audit_fail on public.audit_events;drop function public.work_start_test_audit_fail()');
  equal((await json(command(account.id))).state,'in_progress');equal(await run(`select fulfilment_state from public.care_requests where id=${quote(account.id)}`),'in_progress');
  if(result&&waitForQuery){
+  // Ordered races: the first holds its locks in lock_test.hold until the second is blocked by it (pg_blocking_pids).
+  const gate=lockGate({exec:sql,quote});gate.setup();
   const race=await fixture(),raceKey=randomUUID(),tag='technician_start_exact_key';
-  const one=result(command(race.id,raceKey).replace(';commit;',`;select pg_sleep(1);/* ${tag} */commit;`));await waitForQuery(tag);const two=result(command(race.id,raceKey));const [a,b]=await Promise.all([one,two]);equal(a.error,undefined);equal(b.error,undefined);equal(JSON.parse(b.value.split('\n')[0]).replayed,true);equal(await run(`select count(*) from public.care_journey_events where journey_id=${quote(race.id)} and type='work_started'`),'1');
+  const [a,b]=await heldRace(gate,result,{label:tag,first:command(race.id,raceKey).replace(';commit;',`;${gate.holdCall(tag)};/* ${tag} */commit;`),second:command(race.id,raceKey)});equal(a.error,undefined);equal(b.error,undefined);equal(JSON.parse(b.value.split('\n')[0]).replayed,true);equal(await run(`select count(*) from public.care_journey_events where journey_id=${quote(race.id)} and type='work_started'`),'1');
   const cancelled=await fixture(),cancelTag='cancel_blocks_technician_start';const cancel=service(`select public.care_journey_command('cancel',${quote(cancelled.id)},${quote(admin)},null,gen_random_uuid(),'{}')`);
-  const pending=result(cancel.replace(';commit;',`;select pg_sleep(1);/* ${cancelTag} */commit;`));await waitForQuery(cancelTag);const blocked=result(command(cancelled.id));const [c,d]=await Promise.all([pending,blocked]);equal(c.error,undefined);assert.ok(d.output?.includes('INVALID_TRANSITION'));checks++;equal(await run(`select count(*) from public.care_journey_events where journey_id=${quote(cancelled.id)} and type='work_started'`),'0');
+  const [c,d]=await heldRace(gate,result,{label:cancelTag,first:cancel.replace(';commit;',`;${gate.holdCall(cancelTag)};/* ${cancelTag} */commit;`),second:command(cancelled.id)});equal(c.error,undefined);assert.ok(d.output?.includes('INVALID_TRANSITION'));checks++;equal(await run(`select count(*) from public.care_journey_events where journey_id=${quote(cancelled.id)} and type='work_started'`),'0');
+  gate.teardown();
  }
  console.log(`PASS: ${checks} technician work-start authority, shared state, exact retry, eligibility, rollback and race assertions (disposable database).`);
 }

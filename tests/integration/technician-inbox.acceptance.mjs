@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {tomorrowAt,publishAvailability} from './availability-fixture.mjs';
 
 // Can use a disposable PostgreSQL or PGlite SQL adapter. Hosted JWT/Storage are not proven.
 export async function verifyTechnicianInbox({sql,auth,quote}) {
@@ -27,6 +28,8 @@ export async function verifyTechnicianInbox({sql,auth,quote}) {
   await fail(command('bind_technician',null,{expert_id:expertB,user_id:techA},admin,key),'IDEMPOTENCY_CONFLICT');
   await fail(command('bind_technician',null,{expert_id:expertA,user_id:techB}),'LINK_CONFLICT');
   await json(command('bind_technician',null,{expert_id:expertB,user_id:techB}));
+  // 20261115090000: linked technicians must publish availability covering the quoted slot.
+  await run(publishAvailability(quote,techA));await run(publishAvailability(quote,techB));
   for(const table of ['care_technician_accounts','care_technician_invitations','care_technician_commands']){
     await fail(auth(techA,`select * from public.${table}`),'permission denied');
   }
@@ -60,7 +63,7 @@ export async function verifyTechnicianInbox({sql,auth,quote}) {
   equal((await json(read(techB,guestId))).job.access,'invited');
   // Use the real connected journey commands for customer selection and confirmation.
   const journeyCommand=(action,payload,actor=admin,guestKey=null)=>service(`select public.care_journey_command(${quote(action)},${quote(guestId)}::uuid,${actor?`${quote(actor)}::uuid`:'null'},${guestKey?`${quote(guestKey)}::uuid`:'null'},gen_random_uuid(),${quote(JSON.stringify(payload))}::jsonb)`);
-  const times=await json("select jsonb_build_object('expiry',date_trunc('seconds',clock_timestamp()+interval '1 hour'),'start',date_trunc('seconds',clock_timestamp()+interval '1 day'),'end',date_trunc('seconds',clock_timestamp()+interval '1 day 2 hours'))");
+  const times=await json(`select jsonb_build_object('expiry',date_trunc('seconds',clock_timestamp()+interval '1 hour'),'start',${tomorrowAt(10)},'end',${tomorrowAt(12)})`);
   await json(journeyCommand('publish_quote',{expert_id:expertA,scope_summary:'Repair the visible bumper scratch',total_price_cents:49500,expires_at:times.expiry,starts_at:times.start,ends_at:times.end}));
   const quoteId=await run(`select id from public.care_reviewed_quotes where journey_id=${quote(guestId)}::uuid and status='issued'`);
   const guestKey=await run(`select idempotency_key from public.care_guest_requests where id=${quote(guestId)}::uuid`);

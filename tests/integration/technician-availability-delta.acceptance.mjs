@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { lockGate, heldRace, whileHolding } from './lock-test-gate.mjs';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -9,6 +10,7 @@ export async function verifyTechnicianAvailabilityDelta({ sql, quote, result, wa
   let checks = 0;
   const equal = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks += 1; };
   const run = statement => Promise.resolve().then(() => sql(statement));
+  const gate = lockGate({ exec: sql, quote });
   const fail = async (statement, expected) => {
     await assert.rejects(() => run(statement), error => `${error.message}\n${error.stderr || ''}`.includes(expected), expected);
     checks += 1;
@@ -123,15 +125,15 @@ export async function verifyTechnicianAvailabilityDelta({ sql, quote, result, wa
   // ---- Read-only and lock-free: never waits on, nor makes anything wait on, schedule or journey rows. ----
   {
     const tag = `availability_delta_lock_${randomUUID().replaceAll('-', '')}`;
-    const holder = result(`begin; select '${tag}'; select 1 from public.care_technician_availability where expert_id=${quote(a.expert)}::uuid for update;
-      select 1 from public.care_journeys limit 1 for update; select pg_sleep(2); commit`);
-    await waitForQuery(tag);
-    await new Promise(resolve => setTimeout(resolve, 300));
-    const started = Date.now();
-    equal(await verdict(a.expert, adl('2027-01-04 09:00'), adl('2027-01-04 10:00')), 'AVAILABLE', 'check ran while the schedule row was locked');
-    assert.ok(Date.now() - started < 1500, 'check must not wait behind row locks'); checks += 1;
-    const finished = await holder;
+    // The holder keeps both row locks (lock_test.hold) until released; the check must return while they are still held.
+    gate.setup();
+    const { held: finished, value: checked } = await whileHolding(gate, result, { label: tag,
+      first: `begin; select '${tag}'; select 1 from public.care_technician_availability where expert_id=${quote(a.expert)}::uuid for update;
+      select 1 from public.care_journeys limit 1 for update; ${gate.holdCall(tag)}; commit` },
+      () => verdict(a.expert, adl('2027-01-04 09:00'), adl('2027-01-04 10:00')));
+    equal(checked, 'AVAILABLE', 'check ran (and returned) while the schedule and journey rows were locked'); checks += 1;
     assert.equal(finished.error, undefined, finished.output); checks += 1;
+    gate.teardown();
   }
 
   // ---- Constraints at table level (direct service_role writes bypass the RPC's own validation). --------
@@ -170,34 +172,37 @@ export async function verifyTechnicianAvailabilityDelta({ sql, quote, result, wa
 
   // ---- Authority: FOR SHARE on expert + account before the advisory waits, role re-checked after. -------
   {
-    const lockSql = (name, hold) => `begin; select pg_advisory_xact_lock(hashtextextended(${quote(name)}, 0)); select pg_sleep(${hold}); commit`;
-    const waitingOnLock = async tag => {
-      for (let attempt = 0; attempt < 100; attempt++) {
-        if (await run(`select count(*) from pg_stat_activity where pid <> pg_backend_pid() and wait_event_type='Lock' and query like ${quote(`%${tag}%`)}`) === '1') { checks += 1; return; }
-        await new Promise(resolve => setTimeout(resolve, 30));
-      }
-      throw new Error(`${tag} never waited on a lock`);
-    };
+    // Holders park in lock_test.hold (no fixed sleep) and are released only after the server reports the expected waits.
+    gate.setup();
+    const lockSql = (name, label) => `begin; select pg_advisory_xact_lock(hashtextextended(${quote(name)}, 0)); ${gate.holdCall(label)}; commit`;
+    const waitingOn = async (waiter, holder) => { await gate.waitFor(gate.blockedBy(waiter, holder), `${waiter} blocked by ${holder} (pg_blocking_pids)`); checks += 1; };
     const tagFor = label => `availability_delta_${label}_${randomUUID().replaceAll('-', '')}`;
-    const writeWith = (tech, key, tag) => result(replaceSql(tech.user, body([{ weekday: 1, starts_at: '09:00', ends_at: '12:00' }]), 0, key).replace(/; commit;$/, `; commit; /* ${tag} */`));
+    const writeWith = (tech, key, tag) => result(`/* ${tag} */ ` + replaceSql(tech.user, body([{ weekday: 1, starts_at: '09:00', ends_at: '12:00' }]), 0, key).replace(/; commit;$/, `; commit; /* ${tag} */`));
     // lock: which advisory lock the holder parks the write behind. change: the authority change committed during the wait.
     const scenario = async ({ label, lock, change, blocked, expected }) => {
       const tech = await seedTechnician();
       const key = randomUUID();
       const tag = tagFor(label);
       const lockName = lock === 'schedule' ? `care:technician-availability-schedule:${tech.expert}` : `care:technician-availability:${tech.user}:${key}`;
-      const holder = result(lockSql(lockName, 1.5) + `; select '${tag}_holder'`);
-      await waitForQuery(`${tag}_holder`);
-      await new Promise(resolve => setTimeout(resolve, 200));
-      const write = writeWith(tech, key, tag);
-      await waitingOnLock(tag);
-      let changed = null;
-      if (change) {
-        changed = result(`${change(tech)} /* ${tag}_change */`);
-        if (blocked) {
-          await waitingOnLock(`${tag}_change`);   // the revoker is queued behind the write's FOR SHARE
-          assert.equal(await run(`select count(*) from public.care_technician_availability where expert_id=${quote(tech.expert)}`), '0'); checks += 1;
+      const holder = result(lockSql(lockName, `${tag}_holder`) + `; select '${tag}_holder'`);
+      let write, changed = null;
+      try {
+        await gate.waitFor(gate.holding(`${tag}_holder`), `${tag} holder holding`);
+        write = writeWith(tech, key, tag);
+        await waitingOn(`${tag} */`, `${tag}_holder`);
+        if (change) {
+          changed = result(`/* ${tag}_change */ ${change(tech)} /* ${tag}_change */`);
+          if (blocked) {
+            await waitingOn(`${tag}_change`, `${tag} */`);   // the revoker is queued behind the write's FOR SHARE
+            assert.equal(await run(`select count(*) from public.care_technician_availability where expert_id=${quote(tech.expert)}`), '0'); checks += 1;
+          } else {
+            const done = await changed;   // the unlocked authority change commits while the write is still parked
+            assert.equal(done.error, undefined, done.output);
+            assert.ok(await gate.isHolding(`${tag}_holder`), `${tag}: change committed while the write was parked`);
+          }
         }
+      } finally {
+        await gate.release(`${tag}_holder`);
       }
       const [heldResult, writeResult, changeResult] = await Promise.all([holder, write, changed]);
       assert.equal(heldResult.error, undefined, heldResult.output); checks += 1;
@@ -244,35 +249,36 @@ export async function verifyTechnicianAvailabilityDelta({ sql, quote, result, wa
     {
       const tech = await seedTechnician();
       const tag = tagFor('admin_first');
-      const parked = result(bind(tech).replace(/; commit;$/, `; select pg_sleep(1.5); commit; /* ${tag} */`));
-      await waitForQuery(tag);
-      await new Promise(resolve => setTimeout(resolve, 200));
-      const started = Date.now();
-      const written = await result(replaceSql(tech.user, body([{ weekday: 2, starts_at: '09:00', ends_at: '12:00' }]), 0));
+      const { held: parkedResult, value: written } = await whileHolding(gate, result, { label: tag,
+        first: bind(tech).replace(/; commit;$/, `; ${gate.holdCall(tag)}; commit; /* ${tag} */`) },
+        () => result(replaceSql(tech.user, body([{ weekday: 2, starts_at: '09:00', ends_at: '12:00' }]), 0)));
       assert.equal(written.error, undefined, written.output); checks += 1;
-      assert.ok(Date.now() - started < 1200, 'availability write must not wait behind the admin bind'); checks += 1;
-      const parkedResult = await parked;
+      checks += 1;   // whileHolding: the write returned while the admin bind still held its locks
       assert.equal(parkedResult.error, undefined, parkedResult.output); checks += 1;
     }
     // (b) availability write parked behind its schedule advisory lock while holding FOR SHARE on expert + account: the admin bind is not blocked.
     {
       const tech = await seedTechnician();
       const tag = tagFor('availability_first');
-      const holder = result(lockSql(`care:technician-availability-schedule:${tech.expert}`, 1.5) + `; select '${tag}_holder'`);
-      await waitForQuery(`${tag}_holder`);
-      await new Promise(resolve => setTimeout(resolve, 200));
-      const write = writeWith(tech, randomUUID(), tag);
-      await waitingOnLock(tag);
-      const started = Date.now();
-      const bound = await result(bind(tech));
+      const holder = result(lockSql(`care:technician-availability-schedule:${tech.expert}`, `${tag}_holder`) + `; select '${tag}_holder'`);
+      let write, bound;
+      try {
+        await gate.waitFor(gate.holding(`${tag}_holder`), `${tag} holder holding`);
+        write = writeWith(tech, randomUUID(), tag);
+        await waitingOn(`${tag} */`, `${tag}_holder`);
+        bound = await result(bind(tech));
+        assert.ok(await gate.isHolding(`${tag}_holder`), 'admin bind returned while the availability write was still parked'); checks += 1;
+      } finally {
+        await gate.release(`${tag}_holder`);
+      }
       assert.equal(bound.error, undefined, bound.output); checks += 1;
-      assert.ok(Date.now() - started < 1200, 'admin bind must not wait behind the availability write'); checks += 1;
       const [heldResult, writeResult] = await Promise.all([holder, write]);
       assert.equal(heldResult.error, undefined, heldResult.output); checks += 1;
       assert.equal(writeResult.error, undefined, writeResult.output); checks += 1;
       assert.ok(!/deadlock/i.test(`${bound.output}${writeResult.output}`)); checks += 1;
     }
   }
+  gate.teardown();
 
   // ---- Forward-only, on a scratch database that already holds data written under #76. -------------------
   const base = new URL(process.env.GARAGE_CARE_TEST_DATABASE_URL);

@@ -1,19 +1,26 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {tomorrowAt,publishAvailability} from './availability-fixture.mjs';
 import {readFileSync} from 'node:fs';
+import {lockGate, track, HOLD_SECONDS, WAIT_MS, STATEMENT_TIMEOUT} from './lock-test-gate.mjs';
 
 // Canonical lock order for care_journey_command (and its peers):
 //   advisory(scope:key) -> vehicle FOR UPDATE -> care_requests FOR UPDATE -> care_journeys FOR UPDATE
 //   -> quote/expert rows -> (confirm only) expert-capacity advisory lock.
-// Two real psql sessions race on one journey. The session that goes FIRST sleeps right after it took its
-// journey row lock (a GUC-driven pg_sleep injected into the function under test, nothing else changed); the
-// SECOND starts once the first is observed inside pg_sleep and is observed waiting on a lock. A pre-fix
+// Two real psql sessions race on one journey. The session that goes FIRST holds right after it took its
+// journey row lock (a GUC-driven lock_test.hold() injected into the function under test, nothing else changed);
+// the SECOND starts once the first is observed holding, and the first is released only after pg_blocking_pids()
+// shows the second blocked BY THE FIRST. No fixed sleep decides an outcome: every hold ends on an explicit
+// release from the test, or fails loudly with LOCK_TEST_HOLD_TIMEOUT after HOLD_SECONDS (bounded). A pre-fix
 // negative control re-installs the original 20261003064126 body (same injection) and must deadlock exactly where
 // an admin start/complete/cancel is first and succeeds; the candidate must never raise 40P01 and must
 // match the outcome of running the same two commands serially in the same order.
-const SLEEP_GUC = 'skycar.lock_test_sleep';
-const SLEEP_SECONDS = '1.5';
-const JOURNEY_LOCK = /^([ \t]*)select \* into journey from public\.care_journeys where id=p_id for update;$/m;
+const SLEEP_GUC = 'skycar.lock_test_sleep';   // holds at most this many seconds; empty = no hold
+const TAG_GUC = 'skycar.lock_test_tag';       // which release row ends the hold
+// The hold itself (lock_test.hold), its bounds and the pg_blocking_pids barriers live in ./lock-test-gate.mjs.
+// The journey read, with or without FOR UPDATE: whether the row lock is really held is proven at run time
+// (section 3 probes blocked by the holder's pid), not by matching the text.
+const JOURNEY_LOCK = /^([ \t]*)select \* into journey from public\.care_journeys where id=p_id( for update)?;$/m;
 const SIGNATURES = {
  journey: 'public.care_journey_command(text,uuid,uuid,uuid,uuid,jsonb)',
  techWork: 'public.care_technician_work_command(uuid,uuid,text,uuid,jsonb)',
@@ -22,9 +29,9 @@ const SIGNATURES = {
 const EVIDENCE = [{slot: 1, mime_type: 'image/jpeg', size_bytes: 256, sha256: 'c'.repeat(64)}];
 
 function inject(definition) {
- assert.equal(definition.match(new RegExp(JOURNEY_LOCK.source, 'gm'))?.length, 1, 'exactly one journey row lock expected');
+ assert.equal(definition.match(new RegExp(JOURNEY_LOCK.source, 'gm'))?.length, 1, 'exactly one journey read expected');
  return definition.replace(JOURNEY_LOCK, (line, indent) =>
-  `${line}\n${indent}perform pg_sleep(coalesce(nullif(current_setting('${SLEEP_GUC}',true),''),'0')::numeric);`);
+  `${line}\n${indent}perform lock_test.hold(current_setting('${TAG_GUC}',true), coalesce(nullif(current_setting('${SLEEP_GUC}',true),''),'0')::numeric);`);
 }
 
 function preFixDefinition() {
@@ -47,14 +54,10 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
  const originals = Object.fromEntries(Object.entries(SIGNATURES).map(([name, signature]) =>
   [name, sql(`select pg_get_functiondef(${quote(signature)}::regprocedure)`)]));
  const priorDefinition = preFixDefinition();
- const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
- const waitFor = async (predicate, what) => {
-  for (let attempt = 0; attempt < 400; attempt++) {
-   if (sql(predicate) !== '0') return;
-   await wait(20);
-  }
-  throw new Error(`Lock-order barrier not observed: ${what}`);
- };
+ // Barriers (./lock-test-gate.mjs): holding = the holder's own signal after its locks; blockedBy = pg_blocking_pids.
+ const gate = lockGate({exec: sql, quote});
+ const {waitFor, holding, blockedBy, blockedByPid, release} = gate;
+ gate.setup();
  const installInjected = journeyDefinition => {
   sql(inject(journeyDefinition));
   sql(inject(originals.techWork));
@@ -70,8 +73,8 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
   const future = ['booking_requested', 'quotes_ready'].includes(state);
   const requestFulfilment = {scheduled: 'scheduled', in_progress: 'in_progress', completed: 'completed'}[state] ?? null;
   const quoteStatus = state === 'quotes_ready' ? 'issued' : 'selected';
-  const startsAt = future ? "clock_timestamp()+interval '1 day'" : "clock_timestamp()-interval '1 hour'";
-  const endsAt = future ? "clock_timestamp()+interval '1 day 1 hour'" : "clock_timestamp()+interval '1 hour'";
+  const startsAt = future ? tomorrowAt(10) : "clock_timestamp()-interval '1 hour'";
+  const endsAt = future ? tomorrowAt(11) : "clock_timestamp()+interval '1 hour'";
   const expiresAt = future ? "clock_timestamp()+interval '1 hour'" : "clock_timestamp()-interval '2 hours'";
   const insertState = state === 'completed' ? 'in_progress' : state;
   const hasExpert = state !== 'quotes_ready';
@@ -93,6 +96,8 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
    ${hasExpert ? `update public.care_journeys set selected_quote_id=${quote(f.quoteId)} where id=${quote(f.id)};` : ''}
    ${state === 'quotes_ready' ? `update public.care_journeys set state='quotes_ready' where id=${quote(f.id)};` : ''}
    ${state === 'completed' ? `update public.care_journeys set state='completed' where id=${quote(f.id)};` : ''}`);
+  // 20261115090000: the linked technician publishes availability covering the fixture slot.
+  sql(publishAvailability(quote, f.tech));
   return f;
  }
  function snapshot(f) {
@@ -105,7 +110,7 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
    from public.care_journeys j join public.care_requests r on r.id=j.id where j.id=${quote(f.id)}`);
  }
  const service = (label, body, sleepSeconds) =>
-  `begin;/* ${label} */set local statement_timeout='20s';set local role service_role;${sleepSeconds ? `set local ${SLEEP_GUC}='${sleepSeconds}';` : ''}${body};commit;`;
+  `begin;/* ${label} */set local statement_timeout='${STATEMENT_TIMEOUT}';set local role service_role;${sleepSeconds ? `set local ${SLEEP_GUC}='${sleepSeconds}';set local ${TAG_GUC}='${label}';` : ''}${body};commit;`;
  const commands = {
   admin: (action, payload = {}) => (f, key, label, sleepSeconds) => service(label,
    `select public.care_journey_command(${quote(action)},${quote(f.id)}::uuid,${quote(f.admin)}::uuid,null,${quote(key)}::uuid,${quote(JSON.stringify(payload))}::jsonb)`, sleepSeconds),
@@ -139,17 +144,20 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
   ['admin start vs customer completion review (completed)', 'completed', start, commands.review],
   ['admin complete vs customer completion review (completed)', 'completed', complete, commands.review],
  ];
- const runSession = (builder, f, label) => result(builder(f, randomUUID(), label, label.startsWith('first_') ? SLEEP_SECONDS : null));
+ const runSession = (builder, f, label) => result(builder(f, randomUUID(), label, label.startsWith('first_') ? HOLD_SECONDS : null));
  async function racePair([name, state, admin, other], adminFirst) {
   const f = fixture(state), tag = `${name.replace(/[^a-z]+/gi, '_')}_${adminFirst}_${f.id}`;
   const [firstBuilder, secondBuilder] = adminFirst ? [admin, other] : [other, admin];
   const first = runSession(firstBuilder, f, `first_${tag}`);
+  const firstEnded = track(first);
   let second;
   try {
-   await waitFor(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event='PgSleep' and query like ${quote('%first_' + tag + '%')}`, `${name} first sleeping`);
+   await waitFor(holding(`first_${tag}`), `${name} first holding`, WAIT_MS, firstEnded);
    second = runSession(secondBuilder, f, `second_${tag}`);
-   await waitFor(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event_type='Lock' and query like ${quote('%second_' + tag + '%')}`, `${name} second waiting`);
-  } catch (error) { await first; await second; throw error; }
+   const secondEnded = track(second);
+   await waitFor(blockedBy(`second_${tag}`, `first_${tag}`), `${name} second blocked by first`, WAIT_MS, () => firstEnded() || secondEnded());
+   release(`first_${tag}`);
+  } catch (error) { release(`first_${tag}`); await first; await second; throw error; }
   const outcomes = [classify(await first), classify(await second)];
   return {name, state, adminFirst, outcomes, snapshot: snapshot(f)};
  }
@@ -207,30 +215,44 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
   ]) {
    const f = fixture(state), tag = `holds_${label.replace(/\W+/g, '_')}_${f.id}`;
    const session = runSession(builder, f, `first_${tag}`);
-   await waitFor(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event='PgSleep' and query like ${quote('%first_' + tag + '%')}`, `${label} sleeping`);
-   for (const [table, column, id] of [['vehicles', 'id', f.vehicle], ['care_requests', 'id', f.id], ['care_journeys', 'id', f.id]]) {
-    const probe = await result(`begin; select 1 from public.${table} where ${column}=${quote(id)} for update nowait; rollback;`);
-    assert.ok(probe.output?.includes('could not obtain lock'), `${label} must hold the ${table} row lock while sleeping`);
-   }
+   // One probe session per row, each FOR UPDATE (blocking, not NOWAIT). The row is held by the command only if the
+   // server reports the probe blocked by the holder's own backend pid, read after the holder signalled that its
+   // locks are taken. No probe can race the hold: the hold ends only on release, after all three are proven.
+   const probes = [];
+   try {
+    await waitFor(holding(`first_${tag}`), `${label} holding`);
+    const pid = await gate.holderPid(`first_${tag}`);
+    assert.match(pid, /^\d+$/, `${label}: holder backend pid`);
+    for (const [table, column, id] of [['vehicles', 'id', f.vehicle], ['care_requests', 'id', f.id], ['care_journeys', 'id', f.id]]) {
+     const probeLabel = `probe_${table}_${tag}`;
+     probes.push(result(`begin;/* ${probeLabel} */set local statement_timeout='${STATEMENT_TIMEOUT}';select 1 from public.${table} where ${column}=${quote(id)} for update;rollback;`));
+     try {
+      await waitFor(blockedByPid(probeLabel, pid), `${label} must hold the ${table} row lock (probe blocked by holder pid ${pid})`);
+     } catch (error) {
+      throw new assert.AssertionError({message: `${label} must hold the ${table} row lock while holding: ${error.message}`});
+     }
+    }
+   } finally { release(`first_${tag}`); }
    assert.equal(classify(await session), 'ok', label);
+   for (const probe of probes) assert.equal((await probe).error, undefined, `${label}: probe finishes once the holder commits`);
   }
   console.log(JSON.stringify({test: 'journey lock order', result: 'PASS', holdsVehicleRequestJourney: true}));
 
   // ---- 4. authority/source re-read after the lock wait, replay contract and archived semantics -----
   const holder = (f, body, tag) => {
-   const pending = result(`begin;/* holder_${tag} */${body}; select pg_sleep(${SLEEP_SECONDS}); commit;`);
+   const pending = result(`begin;/* holder_${tag} */${body}; select lock_test.hold(${quote('holder_' + tag)}, ${HOLD_SECONDS}); commit;`);
    return pending;
   };
   const holdVehicle = (f, tag) => holder(f, `select 1 from public.vehicles where id=${quote(f.vehicle)} for update`, tag);
-  const waitHolder = tag => waitFor(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event='PgSleep' and query like ${quote('%holder_' + tag + '%')}`, `holder ${tag}`);
-  const waitWaiting = tag => waitFor(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event_type='Lock' and query like ${quote('%waiter_' + tag + '%')}`, `waiter ${tag}`);
+  const waitHolder = tag => waitFor(holding(`holder_${tag}`), `holder ${tag}`);
+  const waitWaiting = tag => waitFor(blockedBy(`waiter_${tag}`, `holder_${tag}`), `waiter ${tag} blocked by holder`);
   async function underHolder(f, tag, builder, whileWaiting = () => {}) {
    const held = holdVehicle(f, tag);
    await waitHolder(tag);
    const key = randomUUID();
    const waiter = result(builder(f, key, `waiter_${tag}`, null));
    await waitWaiting(tag);
-   whileWaiting();
+   try { whileWaiting(); } finally { release(`holder_${tag}`); }
    const [heldResult, outcome] = [await held, await waiter];
    assert.equal(heldResult.error, undefined);
    return {key, outcome, code: classify(outcome)};
@@ -277,6 +299,7 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
    await waitHolder(tag);
    const waiter = result(builder(g, randomUUID(), `waiter_${tag}`, null));
    await waitWaiting(tag);
+   release(`holder_${tag}`);
    assert.equal((await held).error, undefined);
    assert.equal(classify(await waiter), expected, `archived while queued: ${label}`);
   }
@@ -314,6 +337,7 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
   summary.preFixDeadlocks = deadlocks;
  } finally {
   restore();
+  gate.teardown();
  }
  // The candidate definition is back and unchanged.
  assert.equal(sql(`select pg_get_functiondef(${quote(SIGNATURES.journey)}::regprocedure)`), originals.journey);
