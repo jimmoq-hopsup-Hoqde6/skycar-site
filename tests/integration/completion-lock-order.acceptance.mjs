@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {lockGate, HOLD_SECONDS, STATEMENT_TIMEOUT} from './lock-test-gate.mjs';
 
 export async function verifyCompletionLockOrder({sql,quote,result}) {
  const signature='public.care_customer_completion_review_command(uuid,uuid,uuid,text,uuid,jsonb)';
@@ -11,13 +12,11 @@ export async function verifyCompletionLockOrder({sql,quote,result}) {
  assert.ok(original.includes(advisory));assert.ok(originalJourney.includes(journeyAdvisory));
  const marker='  -- The advisory/row locks may have waited behind an authority change.';
  assert.ok(original.includes(marker));
- const waitFor=async predicate=>{
-  for(let attempt=0;attempt<200;attempt++){
-   if(sql(predicate)!=='0')return;
-   await new Promise(resolve=>setTimeout(resolve,20));
-  }
-  throw new Error('Lock-order barrier was not observed');
- };
+ // The first session holds inside lock_test.hold (tag from skycar.lock_test_tag; other sessions have none
+ // and pass straight through) until the second is proven blocked BY it (pg_blocking_pids), then it is released.
+ const gate=lockGate({exec:sql,quote});
+ const hold=`  perform lock_test.hold(current_setting('skycar.lock_test_tag', true), ${HOLD_SECONDS});`;
+ gate.setup();
  try {
   for(const inverted of [false,true]) for(const reviewFirst of [false,true]) {
    const actor=randomUUID(),id=randomUUID(),vehicle=randomUUID(),key=randomUUID();
@@ -31,14 +30,14 @@ export async function verifyCompletionLockOrder({sql,quote,result}) {
    let definition=original;
    if(inverted){
     // Negative control restores the original vehicle/request-before-key order.
-    definition=definition.replace(advisory,'').replace(marker,(reviewFirst?'  perform pg_sleep(3);\n':'')+advisory+'\n'+marker);
+    definition=definition.replace(advisory,'').replace(marker,(reviewFirst?hold+'\n':'')+advisory+'\n'+marker);
    }else if(reviewFirst){
-    definition=definition.replace(advisory,advisory+'\n  perform pg_sleep(3);');
+    definition=definition.replace(advisory,advisory+'\n'+hold);
    }
    sql(definition);
-   sql(reviewFirst?originalJourney:originalJourney.replaceAll(journeyAdvisory,journeyAdvisory+'\n  perform pg_sleep(3);'));
+   sql(reviewFirst?originalJourney:originalJourney.replaceAll(journeyAdvisory,journeyAdvisory+'\n'+hold));
    const tag=`lock_order_${inverted}_${reviewFirst}_${id}`;
-   const service=(body,label)=>`begin;/* ${label}_${tag} */set local statement_timeout='12s';set local role service_role;${body};commit;`;
+   const service=(body,label)=>`begin;/* ${label}_${tag} */set local statement_timeout='${STATEMENT_TIMEOUT}';${label==='first'?`set local skycar.lock_test_tag=${quote('first_'+tag)};`:''}set local role service_role;${body};commit;`;
    const review=label=>service(`select public.care_customer_completion_review_command(${quote(actor)}::uuid,null,${quote(key)}::uuid,'confirm_completion',${quote(id)}::uuid,'{}'::jsonb)`,label);
    // Completed journey is intentional: select_quote acquires its real source
    // locks then rejects VALIDATION_FAILED, without a synthetic quote mutation.
@@ -46,10 +45,12 @@ export async function verifyCompletionLockOrder({sql,quote,result}) {
    const first=result(reviewFirst?review('first'):select('first'));
    let second;
    try {
-    await waitFor(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event='PgSleep' and query like ${quote('%first_'+tag+'%')}`);
+    await gate.waitFor(gate.holding('first_'+tag),`first holding ${tag}`);
     second=result(reviewFirst?select('second'):review('second'));
-    await waitFor(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event_type='Lock' and query like ${quote('%second_'+tag+'%')}`);
+    // Inverted: the second already holds its first lock and waits on the holder, so the release makes the cycle certain.
+    await gate.waitFor(gate.blockedBy('second_'+tag,'first_'+tag),`second blocked by first ${tag} (pg_blocking_pids)`);
    } finally {
+    await gate.release('first_'+tag);
     const firstOutcome=await first;
     assert.ok(second,'second real RPC must start');
     const secondOutcome=await second;
@@ -68,7 +69,7 @@ export async function verifyCompletionLockOrder({sql,quote,result}) {
    }
   }
  } finally {
-  sql(original);sql(originalJourney);
+  sql(original);sql(originalJourney);gate.teardown();
  }
  console.log('PASS: both intermediate lock acquisition orders and both inverted-lock negative controls');
 }

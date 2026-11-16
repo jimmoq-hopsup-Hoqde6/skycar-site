@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {lockGate, HOLD_SECONDS, STATEMENT_TIMEOUT} from './lock-test-gate.mjs';
 
 export async function verifyCustomerTechnicianRace({sql,quote,result}) {
  const reviewSig='public.care_customer_completion_review_command(uuid,uuid,uuid,text,uuid,jsonb)';
@@ -10,13 +11,10 @@ export async function verifyCustomerTechnicianRace({sql,quote,result}) {
  const techLock=' select * into journey from public.care_journeys where id=p_id for update;';
  assert.ok(originalReview.includes(reviewLock));assert.ok(originalTech.includes(techLock));
  const evidence=[{slot:1,mime_type:'image/jpeg',size_bytes:256,sha256:'b'.repeat(64)}];
- const waitFor=async predicate=>{
-  for(let attempt=0;attempt<200;attempt++){
-   if(sql(predicate)!=='0')return;
-   await new Promise(resolve=>setTimeout(resolve,20));
-  }
-  throw new Error('Customer/technician lock barrier not observed');
- };
+ // First session holds in lock_test.hold (tagged via skycar.lock_test_tag) until the second is blocked by it.
+ const gate=lockGate({exec:sql,quote});
+ const hold=`perform lock_test.hold(current_setting('skycar.lock_test_tag', true), ${HOLD_SECONDS});`;
+ gate.setup();
  try {
   for(const techFirst of [false,true]){
    const customer=randomUUID(),tech=randomUUID(),expert=randomUUID(),id=randomUUID(),vehicle=randomUUID(),qid=randomUUID(),techKey=randomUUID(),reviewKey=randomUUID();
@@ -34,18 +32,19 @@ export async function verifyCustomerTechnicianRace({sql,quote,result}) {
     insert into public.care_reviewed_quotes(id,journey_id,expert_id,expert_name,expert_description,scope_summary,total_price_cents,status,expires_at,starts_at,ends_at)
      values(${quote(qid)},${quote(id)},${quote(expert)},'Race technician','Synthetic isolated expert','Synthetic repair',10000,'selected',clock_timestamp()-interval '2 hours',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '1 hour');
     update public.care_journeys set selected_quote_id=${quote(qid)} where id=${quote(id)};`);
-   sql(techFirst?originalReview:originalReview.replace(reviewLock,'  perform pg_sleep(3);\n'+reviewLock));
-   sql(techFirst?originalTech.replace(techLock,' perform pg_sleep(3);\n'+techLock):originalTech);
+   sql(techFirst?originalReview:originalReview.replace(reviewLock,'  '+hold+'\n'+reviewLock));
+   sql(techFirst?originalTech.replace(techLock,' '+hold+'\n'+techLock):originalTech);
    const tag=`customer_technician_${techFirst}_${id}`;
-   const service=(body,label)=>`begin;/* ${label}_${tag} */set local statement_timeout='12s';set local role service_role;${body};commit;`;
+   const service=(body,label)=>`begin;/* ${label}_${tag} */set local statement_timeout='${STATEMENT_TIMEOUT}';${label==='first'?`set local skycar.lock_test_tag=${quote('first_'+tag)};`:''}set local role service_role;${body};commit;`;
    const review=label=>service(`select public.care_customer_completion_review_command(${quote(customer)}::uuid,null,${quote(reviewKey)}::uuid,'confirm_completion',${quote(id)}::uuid,'{}'::jsonb)`,label);
    const complete=label=>service(`select public.care_technician_work_command(${quote(tech)}::uuid,${quote(techKey)}::uuid,'complete',${quote(id)}::uuid,${quote(JSON.stringify({evidence}))}::jsonb)`,label);
    const first=result(techFirst?complete('first'):review('first'));let second;
    try {
-    await waitFor(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event='PgSleep' and query like ${quote('%first_'+tag+'%')}`);
+    await gate.waitFor(gate.holding('first_'+tag),`first holding ${tag}`);
     second=result(techFirst?review('second'):complete('second'));
-    await waitFor(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event_type='Lock' and query like ${quote('%second_'+tag+'%')}`);
+    await gate.waitFor(gate.blockedBy('second_'+tag,'first_'+tag),`second blocked by first ${tag} (pg_blocking_pids)`);
    } finally {
+    await gate.release('first_'+tag);
     const a=await first;assert.ok(second);const b=await second;
     if(techFirst){assert.equal(a.error,undefined);assert.equal(b.error,undefined);}
     else {assert.ok(a.output?.includes('INVALID_TRANSITION'));assert.equal(b.error,undefined);}
@@ -58,5 +57,5 @@ export async function verifyCustomerTechnicianRace({sql,quote,result}) {
     console.log(JSON.stringify({test:'same journey customer/technician distinct-key race',techFirst,result:'PASS'}));
    }
   }
- } finally {sql(originalReview);sql(originalTech);}
+ } finally {sql(originalReview);sql(originalTech);gate.teardown();}
 }

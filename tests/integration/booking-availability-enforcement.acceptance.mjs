@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { lockGate, heldRace } from './lock-test-gate.mjs';
 import {randomUUID} from 'node:crypto';
 import {tomorrowAt, publishAvailability} from './availability-fixture.mjs';
 
@@ -131,13 +132,13 @@ export async function verifyBookingAvailabilityEnforcement({sql, quote, result})
 
   // ---- 6. Concurrency: confirm and replace serialise on the schedule advisory lock. -----------------------
   // (i) replace removing the slot holds its locks; confirm waits, then refuses (never books outside).
+  // The first holds its locks in lock_test.hold until the server reports the second blocked BY it (pg_blocking_pids);
+  // heldRace throws if that wait is never observed, so `waited` is proven, not sampled.
+  const gate = lockGate({exec: sql, quote});
+  gate.setup();
   const race = async (firstSql, secondSql, tag) => {
-    const first = result(`begin;/* ${tag} */set local role service_role;${firstSql};select pg_sleep(1.5);commit;`);
-    for (let i = 0; i < 200 && sql(`select count(*) from pg_stat_activity where wait_event='PgSleep' and query like ${quote(`%${tag}%`)}`) === '0'; i++) await new Promise(r => setTimeout(r, 20));
-    const second = result(secondSql);
-    let waited = false;
-    for (let i = 0; i < 60 && !waited; i++) { waited = sql(`select count(*) from pg_stat_activity where wait_event_type='Lock' and state='active' and pid<>pg_backend_pid() and query not like ${quote(`%${tag}%`)} and query like '%care_%'`) !== '0'; if (!waited) await new Promise(r => setTimeout(r, 20)); }
-    return {outcomes: await Promise.all([first, second]), waited};
+    const outcomes = await heldRace(gate, result, {label: tag, first: `begin;/* ${tag} */set local role service_role;${firstSql};${gate.holdCall(tag)};commit;`, second: secondSql});
+    return {outcomes, waited: true};
   };
   const classify = o => o.error ? (o.output.includes('deadlock') ? '40P01' : (o.output.match(/ERROR:\s+([A-Z_]+)/) ?? [, 'OTHER'])[1]) : 'ok';
   const c = vehicleFor();
@@ -160,6 +161,7 @@ export async function verifyBookingAvailabilityEnforcement({sql, quote, result})
   equal(raced.outcomes.map(classify), ['ok', 'ok']);
   equal(raced.waited, true, 'replace waited on the confirm-held schedule lock');
   equal(state(c), 'scheduled');
+  gate.teardown();
   // ---- 7. Catalog (last, so mutation checks prove the behaviour above, not just the source): helper is service_role-only, SECURITY INVOKER, empty search_path, volatile. ------------
   const helper = 'public.care_assert_expert_slot_available(uuid,timestamptz,timestamptz)';
   equal(sql(`select prosecdef::text||'|'||provolatile::text||'|'||coalesce(proconfig=array['search_path=""'],false)::text from pg_proc where oid=${quote(helper)}::regprocedure`), 'false|v|true');

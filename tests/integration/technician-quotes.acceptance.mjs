@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {lockGate, heldRace} from './lock-test-gate.mjs';
 import {randomUUID} from 'node:crypto';
 import {tomorrowAt,publishAvailability} from './availability-fixture.mjs';
 export async function verifyTechnicianQuotes({sql,auth,quote,result,waitForQuery}){
@@ -63,13 +64,15 @@ export async function verifyTechnicianQuotes({sql,auth,quote,result,waitForQuery
  // Real PostgreSQL only: race two exact keys, then technician quote against customer selection.
  if(result&&waitForQuery){
   const concurrentKey=randomUUID();const body=command(techA,'quote',accountJob,{...payload,total_price_cents:54000},concurrentKey);
-  const tag='technician_quote_exact_replay';const firstCall=result(body.replace(';commit;',`;select pg_sleep(1);/* ${tag} */commit;`));await waitForQuery(tag);const secondCall=result(body);const [one,two]=await Promise.all([firstCall,secondCall]);equal(one.error,undefined);equal(two.error,undefined);equal(JSON.parse(two.value.split('\n')[0]).replayed,true);
+  // Ordered races: the first holds its locks in lock_test.hold until the second is blocked by it (pg_blocking_pids).
+  const gate=lockGate({exec:sql,quote});gate.setup();
+  const tag='technician_quote_exact_replay';const [one,two]=await heldRace(gate,result,{label:tag,first:body.replace(';commit;',`;${gate.holdCall(tag)};/* ${tag} */commit;`),second:body});equal(one.error,undefined);equal(two.error,undefined);equal(JSON.parse(two.value.split('\n')[0]).replayed,true);
   equal(await run(`select count(*) from public.care_technician_commands where actor_id=${quote(techA)}::uuid and idempotency_key=${quote(concurrentKey)}::uuid`),'1');
   const currentQuote=await run(`select id from public.care_reviewed_quotes where journey_id=${quote(accountJob)}::uuid and status='issued'`);
   const selectionTag='technician_customer_selection_blocks_new_quote';
   const selection=journey('select_quote',accountJob,{quote_id:currentQuote,address:'2 Test Street'},customer);
-  const selected=result(selection.replace(';commit;',`;select pg_sleep(1);/* ${selectionTag} */commit;`));await waitForQuery(selectionTag);
-  const lateQuote=result(command(techA,'quote',accountJob,{...payload,total_price_cents:55000}));const [selectedResult,lateResult]=await Promise.all([selected,lateQuote]);
+  const [selectedResult,lateResult]=await heldRace(gate,result,{label:selectionTag,first:selection.replace(';commit;',`;${gate.holdCall(selectionTag)};/* ${selectionTag} */commit;`),second:command(techA,'quote',accountJob,{...payload,total_price_cents:55000})});
+  gate.teardown();
   equal(selectedResult.error,undefined);assert.ok(lateResult.output?.includes('INVALID_TRANSITION'));checks++;
   equal(await status(currentQuote),'selected');equal(await run(`select count(*) from public.care_reviewed_quotes where journey_id=${quote(accountJob)}::uuid and total_price_cents=55000`),'0');
   await fail(journey('confirm',accountJob,{availability_confirmed:true}),'SLOT_UNAVAILABLE');

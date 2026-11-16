@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { lockGate, heldRace } from './lock-test-gate.mjs';
 import { randomUUID } from 'node:crypto';
 
 // Called by the combined runner AFTER every migration and the existing journey
@@ -171,10 +172,11 @@ export async function verifyCareOffers({ sql, auth, quote, garageCreate, carePay
   const duplicateKey = randomUUID();
   const duplicateTag = 'offers_duplicate_publication_holds_idempotency_lock';
   const duplicateCommand = command({ key: duplicateKey, price: 52000 });
-  const firstDuplicate = result(service(`${duplicateCommand}; select pg_sleep(1); /* ${duplicateTag} */`));
-  await waitForQuery(duplicateTag);
-  const secondDuplicate = result(service(duplicateCommand));
-  const duplicateResults = await Promise.all([firstDuplicate, secondDuplicate]);
+  // Ordered races: the first holds its locks in lock_test.hold until the second is blocked by it (pg_blocking_pids).
+  const gate = lockGate({ exec: sql, quote });
+  gate.setup();
+  const duplicateResults = await heldRace(gate, result, { label: duplicateTag,
+    first: service(`${duplicateCommand}; ${gate.holdCall(duplicateTag)}; /* ${duplicateTag} */`), second: service(duplicateCommand) });
   for (const outcome of duplicateResults) equal(outcome.error, undefined, outcome.output);
   const duplicateEvidence = json(`select jsonb_build_object(
     'command_count',(select count(*) from public.care_offer_commands where idempotency_key=${quote(duplicateKey)}::uuid),
@@ -191,10 +193,9 @@ export async function verifyCareOffers({ sql, auth, quote, garageCreate, carePay
   // Different keys remain distinct commands and preserve serialized
   // supersession. This is not capacity reservation or double-booking protection.
   const tag = 'offers_publication_holds_shared_request';
-  const firstPublication = result(service(`${command({ price: 53000 })}; select pg_sleep(1); /* ${tag} */`));
-  await waitForQuery(tag);
-  const secondPublication = result(service(command({ price: 54000 })));
-  const results = await Promise.all([firstPublication, secondPublication]);
+  const results = await heldRace(gate, result, { label: tag,
+    first: service(`${command({ price: 53000 })}; ${gate.holdCall(tag)}; /* ${tag} */`), second: service(command({ price: 54000 })) });
+  gate.teardown();
   for (const outcome of results) equal(outcome.error, undefined, outcome.output);
   equal(sql(`select count(*) from public.care_offers where request_id=${quote(requestId)}::uuid and technician_id=${quote(technician)}::uuid and status='issued'`), '1');
   equal(get(owner).length, 1, 'concurrent supersession leaves one issued offer');
