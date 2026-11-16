@@ -46,8 +46,11 @@ python scripts/autonomy/bounded_coding_pilot.py \
   --project-budget-confirmation /private/path/project-budget.json
 ```
 
-The returned request fingerprint binds the effective API request, source, task,
-model and complete receipt. Have that exact request approved through the existing
+The returned request fingerprint binds the effective API request, the exact
+requested budget in cents, source, task, model and complete receipt. Changing
+the requested budget invalidates the previous authorization even when the same
+receipt remains valid. Project-mode fingerprints issued before this correction
+must be regenerated and approved again. Have that exact request approved through the existing
 owner process. Only then use `--execute`, a new output directory, and that exact
 `--request-fingerprint` while the same receipt is still fresh. Securely supply
 `OPENAI_API_KEY` to the controller's environment; never place it in a command,

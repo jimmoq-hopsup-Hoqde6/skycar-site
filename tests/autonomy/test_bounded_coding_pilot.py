@@ -299,8 +299,33 @@ class ProjectBudgetTests(unittest.TestCase):
         with patch.object(pilot, 'TASK', 'changed task'):
             self.assertNotEqual(pilot.fingerprint(r, receipt), token)
         expected = {'request': {k: v for k, v in r.items() if k != 'spend_control'},
+                    'requested_budget_cents': r['spend_control']['limit'],
                     'input': pilot.TASK, 'budget_mode': pilot.PROJECT_BUDGET_MODE, 'project_budget': receipt}
         self.assertEqual(token, hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest())
+
+    def test_project_fingerprint_binds_each_requested_budget_with_one_valid_receipt(self):
+        receipt = self.receipt(limit_cents=1)
+        fingerprints = []
+        for cents in (1, 100, 500):
+            request = self.request(cents)
+            self.validate(receipt, request)
+            fingerprints.append(pilot.fingerprint(request, receipt))
+        self.assertEqual(len(set(fingerprints)), 3)
+
+    def test_changed_project_budget_rejects_old_approval_before_output_or_api(self):
+        receipt = self.receipt(limit_cents=100)
+        original, changed = self.request(100), self.request(500)
+        self.validate(receipt, original)
+        self.validate(receipt, changed)
+        token = pilot.fingerprint(original, receipt)
+        client, sessions = fake_client(); client.project = 'proj_test'
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)/'out'
+            with self.assertRaises(pilot.PilotError):
+                pilot.execute(client, changed, out, token, project_budget=receipt)
+            self.assertFalse(out.exists())
+        self.assertEqual(sessions.mock_calls, [])
+        self.assertEqual(client.beta.agents.environments.mock_calls, [])
 
     def test_project_approval_is_mandatory_and_binds_receipt(self):
         r = self.request(); receipt = self.receipt()

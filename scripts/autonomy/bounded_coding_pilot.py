@@ -260,6 +260,7 @@ def fingerprint(request, project_budget=None):
     bound = {"request": request, "input": TASK}
     if project_budget is not None:
         bound = {"request": {k: v for k, v in request.items() if k != "spend_control"},
+                 "requested_budget_cents": request["spend_control"]["limit"],
                  "input": TASK, "budget_mode": PROJECT_BUDGET_MODE,
                  "project_budget": project_budget}
     encoded = json.dumps(bound, sort_keys=True).encode()
