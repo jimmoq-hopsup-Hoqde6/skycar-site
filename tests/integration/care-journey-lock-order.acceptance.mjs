@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {tomorrowAt,publishAvailability} from './availability-fixture.mjs';
 import {readFileSync} from 'node:fs';
-import {lockGate, HOLD_SECONDS, STATEMENT_TIMEOUT} from './lock-test-gate.mjs';
+import {lockGate, track, HOLD_SECONDS, WAIT_MS, STATEMENT_TIMEOUT} from './lock-test-gate.mjs';
 
 // Canonical lock order for care_journey_command (and its peers):
 //   advisory(scope:key) -> vehicle FOR UPDATE -> care_requests FOR UPDATE -> care_journeys FOR UPDATE
@@ -149,11 +149,13 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
   const f = fixture(state), tag = `${name.replace(/[^a-z]+/gi, '_')}_${adminFirst}_${f.id}`;
   const [firstBuilder, secondBuilder] = adminFirst ? [admin, other] : [other, admin];
   const first = runSession(firstBuilder, f, `first_${tag}`);
+  const firstEnded = track(first);
   let second;
   try {
-   await waitFor(holding(`first_${tag}`), `${name} first holding`);
+   await waitFor(holding(`first_${tag}`), `${name} first holding`, WAIT_MS, firstEnded);
    second = runSession(secondBuilder, f, `second_${tag}`);
-   await waitFor(blockedBy(`second_${tag}`, `first_${tag}`), `${name} second blocked by first`);
+   const secondEnded = track(second);
+   await waitFor(blockedBy(`second_${tag}`, `first_${tag}`), `${name} second blocked by first`, WAIT_MS, () => firstEnded() || secondEnded());
    release(`first_${tag}`);
   } catch (error) { release(`first_${tag}`); await first; await second; throw error; }
   const outcomes = [classify(await first), classify(await second)];

@@ -59,6 +59,15 @@ export function lockGate({exec, quote}) {
     where w.pid<>pg_backend_pid() and h.application_name='lock_test_holding' and ${holderMatch('h', holderLabel)}`,
   isHolding: async label => String(await exec(gate.holding(label))) !== '0',
   blockedByPid: (waiterLabel, pid) => `select count(*) from pg_stat_activity w where w.pid<>pg_backend_pid() and w.query like ${like(waiterLabel)} and ${Number(pid)} = any(pg_blocking_pids(w.pid))`,
+  // Diagnostic snapshot of every other client backend, attached to a barrier timeout.
+  activity: async () => {
+   try {
+    return 'pg_stat_activity at timeout:\n' + String(await exec(`select coalesce(string_agg(format('  pid=%s state=%s wait=%s/%s app=%s blockers=%s xact_age=%s q=%s',
+      pid, state, wait_event_type, wait_event, application_name, pg_blocking_pids(pid), date_trunc('second', clock_timestamp()-xact_start),
+      left(regexp_replace(query, '\\s+', ' ', 'g'), 160)), chr(10) order by pid), '  (none)')
+      from pg_stat_activity where backend_type='client backend' and pid<>pg_backend_pid()`));
+   } catch (error) { return `pg_stat_activity snapshot failed: ${error.message}`; }
+  },
   release: label => exec(`insert into lock_test.release(tag) values(${quote(label)}) on conflict do nothing`),
   // abort(): optional; returns an error message when waiting can no longer succeed (e.g. the holder already ended).
   waitFor: async (predicate, what, ms = WAIT_MS, abort = () => undefined) => {
@@ -67,7 +76,7 @@ export function lockGate({exec, quote}) {
     if (String(await exec(predicate)) !== '0') return;
     const aborted = abort();
     if (aborted) throw new Error(`Lock barrier cannot be reached: ${what}: ${aborted}`);
-    if (Date.now() > deadline) throw new Error(`Lock barrier not observed within ${ms} ms: ${what}`);
+    if (Date.now() > deadline) throw new Error(`Lock barrier not observed within ${ms} ms: ${what}\n${await gate.activity()}`);
     await sleep(20);
    }
   },
@@ -76,7 +85,7 @@ export function lockGate({exec, quote}) {
 }
 
 // Tracks a result() promise so a barrier can fail fast if that session ended (it can then never hold or block).
-const track = promise => {
+export const track = promise => {
  const state = { done: undefined };
  promise.then(value => { state.done = value ?? {}; }, error => { state.done = { error, output: String(error) }; });
  return () => {

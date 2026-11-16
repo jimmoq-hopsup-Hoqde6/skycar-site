@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {weekOf,tomorrowAt,publishAvailability} from './availability-fixture.mjs';
-import {lockGate, HOLD_SECONDS, STATEMENT_TIMEOUT} from './lock-test-gate.mjs';
+import {lockGate, track, HOLD_SECONDS, WAIT_MS, STATEMENT_TIMEOUT} from './lock-test-gate.mjs';
 
 // Cross-feature lock order on the integrated chain. care_journey_command takes
 //   advisory(scope:key) -> vehicle FOR UPDATE -> care_requests FOR UPDATE -> care_journeys FOR UPDATE
@@ -121,11 +121,13 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
  async function race(first, second, firstGuc, mode) {
   const f = fixture(), tag = `${randomUUID()}`, firstLabel = `first_${tag}`;
   const a = run(first, f, firstLabel, {[firstGuc]: String(HOLD_SECONDS), [TAG]: firstLabel});
+  const aEnded = track(a);
   let b, secondOutcome;
   try {
-   await waitFor(holding(firstLabel), 'first session holding its locks');
+   await waitFor(holding(firstLabel), 'first session holding its locks', WAIT_MS, aEnded);
    b = run(second, f, `second_${tag}`);
-   if (mode === 'contention') await waitFor(blockedBy(`second_${tag}`, firstLabel), 'second session blocked by the first (pg_blocking_pids)');
+   const bEnded = track(b);
+   if (mode === 'contention') await waitFor(blockedBy(`second_${tag}`, firstLabel), 'second session blocked by the first (pg_blocking_pids)', WAIT_MS, () => aEnded() || bEnded());
    else {
     secondOutcome = await b;
     assert.equal(sql(holding(firstLabel)), '1', 'the second session finished without waiting for the first');
