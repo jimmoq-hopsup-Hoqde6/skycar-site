@@ -1,0 +1,24 @@
+name: Skycar bounded pilot offline tests
+on:
+  pull_request:
+    paths:
+      - 'scripts/autonomy/**'
+      - 'tests/autonomy/**'
+      - '.github/workflows/skycar-bounded-pilot-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install pinned SDK for mocked HTTP contract tests
+        run: python3 -m pip install -r scripts/autonomy/requirements-pilot.txt
+      - name: Unit tests without credentials or API calls
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tests/autonomy -p 'test_*.py' -v
