@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {tomorrowAt,publishAvailability} from './availability-fixture.mjs';
+import {lockGate} from './lock-test-gate.mjs';
 
 export async function verifyCustomerCompletionReview({sql,auth,quote,result,waitForQuery}){
  let checks=0;const run=s=>Promise.resolve().then(()=>sql(s));const json=async s=>JSON.parse((await run(s)).split('\n')[0]);
@@ -112,20 +113,22 @@ export async function verifyCustomerCompletionReview({sql,auth,quote,result,wait
 
  if(result&&waitForQuery){
   const race=await fixture(),tag='customer_completion_review_race';
-  const confirm=command(race.id,customer,null,'confirm_completion',{}).replace(';commit;',`;select pg_sleep(1);/* ${tag} */commit;`);
-  const first=result(confirm);await waitForQuery(tag);
-  const second=result(command(race.id,customer,null,'report_completion_issue',{details:'A concurrent private issue report.'}));
+  // Holders keep their locks until released (lock_test.hold, ./lock-test-gate.mjs); waits are proven with
+  // pg_blocking_pids against the holder, never by a sleep window.
+  const gate=lockGate({exec:run,quote});await gate.setup();
+  const confirm=command(race.id,customer,null,'confirm_completion',{}).replace(';commit;',`;${gate.holdCall(tag)};/* ${tag} */commit;`);
+  const first=result(confirm);
+  let second;
+  try{
+   await gate.waitFor(gate.holding(tag),'confirming review holding its locks');
+   second=result(command(race.id,customer,null,'report_completion_issue',{details:'A concurrent private issue report.'}).replace('begin;',`begin;/* second_${tag} */`));
+   await gate.waitFor(gate.blockedBy(`second_${tag}`,tag),'issue report blocked by the confirming review (pg_blocking_pids)');
+  }finally{await gate.release(tag);}
   const [a,b]=await Promise.all([first,second]);equal(a.error,undefined);assert.ok(b.output?.includes('INVALID_TRANSITION'));checks++;
   equal(await run(`select completion_review_state from public.care_journeys where id=${quote(race.id)}`),'confirmed');
   equal(await run(`select count(*) from public.care_journey_events where journey_id=${quote(race.id)} and type in ('completion_confirmed','completion_issue_reported')`),'1');
 
-  const waitAtSleep=async tag=>{
-   for(let attempt=0;attempt<100;attempt++){
-    if(await run(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event='PgSleep' and query like ${quote('%'+tag+'%')}`)!=='0')return;
-    await new Promise(resolve=>setTimeout(resolve,20));
-   }
-   throw new Error('First transaction did not reach its lock-holding barrier');
-  };
+
   // Two real connections, both first-writer orders, one vehicle and shared key
   // across the selection and completion-review RPCs. The loser must conflict,
   // never deadlock, duplicate a mutation or silently reuse another action.
@@ -145,9 +148,14 @@ export async function verifyCustomerCompletionReview({sql,auth,quote,result,wait
    const reviewCommand=command(review.id,customer,null,'confirm_completion',{},sharedKey);
    const selectCommand=service(`select public.care_journey_command('select_quote',${quote(selection.id)}::uuid,${quote(customer)}::uuid,null,${quote(sharedKey)}::uuid,${quote(JSON.stringify({quote_id:quoteId,address:'1 Synthetic Street'}))}::jsonb)`);
    const tag=`review_select_${reviewFirst?'review':'select'}_first`;
-   const firstStatement=(reviewFirst?reviewCommand:selectCommand).replace(';commit;',`;select pg_sleep(1);/* ${tag} */commit;`);
-   const firstResult=result(firstStatement);await waitAtSleep(tag);
-   const secondResult=result(reviewFirst?selectCommand:reviewCommand);
+   const firstStatement=(reviewFirst?reviewCommand:selectCommand).replace(';commit;',`;${gate.holdCall(tag)};/* ${tag} */commit;`);
+   const firstResult=result(firstStatement);
+   let secondResult;
+   try{
+    await gate.waitFor(gate.holding(tag),`cross-RPC first writer ${tag} holding`);
+    secondResult=result((reviewFirst?selectCommand:reviewCommand).replace('begin;',`begin;/* second_${tag} */`));
+    await gate.waitFor(gate.blockedBy(`second_${tag}`,tag),`cross-RPC second writer blocked by the first ${tag} (pg_blocking_pids)`);
+   }finally{await gate.release(tag);}
    const [firstOutcome,secondOutcome]=await Promise.all([firstResult,secondResult]);
    equal(firstOutcome.error,undefined,'first cross-RPC command succeeds');
    assert.ok(secondOutcome.output?.includes('IDEMPOTENCY_CONFLICT'),'second cross-RPC command conflicts');checks++;
@@ -156,31 +164,29 @@ export async function verifyCustomerCompletionReview({sql,auth,quote,result,wait
    equal(await run(`select state from public.care_journeys where id=${quote(selection.id)}`),reviewFirst?'quotes_ready':'booking_requested');
   }
 
-  const waitBlocked=async tag=>{
-   for(let attempt=0;attempt<100;attempt++){
-    if(await run(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event_type='Lock' and query like ${quote('%'+tag+'%')}`)!=='0')return;
-    await new Promise(resolve=>setTimeout(resolve,20));
-   }
-   throw new Error('Review command did not reach the expected lock wait');
-  };
+
   // Revalidate after a wait, including replay: a concurrent role grant,
   // archive or request transfer must not use the pre-wait authority snapshot.
   for(const mutation of ['role','archive','transfer']){
    const owned=await fixture(),savedKey=randomUUID();
    await json(command(owned.id,customer,null,'confirm_completion',{},savedKey));
    const tag=`review_authority_wait_${mutation}`;
-   const holder=result(`begin;select pg_advisory_xact_lock(hashtextextended(${quote('user:'+customer+':'+savedKey)},0));select pg_sleep(2);/* holder_${tag} */commit;`);
-   await waitAtSleep('holder_'+tag);
-   const pending=result(command(owned.id,customer,null,'confirm_completion',{},savedKey).replace('begin;',`begin;/* pending_${tag} */`));
-   await waitBlocked('pending_'+tag);
-   if(mutation==='role')await run(`insert into public.user_roles(user_id,role) values(${quote(customer)},'technician')`);
-   if(mutation==='archive')await run(`update public.vehicles set archived_at=clock_timestamp() where id=${quote(owned.vehicle)}`);
-   if(mutation==='transfer')await run(`update public.care_requests set customer_id=${quote(other)} where id=${quote(owned.id)}`);
+   const holder=result(`begin;/* holder_${tag} */select pg_advisory_xact_lock(hashtextextended(${quote('user:'+customer+':'+savedKey)},0));${gate.holdCall('holder_'+tag)};commit;`);
+   let pending;
+   try{
+    await gate.waitFor(gate.holding('holder_'+tag),`authority holder ${tag}`);
+    pending=result(command(owned.id,customer,null,'confirm_completion',{},savedKey).replace('begin;',`begin;/* pending_${tag} */`));
+    await gate.waitFor(gate.blockedBy('pending_'+tag,'holder_'+tag),`review command blocked by the key holder ${tag} (pg_blocking_pids)`);
+    if(mutation==='role')await run(`insert into public.user_roles(user_id,role) values(${quote(customer)},'technician')`);
+    if(mutation==='archive')await run(`update public.vehicles set archived_at=clock_timestamp() where id=${quote(owned.vehicle)}`);
+    if(mutation==='transfer')await run(`update public.care_requests set customer_id=${quote(other)} where id=${quote(owned.id)}`);
+   }finally{await gate.release('holder_'+tag);}
    const [holdOutcome,outcome]=await Promise.all([holder,pending]);equal(holdOutcome.error,undefined);
    assert.ok(outcome.output?.includes('NOT_FOUND'),'current authority checked after lock wait');checks++;
    equal(await run(`select count(*) from public.care_journey_events where journey_id=${quote(owned.id)} and type='completion_confirmed'`),'1');
    if(mutation==='role')await run(`delete from public.user_roles where user_id=${quote(customer)} and role='technician'`);
   }
+  await gate.teardown();
  }
  console.log(`PASS: ${checks} customer completion confirmation/issue authority, privacy, replay, rollback and race assertions (disposable database).`);
 }

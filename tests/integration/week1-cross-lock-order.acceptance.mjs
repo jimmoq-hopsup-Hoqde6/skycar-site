@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {weekOf,tomorrowAt,publishAvailability} from './availability-fixture.mjs';
+import {lockGate, HOLD_SECONDS, STATEMENT_TIMEOUT} from './lock-test-gate.mjs';
 
 // Cross-feature lock order on the integrated chain. care_journey_command takes
 //   advisory(scope:key) -> vehicle FOR UPDATE -> care_requests FOR UPDATE -> care_journeys FOR UPDATE
@@ -10,13 +11,14 @@ import {weekOf,tomorrowAt,publishAvailability} from './availability-fixture.mjs'
 //   (b) care_record_request_photos / care_heal_request_photo_marker (20261101150000): care_requests FOR KEY SHARE,
 //       then the photo-set row;
 //   (c) care_technician_replace_availability (20261101063000): care_experts FOR SHARE, own advisories, schedule row.
-// The session that goes FIRST sleeps (a GUC-driven pg_sleep injected into the function under test, nothing else
-// changed) right after the lock named below; the SECOND starts once the first is observed inside pg_sleep and is
-// then either observed waiting on a lock (expected contention) or observed finishing while the first still sleeps
-// (expected isolation). Every concurrent outcome and final state must equal running the same two commands serially
+// The session that goes FIRST holds (a GUC-driven lock_test.hold() injected into the function under test, nothing
+// else changed) right after the lock named below, and keeps holding until the test releases it (./lock-test-gate.mjs).
+// The SECOND starts once the first has signalled that it holds its locks and is then either proven blocked BY THE
+// FIRST (pg_blocking_pids contains the first's pid; expected contention) or observed finishing while the first is
+// still inside its hold (expected isolation; the hold cannot end on time, so this does not depend on timing). Every concurrent outcome and final state must equal running the same two commands serially
 // in the same order, and nothing may raise 40P01 or 55P03. A negative control with a genuinely inverted pair of
 // plain row locks proves the harness does detect a deadlock.
-const SLEEP = 'skycar.lock_test_sleep', SLEEP_EXPERT = 'skycar.lock_test_sleep_expert', SLEEP_AVAIL = 'skycar.lock_test_sleep_avail', SECONDS = '1.5';
+const SLEEP = 'skycar.lock_test_sleep', SLEEP_EXPERT = 'skycar.lock_test_sleep_expert', SLEEP_AVAIL = 'skycar.lock_test_sleep_avail', TAG = 'skycar.lock_test_tag';
 const SIGS = {
  journey: 'public.care_journey_command(text,uuid,uuid,uuid,uuid,jsonb)',
  submit: 'public.care_submit_request(uuid,jsonb)',
@@ -24,7 +26,7 @@ const SIGS = {
  heal: 'public.care_heal_request_photo_marker(uuid,text)',
  availability: 'public.care_technician_replace_availability(uuid,uuid,integer,jsonb)',
 };
-const sleeper = guc => `perform pg_sleep(coalesce(nullif(current_setting('${guc}',true),''),'0')::numeric);`;
+const sleeper = guc => `perform lock_test.hold(current_setting('${TAG}',true), coalesce(nullif(current_setting('${guc}',true),''),'0')::numeric);`;
 // Insert a sleep statement right after the single occurrence of `anchor` (a complete statement boundary).
 function injectAfter(definition, anchor, guc, from = 0) {
  const at = definition.indexOf(anchor, from);
@@ -61,13 +63,9 @@ const KEEP = weekOf('08:00', '18:00'), AWAY = weekOf('00:00', '09:00');
 export async function verifyCrossLockOrder({sql, quote, result}) {
  const originals = Object.fromEntries(Object.entries(SIGS).map(([name, signature]) => [name, sql(`select pg_get_functiondef(${quote(signature)}::regprocedure)`)]));
  const restore = () => { for (const definition of Object.values(originals)) sql(definition); };
- const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
- const waitFor = async (predicate, what) => {
-  for (let attempt = 0; attempt < 600; attempt++) { if (sql(predicate) !== '0') return; await wait(20); }
-  throw new Error(`Cross lock-order barrier not observed: ${what}`);
- };
- const sleeping = tag => `select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event='PgSleep' and query like ${quote('%' + tag + '%')}`;
- const blocked = tag => `select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event_type='Lock' and query like ${quote('%' + tag + '%')}`;
+ const gate = lockGate({exec: sql, quote});
+ const {waitFor, holding, blockedBy, release} = gate;
+ gate.setup();
 
  const adminId = randomUUID();
  sql(`insert into auth.users(id) values(${quote(adminId)}); insert into public.user_roles(user_id,role) values(${quote(adminId)},'admin') on conflict do nothing;`);
@@ -98,7 +96,7 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
    coalesce((select revision::text from public.care_technician_availability where expert_id=${quote(f.expert)}),'-'),
    (select count(*) from public.care_journey_commands where journey_id=${quote(f.id)}))`);
 
- const head = (label, role, extra) => `begin;/* ${label} */set local statement_timeout='25s';set local lock_timeout='15s';${role};${extra ?? ''}`;
+ const head = (label, role, extra) => `begin;/* ${label} */set local statement_timeout='${STATEMENT_TIMEOUT}';set local lock_timeout='60s';${role};${extra ?? ''}`;
  const service = (label, body, gucs = {}) => `${head(label, 'set local role service_role', Object.entries(gucs).map(([k, v]) => `set local ${k}='${v}';`).join(''))}${body};commit;`;
  const customerRole = f => `set local role authenticated;set local request.jwt.claim.sub=${quote(f.customer)}`;
  const submitBody = (f, postcode) => JSON.stringify({vehicle_id: f.vehicle, service: 'repair', description: 'Synthetic cross lock submit', preferred_window: 'flexible', postcode});
@@ -117,20 +115,23 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
   const outcomes = [classify(await run(first, f, `serial_a_${f.id}`)), classify(await run(second, f, `serial_b_${f.id}`))];
   return {outcomes, snapshot: snapshot(f)};
  };
- // contention: second must be seen waiting on a lock. isolation: second must finish while the first still sleeps.
+ // contention: the server must report the second blocked by the first (pg_blocking_pids), then the first is released.
+ // isolation: the second must finish while the first is still inside its hold. The hold ends only on release (or
+ // LOCK_TEST_HOLD_TIMEOUT after HOLD_SECONDS), so "still holding" is a server fact, not a timing window.
  async function race(first, second, firstGuc, mode) {
-  const f = fixture(), tag = `${randomUUID()}`;
-  const a = run(first, f, `first_${tag}`, {[firstGuc]: SECONDS});
+  const f = fixture(), tag = `${randomUUID()}`, firstLabel = `first_${tag}`;
+  const a = run(first, f, firstLabel, {[firstGuc]: String(HOLD_SECONDS), [TAG]: firstLabel});
   let b, secondOutcome;
   try {
-   await waitFor(sleeping(`first_${tag}`), 'first session sleeping while holding its locks');
+   await waitFor(holding(firstLabel), 'first session holding its locks');
    b = run(second, f, `second_${tag}`);
-   if (mode === 'contention') await waitFor(blocked(`second_${tag}`), 'second session waiting on a lock held by the first');
+   if (mode === 'contention') await waitFor(blockedBy(`second_${tag}`, firstLabel), 'second session blocked by the first (pg_blocking_pids)');
    else {
     secondOutcome = await b;
-    assert.equal(sql(sleeping(`first_${tag}`)), '1', 'the second session finished without waiting for the first');
+    assert.equal(sql(holding(firstLabel)), '1', 'the second session finished without waiting for the first');
    }
-  } catch (error) { await a; await b; throw error; }
+  } catch (error) { release(firstLabel); await a; await b; throw error; }
+  release(firstLabel);
   const outcomes = [classify(await a), classify(secondOutcome ?? await b)];
   return {outcomes, snapshot: snapshot(f), f};
  }
@@ -201,11 +202,18 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
 
  // ---- negative control: a real inversion (request -> vehicle versus vehicle -> request) must deadlock.
  const f = fixture();
- const invert = (label, one, two) => `begin;/* ${label} */set local statement_timeout='20s';select 1 from public.${one[0]} where id=${quote(one[1])} for update;select pg_sleep(1);select 1 from public.${two[0]} where id=${quote(two[1])} for update;commit;`;
- const [x, y] = await Promise.all([
-  result(invert(`inv_x_${f.id}`, ['care_requests', f.id], ['vehicles', f.vehicle])),
-  result(invert(`inv_y_${f.id}`, ['vehicles', f.vehicle], ['care_requests', f.id])),
- ]);
+ // Each session takes its first row lock and holds; only when the server shows both holding are both released, so
+ // both second-lock requests are guaranteed to cross (no sleep decides whether the inversion happens).
+ const invert = (label, one, two) => `begin;/* ${label} */set local statement_timeout='${STATEMENT_TIMEOUT}';select 1 from public.${one[0]} where id=${quote(one[1])} for update;${gate.holdCall(label)};select 1 from public.${two[0]} where id=${quote(two[1])} for update;commit;`;
+ const [labelX, labelY] = [`inv_x_${f.id}`, `inv_y_${f.id}`];
+ const px = result(invert(labelX, ['care_requests', f.id], ['vehicles', f.vehicle]));
+ const py = result(invert(labelY, ['vehicles', f.vehicle], ['care_requests', f.id]));
+ try {
+  await waitFor(holding(labelX), 'negative control x holding care_requests');
+  await waitFor(holding(labelY), 'negative control y holding vehicles');
+ } finally { release(labelX); release(labelY); }
+ const [x, y] = await Promise.all([px, py]);
+ gate.teardown();
  const control = [classify(x), classify(y)].sort();
  assert.deepEqual(control, ['40P01', 'ok'], `the inverted negative control must deadlock exactly one session: ${control}`);
  summary.negativeControl = control.join(',');

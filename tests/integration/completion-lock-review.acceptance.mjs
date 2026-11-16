@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {lockGate, STATEMENT_TIMEOUT} from './lock-test-gate.mjs';
 
 // Runs only through the existing disposable PostgreSQL integration harness.
 // No production function, migration or frozen candidate is modified.
 export async function verifyCompletionLockReview({sql,quote,result}) {
+ const gate=lockGate({exec:sql,quote});
+ gate.setup();
+ try {
  for(const action of ['confirm_completion','report_completion_issue']) for(const roleChange of ['technician','admin','remove_customer']) {
  const actor=randomUUID(),id=randomUUID(),vehicle=randomUUID(),key=randomUUID();
  sql(`insert into auth.users(id) values(${quote(actor)});
@@ -15,30 +19,25 @@ export async function verifyCompletionLockReview({sql,quote,result}) {
    values(${quote(id)},${quote(id)},'{"postcode":"5000"}','in_progress','[{"slot":1,"mime_type":"image/jpeg","size_bytes":256,"sha256":"${'a'.repeat(64)}"}]');
   update public.care_journeys set state='completed' where id=${quote(id)};`);
  const tag=`review_journey_wait_${id}`;
- const waitFor=async predicate=>{
-  for(let attempt=0;attempt<200;attempt++){
-   if(sql(predicate)!=='0')return;
-   await new Promise(resolve=>setTimeout(resolve,20));
-  }
-  throw new Error('Expected PostgreSQL barrier was not reached');
- };
  // This holder deliberately takes only the journey lock. The real command
  // must pass its role check and then block acquiring that final row lock.
- const holder=result(`begin;set local statement_timeout='12s';
+ // The holder signals after its lock (lock_test.hold) and keeps it until released below.
+ const holder=result(`begin;/* holder_${tag} */set local statement_timeout='${STATEMENT_TIMEOUT}';
   select 1 from public.care_journeys where id=${quote(id)} for update;
-  select pg_sleep(5);/* holder_${tag} */commit;`);
+  ${gate.holdCall('holder_'+tag)};commit;`);
  let pending;
  try {
-  await waitFor(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event='PgSleep' and query like ${quote('%holder_'+tag+'%')}`);
-  pending=result(`begin;/* pending_${tag} */set local statement_timeout='12s';set local role service_role;
+  await gate.waitFor(gate.holding('holder_'+tag),`journey holder ${tag}`);
+  pending=result(`begin;/* pending_${tag} */set local statement_timeout='${STATEMENT_TIMEOUT}';set local role service_role;
    select public.care_customer_completion_review_command(${quote(actor)}::uuid,null,${quote(key)}::uuid,${quote(action)},${quote(id)}::uuid,${quote(JSON.stringify(action==='confirm_completion'?{}:{details:'A private issue after the lock wait.'}))}::jsonb);commit;`);
-  await waitFor(`select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event_type='Lock' and query like ${quote('%pending_'+tag+'%')}`);
+  await gate.waitFor(gate.blockedBy('pending_'+tag,'holder_'+tag),`review command blocked by the journey holder ${tag} (pg_blocking_pids)`);
   // Prove this is the final journey wait: the pending backend owns the vehicle
   // row lock (a NOWAIT attempt fails), not merely its actor/key advisory lock.
   assert.throws(()=>sql(`begin;select 1 from public.vehicles where id=${quote(vehicle)} for update nowait;rollback;`),/could not obtain lock/);
   if(roleChange==='remove_customer')sql(`delete from public.user_roles where user_id=${quote(actor)} and role='customer'`);
   else sql(`insert into public.user_roles(user_id,role) values(${quote(actor)},${quote(roleChange)});`);
  } finally {
+  gate.release('holder_'+tag);
   const held=await holder;
   assert.equal(held.error,undefined,'journey holder must finish normally');
  }
@@ -53,4 +52,5 @@ export async function verifyCompletionLockReview({sql,quote,result}) {
  assert.equal(final,'awaiting_review');
  assert.equal(effects,'0:0:0','rejected command leaves no command/event/audit effects');
  }
+ } finally { gate.teardown(); }
 }
