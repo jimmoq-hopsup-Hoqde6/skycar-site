@@ -36,8 +36,63 @@ environment. The model has no network, GitHub tools, delegated agents, credentia
 or repository write access. Untrusted code runs only in a separate validation job:
 pinned Node image, read-only mounts/root, non-root user, no network, no Linux
 capabilities, no new privileges, bounded memory/CPU/processes/time/log output.
-Only the eight source files and trusted acceptance directory are mounted. The
-publisher checks evidence without importing or executing candidate code.
+Only the eight source files and a read-only response adapter are mounted. A
+trusted Python supervisor outside candidate execution generates fresh cases and
+asserts all eight same-account/cross-account responses, repository-call arguments,
+private headers and result bodies. An early successful process exit, missing
+response, skipped case or forged TAP/summary cannot stand in for these assertions.
+The unit suite also runs in isolation, as supporting evidence. Receipt version 2
+requires the external supervisor and all eight completed acceptance cases; old
+exit-status-only receipts cannot authorize publication. Each container is removed
+and a successful daemon query must confirm its absence before validation proceeds.
+The publisher checks evidence without importing or executing candidate code.
+
+## Generated-branch build security
+
+Every repository workflow job excludes `agent/` branches, including pull requests
+whose **head** has that prefix. `vercel.json` disables automatic deployments for
+`agent/**` using Vercel's documented minimatch branch setting. The generated files
+cannot modify either control. Normal feature-branch CI still runs; a generated
+draft needs full application CI on an independently reviewed branch before merge.
+
+`generated-build-policy.json` pins the exact file set and SHA-256 of every
+workflow and `vercel.json`. The controller reads committed files at the approved
+SHA, checks the job exclusions and Vercel policy, and rejects new/changed/missing
+workflows. Intentional build configuration changes require a reviewed policy
+update, never an automatic refresh during execution.
+
+Committed exclusions alone do not attest external integration settings. Before
+any inference and again before publication/ref creation, the controller requires
+`SKYCAR_GENERATED_BUILD_ATTESTATION` from the protected environment's variables.
+An independent reviewer must audit all connected build/deploy integrations,
+confirm that generated branches cannot execute with application, deployment,
+OIDC or automation-bypass credentials, and record the exact current-main SHA and
+preflight `build_policy_sha256`. This is a protected human attestation, not a
+claim that the controller reads Vercel account settings itself. It expires within
+24 hours. Missing, stale, malformed or mismatched evidence blocks execution;
+expiry during publication leaves the durable lease blocked without creating a ref.
+No live attestation is installed by this PR.
+
+The protected environment variable is a JSON object with exactly these fields
+(replace placeholders only after the independent live audit):
+
+```json
+{
+  "version": 1,
+  "repository": "jimmoq-hopsup-Hoqde6/skycar-site",
+  "source_sha": "FULL_CURRENT_MAIN_SHA",
+  "policy_sha256": "PREFLIGHT_BUILD_POLICY_SHA256",
+  "reviewer": "INDEPENDENT_GITHUB_LOGIN",
+  "verified_at_utc": "YYYY-MM-DDTHH:MM:SS+00:00",
+  "expires_at_utc": "YYYY-MM-DDTHH:MM:SS+00:00",
+  "external_integrations_audited": true
+}
+```
+
+The reviewer must differ from the repository owner. Retain the existing required
+environment review and no-admin-bypass controls; the JSON does not replace them.
+Source for Vercel's branch control:
+https://vercel.com/docs/project-configuration/git-configuration#gitdeploymentenabled
 
 The new path does **not** accept operator-written billing receipts. Using the
 pinned OpenAI SDK it reads project activity, this month's project costs and the
@@ -124,7 +179,8 @@ After the protected merge and secure configuration:
 2. Initialize the ledger once using `initialize-ledger`; approve the existing
    protected environment gate. This does not enable inference.
 3. After task-label approval, owner attestation of the live dedicated cap and
-   activation of the enable variable, dispatch `run` with the exact SHA, budget
+   a current independent generated-build attestation in the protected environment,
+   and activation of the enable variable, dispatch `run` with the exact SHA, budget
    and fingerprint. Existing environment approval is required before coding and
    again before publication. The workflow has no unattended trigger.
 4. Inspect the tested draft PR and complete normal application CI and independent
@@ -135,8 +191,9 @@ running invocation, cancel its workflow too. Cancellation requests cleanup;
 host loss/SIGKILL can leave an uncertain session, which requires reconciliation.
 Do not infer cleanup solely from a canceled workflow badge.
 
-Existing repository Git integrations may build previews when a draft PR branch
-is published. This implementation does not issue deployment or promotion calls.
+Generated branches must not build previews automatically. The committed exclusions
+and current independent external-integration attestation gate publication. This
+implementation does not issue deployment or promotion calls.
 Unattended polling and coordination of nine agents remain a separate reviewed
 milestone after one real technician draft passes this complete supervised path.
 
@@ -145,7 +202,8 @@ milestone after one real technician draft passes this complete supervised path.
 The offline suite uses simulated coding, billing and GitHub transports, including
 the real pinned SDK with mock HTTP. It covers exact-budget binding, changed caps,
 invalid billing, atomic-claim races, task replay, stop/rerun gates, unknown session
-creation, cleanup, artifact/evidence tampering and draft-only publication.
+creation, cleanup, artifact/evidence tampering, all eight externally supervised
+assertions, missing/expired build attestation and draft-only publication.
 
 ```sh
 python3 -m unittest discover -s tests/autonomy -p 'test_*.py' -v
@@ -153,8 +211,10 @@ python3 -m unittest discover -s tests/autonomy -p 'test_*.py' -v
 
 Docker integration tests are skipped locally unless explicitly enabled. The
 credential-free `Skycar protected executor isolation tests` GitHub workflow
-enables them and must pass both a valid fix and rejection of an ineffective
-candidate using the real pinned container. No OpenAI request or paid coding is
+enables them and must pass a valid fix and reject an ineffective candidate,
+an early zero exit, and a forged passing summary using the real pinned container.
+The early-exit regressions also verify publication remains blocked.
+No OpenAI request or paid coding is
 made by those tests.
 
 ```sh

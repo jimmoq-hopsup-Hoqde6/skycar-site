@@ -35,7 +35,7 @@ env:
   PYTHONDONTWRITEBYTECODE: '1'
 jobs:
   preflight:
-    if: github.repository == 'jimmoq-hopsup-Hoqde6/skycar-site' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+    if: "!startsWith(github.head_ref || github.ref_name, 'agent/') && (github.repository == 'jimmoq-hopsup-Hoqde6/skycar-site' && github.ref == 'refs/heads/main' && github.run_attempt == 1)"
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -67,7 +67,7 @@ jobs:
           retention-days: 7
   coding:
     needs: preflight
-    if: inputs.operation != 'preflight'
+    if: "!startsWith(github.head_ref || github.ref_name, 'agent/') && (inputs.operation != 'preflight')"
     environment: skycar-agent-pilot
     permissions:
       contents: write # Trusted controller writes only its durable ledger Git ref.
@@ -88,6 +88,7 @@ jobs:
         if: inputs.operation == 'initialize-ledger'
         env:
           GH_TOKEN: ${{ github.token }}
+          SKYCAR_GENERATED_BUILD_ATTESTATION: ${{ vars.SKYCAR_GENERATED_BUILD_ATTESTATION }}
         run: >-
           python3 scripts/autonomy/executor_pipeline.py initialize-ledger
           --sha "$APPROVED_SHA" --project-id "$PROJECT_ID" --budget-cents "$BUDGET_CENTS"
@@ -95,6 +96,7 @@ jobs:
         if: inputs.operation == 'run'
         env:
           GH_TOKEN: ${{ github.token }}
+          SKYCAR_GENERATED_BUILD_ATTESTATION: ${{ vars.SKYCAR_GENERATED_BUILD_ATTESTATION }}
           SKYCAR_OPENAI_ORGANIZATION_ID: ${{ vars.SKYCAR_OPENAI_ORGANIZATION_ID }}
           SKYCAR_OPENAI_CODING_KEY: ${{ secrets.SKYCAR_OPENAI_CODING_KEY }}
           SKYCAR_OPENAI_BILLING_READ_KEY: ${{ secrets.SKYCAR_OPENAI_BILLING_READ_KEY }}
@@ -116,7 +118,7 @@ jobs:
           if-no-files-found: warn
   validation:
     needs: coding
-    if: inputs.operation == 'run'
+    if: "!startsWith(github.head_ref || github.ref_name, 'agent/') && (inputs.operation == 'run')"
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -147,7 +149,7 @@ jobs:
           retention-days: 7
   publisher:
     needs: [coding, validation]
-    if: inputs.operation == 'run'
+    if: "!startsWith(github.head_ref || github.ref_name, 'agent/') && (inputs.operation == 'run')"
     environment: skycar-agent-pilot
     permissions:
       contents: write # Durable ledger only; separate credential publishes the draft.
@@ -173,6 +175,7 @@ jobs:
       - name: Publish a validated draft only
         env:
           GH_TOKEN: ${{ github.token }}
+          SKYCAR_GENERATED_BUILD_ATTESTATION: ${{ vars.SKYCAR_GENERATED_BUILD_ATTESTATION }}
           SKYCAR_PR_PUBLISHER_TOKEN: ${{ secrets.SKYCAR_PR_PUBLISHER_TOKEN }}
         run: >-
           python3 scripts/autonomy/executor_pipeline.py publish

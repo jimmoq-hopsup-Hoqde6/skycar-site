@@ -12,6 +12,7 @@ import time
 import uuid
 from bounded_coding_pilot import PilotError, source_snapshot, validate_artifact
 from technician_tasks import select, TEST_COMMAND
+from executor_acceptance import CASES, challenges, verify_responses
 
 IMAGE = 'node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54'
 MAX_EVIDENCE_BYTES = 200_000
@@ -72,14 +73,54 @@ def validate_run(root, sha, task_id, evidence, fingerprint, run_id):
     return spec, original, files, digest
 
 
-def docker_command(workspace, acceptance, name='skycar-validation-unit'):
-    return ['docker','run','--rm','--name',name,'--log-driver','none','--network','none','--read-only','--cap-drop','ALL',
+def docker_command(workspace, acceptance, name='skycar-validation-unit', command=TEST_COMMAND):
+    return ['docker','run','--rm','--interactive','--name',name,'--log-driver','none','--network','none','--read-only','--cap-drop','ALL',
             '--security-opt','no-new-privileges','--pids-limit','64','--memory','512m',
             '--cpus','1','--ulimit','nofile=128:128','--user','65534:65534',
             '--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=64m',
             '--mount',f'type=bind,source={workspace},target=/workspace,readonly',
             '--mount',f'type=bind,source={acceptance},target=/acceptance,readonly',
-            '--workdir','/workspace',IMAGE,*TEST_COMMAND]
+            '--workdir','/workspace',IMAGE,*command]
+
+
+def run_container(workspace, acceptance, log, command, payload=b''):
+    name = 'skycar-validation-' + uuid.uuid4().hex
+    def cancelled(_signum, _frame):
+        raise PilotError('Validation cancelled')
+    handlers = {s: signal.signal(s, cancelled) for s in (signal.SIGTERM, signal.SIGINT)}
+    process = None
+    started = time.monotonic()
+    try:
+        with tempfile.TemporaryFile() as stdin, log.open('wb') as stdout:
+            stdin.write(payload)
+            stdin.seek(0)
+            process = subprocess.Popen(docker_command(workspace, acceptance, name, command),
+                stdin=stdin, stdout=stdout, stderr=subprocess.STDOUT,
+                env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(workspace.parent)},
+                preexec_fn=bound_log)
+            try:
+                while process.poll() is None:
+                    if log.stat().st_size >= MAX_LOG_BYTES or time.monotonic()-started > 180:
+                        raise PilotError('Candidate exceeded time/output bounds')
+                    time.sleep(0.1)
+                if process.returncode != 0 or log.stat().st_size >= MAX_LOG_BYTES:
+                    raise PilotError('Candidate process failed')
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try: process.wait(timeout=5)
+                    except subprocess.TimeoutExpired: process.kill(); process.wait()
+    finally:
+        try:
+            subprocess.run(['docker', 'rm', '--force', name], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=20, check=False)
+            # --rm may already have removed it. A daemon error is not evidence of absence.
+            result = subprocess.run(['docker', 'container', 'ls', '--all', '--filter',
+                'name=^/'+name+'$', '--format', '{{.ID}}'], capture_output=True, timeout=20, check=True)
+            if result.stdout.strip():
+                raise PilotError('Candidate container cleanup is unconfirmed')
+        finally:
+            for sig, handler in handlers.items(): signal.signal(sig, handler)
 
 
 def validate(root, sha, task_id, evidence, fingerprint, run_id, output):
@@ -89,46 +130,29 @@ def validate(root, sha, task_id, evidence, fingerprint, run_id, output):
     acceptance = (Path(__file__).resolve().parent/'acceptance').resolve()
     subprocess.run(['docker','pull',IMAGE],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
                    timeout=180)
-    started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='skycar-validation-') as tmp:
-        workspace = Path(tmp)/'candidate';workspace.mkdir(mode=0o755)
+        workspace = Path(tmp)/'candidate'; workspace.mkdir(mode=0o755)
         Path(tmp).chmod(0o755)
         for path, raw in original.items():
-            target = workspace/path;target.parent.mkdir(parents=True,exist_ok=True)
-            target.write_bytes(raw);target.chmod(0o644)
+            target = workspace/path; target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_bytes(raw); target.chmod(0o644)
         for path, content in files.items():
             (workspace/path).write_text(content,encoding='utf-8')
+        unit_log, probe = output/'unit.log', output/'probe.json'
+        run_container(workspace, acceptance, unit_log, TEST_COMMAND)
+        expected = challenges()
+        run_container(workspace, acceptance, probe, ('node', '/acceptance/technician-probe.mjs'),
+                      json.dumps(expected).encode())
+        # These assertions run in this trusted Python process, outside candidate execution.
+        # Empty output, early exit, forged TAP/summary and missing cases cannot authorize a PR.
+        passed = verify_responses(expected, read_json(probe))
         log = output/'tests.log'
-        # Untrusted stdout is never printed in the credentialed publisher/controller.
-        name='skycar-validation-'+uuid.uuid4().hex
-        def cancelled(_signum,_frame):
-            raise PilotError('Validation cancelled')
-        handlers={s:signal.signal(s,cancelled) for s in (signal.SIGTERM,signal.SIGINT)}
-        process=None
-        try:
-          with log.open('wb') as stream:
-            process = subprocess.Popen(docker_command(workspace,acceptance,name),stdout=stream,stderr=subprocess.STDOUT,
-                                       env={'PATH':os.environ.get('PATH','/usr/bin:/bin'),'HOME':tmp},preexec_fn=bound_log)
-            try:
-                while process.poll() is None:
-                    if log.stat().st_size >= MAX_LOG_BYTES or time.monotonic()-started > 180:
-                        raise PilotError("Candidate test exceeded time/output bounds")
-                    time.sleep(0.1)
-                if process.returncode != 0 or log.stat().st_size >= MAX_LOG_BYTES:
-                    raise PilotError("Candidate failed independent isolated acceptance")
-            finally:
-                if process.poll() is None:
-                    process.terminate()
-                    try:process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:process.kill();process.wait()
-        finally:
-            # Terminating the Docker CLI alone must not leave a candidate container alive.
-            for s,handler in handlers.items():signal.signal(s,handler)
-            subprocess.run(['docker','rm','--force',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
-                           timeout=20,check=False)
-        receipt = {'version':1,'task':spec.task_id,'sha':sha,'request_fingerprint':fingerprint,
+        log.write_text(json.dumps(dict(passed, supervisor='external-v1',
+            unit_log_sha256=hashlib.sha256(unit_log.read_bytes()).hexdigest()), sort_keys=True)+'\n')
+        receipt = {'version':2,'task':spec.task_id,'sha':sha,'request_fingerprint':fingerprint,
                    'run_id':run_id,'artifact_sha256':digest,'status':'isolated_tests_passed',
                    'test_log_sha256':hashlib.sha256(log.read_bytes()).hexdigest(),
+                   'supervisor':'external-v1','acceptance_cases':list(CASES),
                    'image':IMAGE,'network':'none','credentials':'none'}
     (output/'validation.json').write_text(json.dumps(receipt,indent=2)+'\n')
     return receipt
@@ -136,9 +160,10 @@ def validate(root, sha, task_id, evidence, fingerprint, run_id, output):
 
 def verify_validation(receipt, task_id, sha, fingerprint, run_id, digest):
     fields={'version','task','sha','request_fingerprint','run_id','artifact_sha256','status',
-            'test_log_sha256','image','network','credentials'}
+            'test_log_sha256','image','network','credentials','supervisor','acceptance_cases'}
     if (type(receipt) is not dict or set(receipt)!=fields or type(receipt['version']) is not int
-            or receipt['version']!=1 or receipt['task']!=task_id or receipt['sha']!=sha
+            or receipt['version']!=2 or receipt.get('supervisor')!='external-v1'
+            or receipt.get('acceptance_cases')!=list(CASES) or receipt['task']!=task_id or receipt['sha']!=sha
             or receipt['request_fingerprint']!=fingerprint or receipt['run_id']!=run_id
             or receipt['artifact_sha256']!=digest or receipt['status']!='isolated_tests_passed'
             or receipt['image']!=IMAGE or receipt['network']!='none' or receipt['credentials']!='none'

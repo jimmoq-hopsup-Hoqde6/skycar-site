@@ -9,8 +9,7 @@ READ_PATHS = (
     "src/server/http/api-boundary.mjs", "src/server/http/request-origin.mjs",
     *WRITE_PATHS,
 )
-TEST_COMMAND = ("node", "--test", "tests/unit/technician-commands.test.mjs",
-                "/acceptance/technician-account.mjs")
+TEST_COMMAND = ("node", "--test", "tests/unit/technician-commands.test.mjs")
 PROMPT = '''Implement one narrow technician HTTP response validation fix for Skycar issue #101.
 In createTechnicianHandlers().command(), require the returned result.account to match
 the x-skycar-account precondition, after validating its UUID and before accepting data.

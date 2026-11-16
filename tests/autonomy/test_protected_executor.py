@@ -22,6 +22,8 @@ from executor_ledger import Ledger, REF, month_now, reserve, validate_state
 from executor_pipeline import coding_run, prepare, publish, workflow_context
 from executor_validation import IMAGE, MAX_LOG_BYTES, bound_log, docker_command, read_json, verify_validation
 from technician_tasks import TECHNICIAN, approved_issue, select, TASK_ID
+from executor_acceptance import CASES
+from executor_build_guard import POLICY, policy_digest
 from test_bounded_coding_pilot import fake_client
 
 
@@ -34,6 +36,16 @@ def proof(**changes):
 
 def empty_ledger():
     return {'version':1,'project_id':'proj_test','active':None,'months':{},'tasks':{}}
+
+
+def build_attestation(root, sha, **changes):
+    now = datetime.now(timezone.utc)
+    value = {'version': 1, 'repository': pilot.REPOSITORY, 'source_sha': sha,
+             'policy_sha256': policy_digest(root, sha), 'reviewer': 'moogly88',
+             'verified_at_utc': (now-timedelta(seconds=1)).isoformat(),
+             'expires_at_utc': (now+timedelta(hours=1)).isoformat(),
+             'external_integrations_audited': True}
+    return json.dumps(dict(value, **changes))
 
 
 class FakeGitHub(GitHub):
@@ -262,7 +274,8 @@ class PipelineTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.base=Path(self.tmp.name);self.root=self.base/'source';self.root.mkdir()
         subprocess.run(['git','init','-q',str(self.root)],check=True)
-        for path in TECHNICIAN.read_paths:
+        configuration = [POLICY, 'vercel.json', *(str(p.relative_to(ROOT)) for p in (ROOT/'.github/workflows').glob('*'))]
+        for path in (*TECHNICIAN.read_paths, *configuration):
             target=self.root/path;target.parent.mkdir(parents=True,exist_ok=True)
             target.write_bytes((ROOT/path).read_bytes())
         subprocess.run(['git','-C',str(self.root),'add','.'],check=True)
@@ -273,7 +286,8 @@ class PipelineTests(unittest.TestCase):
         self.spec,self.request,self.token=prepare(self.root,self.sha,TASK_ID,'proj_test',500)
         self.context=patch.dict(os.environ,{'GITHUB_REPOSITORY':pilot.REPOSITORY,'GITHUB_EVENT_NAME':'workflow_dispatch',
             'GITHUB_REF':'refs/heads/main','GITHUB_SHA':self.sha,'GITHUB_RUN_ATTEMPT':'1','GITHUB_RUN_ID':'123',
-            'SKYCAR_EXECUTOR_ENABLED':'true'},clear=True)
+            'SKYCAR_EXECUTOR_ENABLED':'true',
+            'SKYCAR_GENERATED_BUILD_ATTESTATION':build_attestation(self.root,self.sha)},clear=True)
         self.context.start();self.addCleanup(self.context.stop)
         self.evidence=self.base/'evidence';self.validation=self.base/'validation';self.validation.mkdir()
 
@@ -297,8 +311,9 @@ class PipelineTests(unittest.TestCase):
 
     def validation_receipt(self):
         digest=json.loads((self.evidence/'run/state.json').read_text())['artifact_sha256']
-        receipt={'version':1,'task':TASK_ID,'sha':self.sha,'request_fingerprint':self.token,'run_id':'123',
+        receipt={'version':2,'task':TASK_ID,'sha':self.sha,'request_fingerprint':self.token,'run_id':'123',
             'artifact_sha256':digest,'status':'isolated_tests_passed','test_log_sha256':hashlib.sha256(b'fixture tests passed').hexdigest(),
+            'supervisor':'external-v1','acceptance_cases':list(CASES),
             'image':IMAGE,'network':'none','credentials':'none'}
         (self.validation/'tests.log').write_bytes(b'fixture tests passed')
         (self.validation/'validation.json').write_text(json.dumps(receipt))
@@ -388,6 +403,34 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaises(pilot.PilotError):publish(self.root,self.sha,TASK_ID,'proj_test',500,self.token,
             self.evidence,self.validation,self.gh,self.gh)
         self.assertEqual(self.gh.pulls,[])
+
+    def test_missing_build_attestation_blocks_before_any_paid_call_or_publication_write(self):
+        client,sessions=fake_client();client.project='proj_test';billing=NS(verify=Mock())
+        with patch.dict(os.environ,{'SKYCAR_GENERATED_BUILD_ATTESTATION':''}):
+            with self.assertRaises(pilot.PilotError):coding_run(self.root,self.sha,TASK_ID,'proj_test',500,self.token,
+                self.evidence,self.gh,client,billing)
+        sessions.create.assert_not_called();billing.verify.assert_not_called()
+        self.code();self.validation_receipt();before=len(self.gh.calls)
+        with patch.dict(os.environ,{'SKYCAR_GENERATED_BUILD_ATTESTATION':''}),self.assertRaises(pilot.PilotError):
+            publish(self.root,self.sha,TASK_ID,'proj_test',500,self.token,self.evidence,self.validation,self.gh,self.gh)
+        self.assertFalse(any(method!='GET' for method,_,_ in self.gh.calls[before:]))
+        self.assertFalse(any(ref.startswith('heads/agent/') for ref in self.gh.refs))
+
+    def test_expired_attestation_during_publication_never_creates_ref(self):
+        self.code();self.validation_receipt()
+        with patch('executor_pipeline.require_build_attestation',side_effect=['verified',pilot.PilotError('Expired')]):
+            with self.assertRaises(pilot.PilotError):publish(self.root,self.sha,TASK_ID,'proj_test',500,self.token,
+                self.evidence,self.validation,self.gh,self.gh)
+        self.assertFalse(any(ref.startswith('heads/agent/') for ref in self.gh.refs))
+        self.assertIsNotNone(self.ledger.load()[1]['active'])
+
+    def test_legacy_or_missing_acceptance_receipt_blocks_publication(self):
+        self.code();original=self.validation_receipt()
+        for change in ({'version':1},{'acceptance_cases':[]},{'supervisor':'candidate-claimed'}):
+            (self.validation/'validation.json').write_text(json.dumps(dict(original,**change)))
+            with self.assertRaises(pilot.PilotError):publish(self.root,self.sha,TASK_ID,'proj_test',500,self.token,
+                self.evidence,self.validation,self.gh,self.gh)
+        self.assertFalse(any(ref.startswith('heads/agent/') for ref in self.gh.refs))
 
 
 class EvidenceAndContainerTests(unittest.TestCase):

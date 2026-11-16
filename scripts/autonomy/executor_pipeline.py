@@ -13,6 +13,7 @@ import bounded_coding_pilot as pilot
 from executor_billing import ProviderBilling
 from executor_github import GitHub, GitHubError, PREFIX
 from executor_ledger import Ledger
+from executor_build_guard import policy_digest, require_build_attestation
 from executor_validation import read_json, validate, validate_run, verify_validation
 from technician_tasks import select, approved_issue
 
@@ -50,6 +51,7 @@ def coding_run(root, sha, task_id, project, cents, token, output, github, coding
         raise pilot.PilotError('Approved source is no longer current main')
     github.environment()
     approved_issue(github.request('GET',PREFIX+'/issues/101'))
+    require_build_attestation(root, sha)
     billing.verify(project,cents)
     ledger = Ledger(github,project)
     output = Path(output)
@@ -58,8 +60,11 @@ def coding_run(root, sha, task_id, project, cents, token, output, github, coding
     approval = {'task':task_id,'sha':sha,'project_id':project,'budget_cents':cents,
                 'request_fingerprint':token,'run_id':run_id,'ledger_key':key}
     pilot.write_json(output/'approval.json',approval)
+    def verified_budget(selected_project, requested):
+        require_build_attestation(root, sha)
+        return billing.verify(selected_project, requested)
     state = pilot.execute(coding_client,request,output/'run',token,task=spec,
-                          budget_verifier=billing.verify,provider_project_id=project)
+                          budget_verifier=verified_budget,provider_project_id=project)
     visible = True
     for attempt in range(3):
         try:
@@ -89,6 +94,7 @@ def publish(root, sha, task_id, project, cents, token, evidence, validation, git
         raise pilot.PilotError('Main advanced; do not silently rebase an approved task')
     ledger_github.environment()
     approved_issue(ledger_github.request('GET',PREFIX+'/issues/101'))
+    require_build_attestation(root, sha)
     _, _, files, digest = validate_run(root,sha,task_id,Path(evidence)/'run',token,run_id)
     receipt = read_json(Path(validation)/'validation.json',4096)
     verify_validation(receipt,task_id,sha,token,run_id,digest)
@@ -116,6 +122,7 @@ def publish(root, sha, task_id, project, cents, token, evidence, validation, git
     except GitHubError as exc:
         if exc.status_code != 404:
             raise
+        require_build_attestation(root, sha)
         github.request('POST',PREFIX+'/git/refs',{'ref':'refs/heads/'+branch,'sha':commit})
     else:
         if existing.get('object',{}).get('sha') != commit:
@@ -141,7 +148,9 @@ def publish(root, sha, task_id, project, cents, token, evidence, validation, git
                    'network-disabled container without credentials. Full application CI and '
                    'independent QA/security review remain required. No approval, merge, live '
                    'migration or production promotion is authorized by this draft. '
-                   'Existing repository Git integrations may build a preview automatically.'})
+                   'Automatic generated-branch jobs and Vercel previews are suppressed by the '
+                   'reviewed build policy. Run full application CI on independently reviewed code '
+                   'before considering a merge.'})
     if type(pr.get('number')) is not int or pr.get('draft') is not True:
         raise pilot.PilotError('GitHub did not confirm draft-only publication')
     ledger.advance(key,token,run_id,'publishing','published',draft_pr=pr['number'])
@@ -167,6 +176,8 @@ def main():
             result={'status':'offline_preflight_NOT_AUTHORIZED','sha':args.sha,'task':spec.task_id,
                     'project_id':args.project_id,'budget_cents':args.budget_cents,'request_fingerprint':token,
                     'read_paths':spec.read_paths,'write_paths':spec.write_paths,
+                    'build_policy_sha256':policy_digest(args.root,args.sha),
+                    'publication':'Requires current independent live build-security attestation',
                     'billing':'Live provider hard-limit/cost verification required before execution'}
         elif args.operation=='validate':
             require_approval(token,args.approved_fingerprint)

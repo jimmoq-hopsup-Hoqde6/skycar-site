@@ -14,6 +14,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   offline-contract:
+    if: "!startsWith(github.head_ref || github.ref_name, 'agent/')"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:

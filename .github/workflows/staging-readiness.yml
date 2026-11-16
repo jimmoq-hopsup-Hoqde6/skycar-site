@@ -21,6 +21,7 @@ concurrency:
 
 jobs:
   preflight:
+    if: "!startsWith(github.head_ref || github.ref_name, 'agent/')"
     name: Non-deploying staging preflight
     runs-on: ubuntu-latest
     timeout-minutes: 15
