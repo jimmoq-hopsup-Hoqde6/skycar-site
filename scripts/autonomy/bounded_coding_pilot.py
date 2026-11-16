@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import datetime, timezone
 import hashlib
+from importlib.metadata import PackageNotFoundError, version
 import json
 import os
 from pathlib import Path
@@ -51,6 +53,49 @@ Never alter tests simply to hide a failure. Run the requested tests and produce 
 
 class PilotError(Exception):
     pass
+
+
+def sdk_version():
+    try:
+        return version("openai")
+    except PackageNotFoundError:
+        return "not_installed"
+
+
+def safe_request_id(value):
+    # Never copy arbitrary headers, bodies, messages or credential-like strings.
+    if isinstance(value, str) and re.fullmatch(r"req_[A-Za-z0-9]{1,128}", value):
+        return value
+    return None
+
+
+def failure_details(exc, stage):
+    """Support metadata only. Do not stringify exceptions or their request/response."""
+    status = getattr(exc, "status_code", None)
+    if type(status) is not int or not 100 <= status <= 599:
+        status = None
+    kind = type(exc).__name__
+    known = {"APIConnectionError", "APITimeoutError", "APIStatusError",
+             "AuthenticationError", "PermissionDeniedError", "NotFoundError",
+             "BadRequestError", "UnprocessableEntityError", "RateLimitError",
+             "InternalServerError", "PilotError", "AgentSessionFailedError",
+             "AgentSessionCancelledError", "ImportError", "ModuleNotFoundError"}
+    category = "http_error" if status else "local_or_stream_error"
+    if kind == "APITimeoutError":
+        category = "timeout_outcome_unknown"
+    elif kind == "APIConnectionError":
+        category = "connection_outcome_unknown"
+    elif kind in ("ImportError", "ModuleNotFoundError"):
+        category = "dependency_error"
+    code = getattr(exc, "code", None)
+    if code not in ("invalid_api_key", "insufficient_quota", "rate_limit_exceeded",
+                    "model_not_found", "permission_denied", "invalid_request_error"):
+        code = None
+    return {"stage": stage, "exception_type": kind if kind in known else "UnexpectedError",
+            "category": category, "http_status": status,
+            "request_id": safe_request_id(getattr(exc, "request_id", None)),
+            "error_code": code, "sdk_version": sdk_version(),
+            "at_utc": datetime.now(timezone.utc).isoformat()}
 
 
 def git(root, *args):
@@ -152,8 +197,12 @@ def execute(client, request, output: Path, token: str):
     output.mkdir(parents=False, exist_ok=False)
     state = {"task": TASK_ID, "sha": request["metadata"]["commit"],
              "request_fingerprint": token, "status": "creation_pending", "session_id": None,
-             "turn_id": None, "cleanup": "not_started"}
+             "turn_id": None, "cleanup": "not_started", "stage": "session_create",
+             "sdk_version": sdk_version(), "started_at_utc": datetime.now(timezone.utc).isoformat()}
     write_json(output / "state.json", state)
+    def stage(name):
+        state["stage"] = name
+        write_json(output / "state.json", state)
     session_id = None
     def deadline(_signum, _frame):
         raise PilotError("Execution deadline reached; reconcile saved session before retry")
@@ -164,13 +213,16 @@ def execute(client, request, output: Path, token: str):
         # Create idle first: retain the ID before sending any coding task. SDK retries off.
         session = client.beta.agents.sessions.create(**request)
         session_id = session.id
-        state.update(session_id=session_id, status="session_created")
+        state.update(session_id=session_id, status="session_created",
+                     create_request_id=safe_request_id(getattr(session, "_request_id", None)))
         write_json(output / "state.json", state)
         if session.spend_control is None or session.spend_control.limit != request["spend_control"]["limit"]:
             raise PilotError("API did not confirm requested session budget")
         # A created hosted session is not necessarily ready for input yet.
         for _ in range(120):
+            stage("session_readiness")
             current = client.beta.agents.sessions.retrieve(session_id)
+            stage("environment_readiness")
             environment = client.beta.agents.environments.retrieve(current.environment.id)
             if current.status == "failed" or environment.status == "failed":
                 raise PilotError("Hosted setup failed")
@@ -182,7 +234,7 @@ def execute(client, request, output: Path, token: str):
         else:
             raise PilotError("Hosted setup was not ready within four minutes")
         state["submission_key"] = "skycar-" + session_id + "-" + token
-        write_json(output / "state.json", state)
+        stage("turn_stream")
         with client.beta.agents.sessions.stream(
             session_id, input=TASK, idempotency_key=state["submission_key"]
         ) as stream:
@@ -193,6 +245,7 @@ def execute(client, request, output: Path, token: str):
         state.update(turn_id=result.turn_id, status="turn_completed")
         write_json(output / "state.json", state)
         found = None
+        stage("artifact_list")
         for artifact in client.beta.agents.sessions.artifacts.list(session_id):
             if artifact.turn_id == result.turn_id and artifact.path == "/workspace/outputs/changes.json":
                 if found is not None:
@@ -201,6 +254,7 @@ def execute(client, request, output: Path, token: str):
         if found is None:
             raise PilotError("Completed turn did not publish changes.json")
         raw_path = output / "changes.json"
+        stage("artifact_download")
         # Bound download without interpreting or executing generated code.
         with client.beta.agents.sessions.artifacts.with_streaming_response.content(
             found.id, session_id=session_id
@@ -210,12 +264,14 @@ def execute(client, request, output: Path, token: str):
                 raw.extend(chunk)
                 if len(raw) > MAX_ARTIFACT_BYTES:
                     raise PilotError("Artifact exceeds size limit")
+        stage("artifact_validation")
         validate_artifact(bytes(raw))
         raw_path.write_bytes(raw)
         state["artifact_sha256"] = hashlib.sha256(raw).hexdigest()
         state["status"] = "artifact_validated_NOT_TESTED"
-    except BaseException:
+    except BaseException as exc:
         state["status"] = "blocked_reconcile_before_retry"
+        state["failure"] = failure_details(exc, state["stage"])
         raise
     finally:
         signal.alarm(0)
@@ -226,8 +282,8 @@ def execute(client, request, output: Path, token: str):
             try:
                 client.beta.agents.sessions.events.create(
                     session_id, events=[{"type": "agent.session.input.cancel"}])
-            except Exception:
-                pass
+            except Exception as exc:
+                state["cancel_failure"] = failure_details(exc, "cancel")
             for attempt in range(3):
                 try:
                     client.beta.agents.sessions.delete(session_id)
@@ -235,11 +291,13 @@ def execute(client, request, output: Path, token: str):
                     break
                 except Exception as exc:
                     state["cleanup"] = "pending_manual_reconciliation"
+                    state["cleanup_failure"] = failure_details(exc, "delete")
                     if getattr(exc, "status_code", None) != 409:
                         break
                     time.sleep(2)
         else:
             state["cleanup"] = "creation_outcome_unknown_do_not_retry"
+        state["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
         write_json(output / "state.json", state)
     if state["cleanup"] != "deletion_requested":
         raise PilotError("Session cleanup pending; inspect state.json before any next run")
@@ -274,9 +332,12 @@ def main():
         print(json.dumps(state, indent=2))
     except Exception as exc:
         # Do not expose HTTP bodies, generated code or credentials in errors.
-        print(f"Pilot blocked ({type(exc).__name__}); inspect state.json if created.", file=sys.stderr)
+        print(json.dumps({"status": "blocked", "failure": failure_details(exc, "cli"),
+                          "next_action": "Inspect state.json if created; reconcile before retry"}),
+              file=sys.stderr)
         raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
     main()
+

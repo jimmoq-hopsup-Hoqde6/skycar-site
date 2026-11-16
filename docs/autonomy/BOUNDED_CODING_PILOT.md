@@ -23,6 +23,31 @@ The preflight performs no network calls and prints the task, exact source SHA, m
 
 Tests include real pinned SDK 3.49.0 serialization, streaming, success/failure handling and artifact download using a mocked HTTP transport. They are not live account/access checks. SDK 3.13.0 does not support all methods/fields needed here and must not be used.
 
+### SDK startup and redacted failure evidence
+
+The managed Work runtime reproduced a failure before any HTTP request: constructing
+the SDK's default client raised `ImportError` because the runtime uses a SOCKS
+proxy and its optional `socksio` dependency was absent. The pinned pilot
+requirements now include `socksio==1.0.0`. A regression constructs the real SDK
+with a synthetic SOCKS proxy and fake key, without contacting either the proxy or
+OpenAI. This fixes that reproduced startup failure; it does not establish the
+cause of an earlier support case whose original exception is unavailable.
+
+`state.json` now records SDK version, UTC start/end times and the failing phase.
+HTTP failures retain the integer status and a format-checked OpenAI request ID;
+session/turn IDs already obtained remain available. The successful create request
+ID is stored separately from any later failing request ID. Transport failures
+leave absent status/IDs null. Cleanup failures have separate evidence and cannot
+overwrite the original failure. CLI errors also emit only these bounded fields.
+Arbitrary exception text, bodies, headers, URLs, source and keys are never logged.
+
+The mocked SDK tests cover HTTP 400/401/403/404/422/429/500, timeout/connection
+failures, hostile error/header content, readiness failure after successful create,
+and cleanup failure. They verify exactly one create, no automatic retry or coding
+input after failed creation, and redaction of fake credentials. No live session
+or inference is needed to run them. Reconcile any saved session before a new live
+attempt; missing evidence is not permission to repeat an uncertain request.
+
 ## Activation gate
 
 Before the first live run, the owner must approve the exact reviewed controller commit, reuse of the existing GitHub `OPENAI_API_KEY`, transmission of the two named source files to OpenAI, paid session amount/billing, and temporary session cleanup. Verify the existing key has `api.agents.read`, `api.agents.write`, and `api.responses.write`; granting new key permissions requires separate approval. Never paste or retrieve the secret value into chat.
@@ -69,3 +94,4 @@ Automatic draft-PR publishing, a durable single-use job ledger, enforced monthly
 - https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted
 - https://developers.openai.com/api/docs/guides/agents-api/environments/files
 - https://developers.openai.com/api/docs/guides/agents-api/sessions
+

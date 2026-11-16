@@ -1,2 +1,5 @@
 # Pinned public SDK. No install required for the offline unit tests/preflight.
 openai==3.49.0
+# The managed Work runtime uses a SOCKS proxy; httpx2 leaves this transport optional.
+socksio==1.0.0
+
