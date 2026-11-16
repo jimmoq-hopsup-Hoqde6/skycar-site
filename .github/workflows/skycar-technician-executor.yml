@@ -1,0 +1,181 @@
+name: Skycar protected technician coding job
+# One supervised task. No schedule, issue trigger, merge, release or automatic approval.
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        options: [preflight, initialize-ledger, run]
+        default: preflight
+        required: true
+      approved_sha:
+        description: Exact reviewed current main commit
+        type: string
+        required: true
+      approved_fingerprint:
+        description: Exact technician preflight fingerprint approved for this invocation
+        type: string
+        required: false
+      budget_cents:
+        description: Approved project ceiling in US cents, maximum 500
+        type: string
+        default: '500'
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: skycar-protected-technician-executor
+  cancel-in-progress: false
+env:
+  APPROVED_SHA: ${{ inputs.approved_sha }}
+  APPROVED_FINGERPRINT: ${{ inputs.approved_fingerprint }}
+  BUDGET_CENTS: ${{ inputs.budget_cents }}
+  PROJECT_ID: ${{ vars.SKYCAR_CODING_PROJECT_ID }}
+  SKYCAR_EXECUTOR_ENABLED: ${{ vars.SKYCAR_EXECUTOR_ENABLED }}
+  PYTHONDONTWRITEBYTECODE: '1'
+jobs:
+  preflight:
+    if: github.repository == 'jimmoq-hopsup-Hoqde6/skycar-site' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify reviewed source and generate new technician request
+        env:
+          OPERATION: ${{ inputs.operation }}
+        run: |
+          test "$APPROVED_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$APPROVED_SHA"
+          python3 scripts/autonomy/executor_pipeline.py preflight \
+            --sha "$APPROVED_SHA" --project-id "$PROJECT_ID" --budget-cents "$BUDGET_CENTS" \
+            > "$RUNNER_TEMP/technician-preflight.json"
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          value=json.loads((Path(os.environ['RUNNER_TEMP'])/'technician-preflight.json').read_text())
+          if os.environ['OPERATION']=='run':
+              assert os.environ.get('SKYCAR_EXECUTOR_ENABLED')=='true', 'Executor is stopped'
+              assert value['request_fingerprint']==os.environ.get('APPROVED_FINGERPRINT'), 'Approval mismatch'
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: technician-preflight
+          path: ${{ runner.temp }}/technician-preflight.json
+          retention-days: 7
+  coding:
+    needs: preflight
+    if: inputs.operation != 'preflight'
+    environment: skycar-agent-pilot
+    permissions:
+      contents: write # Trusted controller writes only its durable ledger Git ref.
+      issues: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      artifact_id: ${{ steps.evidence.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install pinned controller dependencies before credential injection
+        run: python3 -m pip install -r scripts/autonomy/requirements-pilot.txt
+      - name: Initialize durable ledger once, without inference
+        if: inputs.operation == 'initialize-ledger'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 scripts/autonomy/executor_pipeline.py initialize-ledger
+          --sha "$APPROVED_SHA" --project-id "$PROJECT_ID" --budget-cents "$BUDGET_CENTS"
+      - name: Execute exactly one approved technician task
+        if: inputs.operation == 'run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SKYCAR_OPENAI_ORGANIZATION_ID: ${{ vars.SKYCAR_OPENAI_ORGANIZATION_ID }}
+          SKYCAR_OPENAI_CODING_KEY: ${{ secrets.SKYCAR_OPENAI_CODING_KEY }}
+          SKYCAR_OPENAI_BILLING_READ_KEY: ${{ secrets.SKYCAR_OPENAI_BILLING_READ_KEY }}
+        run: >-
+          python3 scripts/autonomy/executor_pipeline.py execute
+          --sha "$APPROVED_SHA" --project-id "$PROJECT_ID" --budget-cents "$BUDGET_CENTS"
+          --approved-fingerprint "$APPROVED_FINGERPRINT" --output "$RUNNER_TEMP/technician-evidence"
+      - name: Preserve bounded evidence even on failure
+        id: evidence
+        if: always() && inputs.operation == 'run'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: technician-coding-evidence
+          path: |
+            ${{ runner.temp }}/technician-evidence/approval.json
+            ${{ runner.temp }}/technician-evidence/run/state.json
+            ${{ runner.temp }}/technician-evidence/run/changes.json
+          retention-days: 7
+          if-no-files-found: warn
+  validation:
+    needs: coding
+    if: inputs.operation == 'run'
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      artifact_id: ${{ steps.validation.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.coding.outputs.artifact_id }}
+          path: ${{ runner.temp }}/coding-download
+          merge-multiple: true
+      - name: Run candidate and fixed acceptance without credentials or network
+        run: >-
+          python3 scripts/autonomy/executor_pipeline.py validate
+          --sha "$APPROVED_SHA" --project-id "$PROJECT_ID" --budget-cents "$BUDGET_CENTS"
+          --approved-fingerprint "$APPROVED_FINGERPRINT" --evidence "$RUNNER_TEMP/coding-download"
+          --output "$RUNNER_TEMP/technician-validation"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: validation
+        with:
+          name: technician-isolated-validation
+          path: ${{ runner.temp }}/technician-validation/
+          retention-days: 7
+  publisher:
+    needs: [coding, validation]
+    if: inputs.operation == 'run'
+    environment: skycar-agent-pilot
+    permissions:
+      contents: write # Durable ledger only; separate credential publishes the draft.
+      actions: read
+      issues: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.coding.outputs.artifact_id }}
+          path: ${{ runner.temp }}/coding-download
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.validation.outputs.artifact_id }}
+          path: ${{ runner.temp }}/validation-download
+          merge-multiple: true
+      - name: Publish a validated draft only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SKYCAR_PR_PUBLISHER_TOKEN: ${{ secrets.SKYCAR_PR_PUBLISHER_TOKEN }}
+        run: >-
+          python3 scripts/autonomy/executor_pipeline.py publish
+          --sha "$APPROVED_SHA" --project-id "$PROJECT_ID" --budget-cents "$BUDGET_CENTS"
+          --approved-fingerprint "$APPROVED_FINGERPRINT" --evidence "$RUNNER_TEMP/coding-download"
+          --validation "$RUNNER_TEMP/validation-download"

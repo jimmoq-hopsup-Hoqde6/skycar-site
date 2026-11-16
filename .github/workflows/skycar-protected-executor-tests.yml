@@ -1,0 +1,26 @@
+name: Skycar protected executor isolation tests
+on:
+  pull_request:
+    paths:
+      - 'scripts/autonomy/**'
+      - 'tests/autonomy/**'
+      - '.github/workflows/skycar-technician-executor.yml'
+      - '.github/workflows/skycar-protected-executor-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-candidate-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install pinned SDK for simulated coding and billing only
+        run: python3 -m pip install -r scripts/autonomy/requirements-pilot.txt
+      - name: Verify passing and failing candidates in real isolated containers
+        env:
+          SKYCAR_DOCKER_TESTS: '1'
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tests/autonomy -p 'test_executor_docker.py' -v
