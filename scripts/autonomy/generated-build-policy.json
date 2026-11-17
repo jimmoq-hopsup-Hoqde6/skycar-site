@@ -4,7 +4,7 @@
   "branch_prefix": "agent/",
   "files": {
     ".github/workflows/care-database.yml": "8a096a7de62274a76b9daad3307d74c2c02ebe5cbeec6ec2fed0619ee0350a8a",
-    ".github/workflows/care-entry-ui.yml": "61da2fe47e0130778659dc5a049d07cd9acdb9b96b711f1df77544b17db1165a",
+    ".github/workflows/care-entry-ui.yml": "d4855a5c4ec310f950a7f52c3ee7e772b6bdaa578f6fb436fa57f19acef6dfe5",
     ".github/workflows/ci.yml": "1c682f470e18f07fbd244702455f3d9e681c6ec64075e9c08908c4b0b57ed57f",
     ".github/workflows/garage-care-integration.yml": "9ed93eb35541d6560d997121d1ab1609694e62dc9e1d1e8c52007ce521559e30",
     ".github/workflows/garage-postgres.yml": "95c256a0e4b8acfc8a428bf8899777879e63044abb4136671abf78463970a1a7",
