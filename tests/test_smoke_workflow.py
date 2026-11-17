@@ -44,7 +44,7 @@ class SmokeWorkflowTest(unittest.TestCase):
         return json.dumps({'output': [{'content': [{'type': 'output_text', 'text': text}]}]}).encode()
 
     def test_static_controls(self):
-        for control in ['workflow_dispatch:', 'permissions: {}', "if: github.ref == 'refs/heads/main' && github.run_attempt == 1", 'environment: skycar-agent-pilot', '${{ secrets.SKYCAR_OPENAI_SMOKE_KEY }}', 'timeout-minutes: 5']:
+        for control in ['workflow_dispatch:', 'permissions: {}', "github.ref == 'refs/heads/main' && github.run_attempt == 1", "!startsWith(github.head_ref || github.ref_name, 'agent/')", 'environment: skycar-agent-pilot', '${{ secrets.SKYCAR_OPENAI_SMOKE_KEY }}', 'timeout-minutes: 5']:
             self.assertIn(control, TEXT)
         self.assertNotIn('uses:', TEXT)
         self.assertNotIn('${{ secrets.OPENAI_API_KEY }}', TEXT)

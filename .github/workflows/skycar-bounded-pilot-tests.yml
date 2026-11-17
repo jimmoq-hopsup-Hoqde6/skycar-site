@@ -10,6 +10,7 @@ permissions:
   contents: read
 jobs:
   offline-policy:
+    if: "!startsWith(github.head_ref || github.ref_name, 'agent/')"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

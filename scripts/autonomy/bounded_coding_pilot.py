@@ -22,6 +22,7 @@ import stat
 import subprocess
 import sys
 import time
+from typing import NamedTuple
 
 REPOSITORY = "jimmoq-hopsup-Hoqde6/skycar-site"
 MODEL = "gpt-6-astra"
@@ -56,6 +57,17 @@ Never alter tests simply to hide a failure. Run the requested tests and produce 
 
 class PilotError(Exception):
     pass
+
+
+class TaskSpec(NamedTuple):
+    task_id: str
+    read_paths: tuple
+    write_paths: tuple
+    prompt: str
+
+
+def task_spec(task=None):
+    return task if task is not None else TaskSpec(TASK_ID, ALLOWED_FILES, ALLOWED_FILES, TASK)
 
 
 def sdk_version():
@@ -105,13 +117,14 @@ def git(root, *args):
     return subprocess.check_output(["git", "-C", str(root), *args], stderr=subprocess.DEVNULL)
 
 
-def source_snapshot(root: Path, expected_sha: str):
+def source_snapshot(root: Path, expected_sha: str, *, task=None):
+    spec = task_spec(task)
     if not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
         raise PilotError("Expected a full lowercase 40-character commit SHA")
     if git(root, "rev-parse", "HEAD").decode().strip() != expected_sha:
         raise PilotError("Checkout does not match approved SHA")
     files = {}
-    for path in ALLOWED_FILES:
+    for path in spec.read_paths:
         entry = git(root, "ls-tree", expected_sha, "--", path).decode().split()
         if len(entry) != 4 or entry[0] != "100644" or entry[1] != "blob":
             raise PilotError("Source must be a tracked regular file")
@@ -124,10 +137,11 @@ def source_snapshot(root: Path, expected_sha: str):
     return files
 
 
-def build_request(files: dict, sha: str, cents: int):
+def build_request(files: dict, sha: str, cents: int, *, task=None):
+    spec = task_spec(task)
     if type(cents) is not int or not 1 <= cents <= MAX_CENTS:
         raise PilotError("Budget must be 1..500 US cents")
-    if set(files) != set(ALLOWED_FILES):
+    if set(files) != set(spec.read_paths):
         raise PilotError("Unexpected source scope")
     return {
         "agent": {"model": MODEL, "instructions": INSTRUCTIONS,
@@ -139,12 +153,12 @@ def build_request(files: dict, sha: str, cents: int):
                        "data": base64.b64encode(content).decode("ascii")}
                       for path, content in files.items()],
         },
-        "metadata": {"repository": REPOSITORY, "commit": sha, "task": TASK_ID},
+        "metadata": {"repository": REPOSITORY, "commit": sha, "task": spec.task_id},
         "spend_control": {"limit": cents},
     }
 
 
-def validate_project_budget(receipt, request, *, expected_project_id, now=None):
+def validate_project_budget(receipt, request, *, expected_project_id, now=None, task=None):
     """Validate an operator observation, not proof, authorization or a billing guarantee.
 
     Independently inspect the Platform project's enforced hard limit before every
@@ -168,7 +182,7 @@ def validate_project_budget(receipt, request, *, expected_project_id, now=None):
         ceiling = request["spend_control"]["limit"]
         metadata = request["metadata"]
         matches_source = (receipt["sha"] == metadata["commit"]
-                          and receipt["task"] == metadata["task"] == TASK_ID)
+                          and receipt["task"] == metadata["task"] == task_spec(task).task_id)
     except (KeyError, TypeError) as exc:
         raise PilotError("Missing request budget or source metadata") from exc
     if not matches_source or not re.fullmatch(r"[0-9a-f]{40}", receipt["sha"]):
@@ -255,19 +269,27 @@ def load_project_budget(path, root):
             os.close(directory)
 
 
-def fingerprint(request, project_budget=None):
+def fingerprint(request, project_budget=None, *, task=None, provider_project_id=None):
     """Bind approval to exact source bytes, task, model, network and budget."""
-    bound = {"request": request, "input": TASK}
+    prompt = task_spec(task).prompt
+    bound = {"request": request, "input": prompt}
     if project_budget is not None:
         bound = {"request": {k: v for k, v in request.items() if k != "spend_control"},
                  "requested_budget_cents": request["spend_control"]["limit"],
-                 "input": TASK, "budget_mode": PROJECT_BUDGET_MODE,
+                 "input": prompt, "budget_mode": PROJECT_BUDGET_MODE,
                  "project_budget": project_budget}
+    if provider_project_id is not None:
+        if project_budget is not None or not re.fullmatch(r"proj_[A-Za-z0-9]+", provider_project_id):
+            raise PilotError("Invalid provider budget selection")
+        bound = {"request": {k: v for k, v in request.items() if k != "spend_control"},
+                 "input": prompt, "requested_budget_cents": request["spend_control"]["limit"],
+                 "budget_mode": "provider_verified_project_hard_limit", "project_id": provider_project_id}
     encoded = json.dumps(bound, sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
-def validate_artifact(raw: bytes):
+def validate_artifact(raw: bytes, *, task=None):
+    spec = task_spec(task)
     if len(raw) > MAX_ARTIFACT_BYTES:
         raise PilotError("Artifact exceeds size limit")
     def unique(pairs):
@@ -283,21 +305,21 @@ def validate_artifact(raw: bytes):
         raise PilotError("Invalid artifact JSON") from exc
     if not isinstance(result, dict) or set(result) != {"task_id", "files"}:
         raise PilotError("Unexpected artifact fields")
-    if result["task_id"] != TASK_ID or not isinstance(result["files"], list):
+    if result["task_id"] != spec.task_id or not isinstance(result["files"], list):
         raise PilotError("Wrong task or file list")
     files = {}
     for item in result["files"]:
         if not isinstance(item, dict) or set(item) != {"path", "content"}:
             raise PilotError("Unexpected file fields")
         path, content = item["path"], item["content"]
-        if not isinstance(path, str) or path not in ALLOWED_FILES or path in files:
+        if not isinstance(path, str) or path not in spec.write_paths or path in files:
             raise PilotError("Disallowed or duplicate output path")
         if not isinstance(content, str) or "\0" in content:
             raise PilotError("Output must be UTF-8 text")
         if not content or len(content.encode("utf-8")) > MAX_FILE_BYTES:
             raise PilotError("Output file exceeds text/size limits")
         files[path] = content
-    if set(files) != set(ALLOWED_FILES):
+    if set(files) != set(spec.write_paths):
         raise PilotError("Artifact must contain both approved files")
     return files
 
@@ -309,25 +331,42 @@ def write_json(path, value):
     temp.replace(path)
 
 
-def execute(client, request, output: Path, token: str, *, project_budget=None):
+def execute(client, request, output: Path, token: str, *, project_budget=None,
+            task=None, budget_verifier=None, provider_project_id=None):
+    spec = task_spec(task)
+    provider = budget_verifier is not None
+    if provider != (provider_project_id is not None) or (provider and project_budget is not None):
+        raise PilotError("Provider mode requires a verifier and exclusive project selection")
+    if provider and getattr(client, "project", None) != provider_project_id:
+        raise PilotError("Coding client project mismatch")
     receipt = None
     if project_budget is not None:
+        options = {"task": task} if task is not None else {}
         receipt = validate_project_budget(project_budget, request,
-                                          expected_project_id=getattr(client, "project", None))
-    if token != fingerprint(request, project_budget):
+                                          expected_project_id=getattr(client, "project", None), **options)
+    if token != fingerprint(request, project_budget, task=task, provider_project_id=provider_project_id):
         raise PilotError("Request fingerprint does not match exact reviewed request")
+    def verify_provider():
+        if getattr(client, "project", None) != provider_project_id:
+            raise PilotError("Coding client project changed")
+        proof = budget_verifier(provider_project_id, request["spend_control"]["limit"])
+        from executor_billing import validate_proof
+        return validate_proof(proof, provider_project_id, request["spend_control"]["limit"])
+    proof = verify_provider() if provider else None
     api_request = deepcopy(request)
-    if receipt is not None:
+    if receipt is not None or provider:
         del api_request["spend_control"]
     # Exclusive output directory prevents overwriting evidence, not cross-run replay.
     # External owner approval and run reconciliation are mandatory for every invocation.
     output.mkdir(parents=False, exist_ok=False)
-    state = {"task": TASK_ID, "sha": request["metadata"]["commit"],
+    state = {"task": spec.task_id, "sha": request["metadata"]["commit"],
              "request_fingerprint": token, "status": "creation_pending", "session_id": None,
              "turn_id": None, "cleanup": "not_started", "stage": "session_create",
              "sdk_version": sdk_version(), "started_at_utc": datetime.now(timezone.utc).isoformat()}
     if receipt is not None:
         state.update(budget_mode=PROJECT_BUDGET_MODE, project_budget=receipt)
+    if provider:
+        state.update(budget_mode="provider_verified_project_hard_limit", provider_budget=proof)
     write_json(output / "state.json", state)
     def stage(name):
         state["stage"] = name
@@ -345,7 +384,7 @@ def execute(client, request, output: Path, token: str, *, project_budget=None):
         state.update(session_id=session_id, status="session_created",
                      create_request_id=safe_request_id(getattr(session, "_request_id", None)))
         write_json(output / "state.json", state)
-        if receipt is None and (session.spend_control is None
+        if receipt is None and not provider and (session.spend_control is None
                                or session.spend_control.limit != request["spend_control"]["limit"]):
             raise PilotError("API did not confirm requested session budget")
         # A created hosted session is not necessarily ready for input yet.
@@ -366,10 +405,14 @@ def execute(client, request, output: Path, token: str, *, project_budget=None):
         state["submission_key"] = "skycar-" + session_id + "-" + token
         stage("turn_stream")
         if receipt is not None:
+            options = {"task": task} if task is not None else {}
             validate_project_budget(receipt, request,
-                                    expected_project_id=getattr(client, "project", None))
+                                    expected_project_id=getattr(client, "project", None), **options)
+        if provider:
+            state["provider_budget"] = verify_provider()
+            write_json(output / "state.json", state)
         with client.beta.agents.sessions.stream(
-            session_id, input=TASK, idempotency_key=state["submission_key"]
+            session_id, input=spec.prompt, idempotency_key=state["submission_key"]
         ) as stream:
             # Let the pinned SDK collect before consuming events, without printing them.
             result = stream.get_final_result()  # Raises on failed/cancelled root turns.
@@ -398,7 +441,7 @@ def execute(client, request, output: Path, token: str, *, project_budget=None):
                 if len(raw) > MAX_ARTIFACT_BYTES:
                     raise PilotError("Artifact exceeds size limit")
         stage("artifact_validation")
-        validate_artifact(bytes(raw))
+        validate_artifact(bytes(raw), task=task)
         raw_path.write_bytes(raw)
         state["artifact_sha256"] = hashlib.sha256(raw).hexdigest()
         state["status"] = "artifact_validated_NOT_TESTED"

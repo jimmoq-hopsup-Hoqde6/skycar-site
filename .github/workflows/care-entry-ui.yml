@@ -5,11 +5,12 @@ permissions:
   contents: read
 jobs:
   care-entry-ui:
+    if: "!startsWith(github.head_ref || github.ref_name, 'agent/')"
     strategy:
       fail-fast: false
       matrix:
         revision: [head, integration]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5

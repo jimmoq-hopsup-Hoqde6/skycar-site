@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   backup:
-    if: github.repository == 'jimmoq-hopsup-Hoqde6/skycar-site' && github.ref == 'refs/heads/fix/phone-test-delivery'
+    if: "!startsWith(github.head_ref || github.ref_name, 'agent/') && (github.repository == 'jimmoq-hopsup-Hoqde6/skycar-site' && github.ref == 'refs/heads/fix/phone-test-delivery')"
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: skycar-staging
