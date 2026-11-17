@@ -11,7 +11,7 @@ import tempfile
 import time
 import uuid
 from bounded_coding_pilot import PilotError, source_snapshot, validate_artifact
-from technician_tasks import select, TEST_COMMAND
+from technician_tasks import select, TEST_COMMAND, require_production_change
 from executor_acceptance import CASES, challenges, verify_responses
 
 IMAGE = 'node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54'
@@ -63,6 +63,7 @@ def validate_run(root, sha, task_id, evidence, fingerprint, run_id):
             or state.get('artifact_sha256') != digest):
         raise PilotError("Artifact does not match cleaned-up authorized coding run")
     files = validate_artifact(raw, task=spec)
+    require_production_change(original, files)
     if all(content.encode() == original[path] for path, content in files.items()):
         raise PilotError("Task produced no code change")
     for content in files.values():

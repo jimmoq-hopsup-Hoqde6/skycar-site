@@ -21,6 +21,17 @@ complete files in an artifact limited to 160,000 bytes:
 * `src/server/technician/http.mjs`
 * `tests/unit/technician-commands.test.mjs`
 
+Before inference, preflight checks the production baseline against a reviewed SHA-256.
+Before any candidate execution and again in the publisher, the complete production
+file must equal that baseline with exactly one insertion:
+`requireTechnicianAccount(result.account,expectedAccount);` before result decoding.
+No other production edits or formatting changes are accepted. This fixed-task
+restriction prevents candidate code from replacing JSON serialization, stdout or
+observation globals to forge probe evidence. The in-process probe alone cannot
+prove arbitrary generated JavaScript safe. A new baseline or broader task requires
+a new independently reviewed task definition; the policy never refreshes itself.
+Generated tests remain untrusted and run only in the isolated unit container.
+
 Six read-only dependency paths, the task prompt and test command are fixed in
 `scripts/autonomy/technician_tasks.py`. Issue bodies never become prompts,
 commands or path selectors. Issue #101 must remain open and carry both

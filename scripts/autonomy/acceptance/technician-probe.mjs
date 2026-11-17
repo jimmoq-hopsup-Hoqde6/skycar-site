@@ -1,5 +1,6 @@
 // This is an untrusted-process adapter, not the authority that decides acceptance.
-// The Python supervisor outside the container owns every assertion and expected value.
+// Only run after the trusted validator enforces the exact pinned production edit.
+// Candidate-controlled observations alone cannot prove arbitrary JavaScript safe.
 import {readFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
 const input = JSON.parse(readFileSync(0, 'utf8'));

@@ -1,4 +1,5 @@
 """Reviewed task registry. Issue contents never become prompts or path selectors."""
+import hashlib
 from bounded_coding_pilot import PilotError, TaskSpec
 
 TASK_ID = "technician-command-account-v1"
@@ -13,7 +14,11 @@ TEST_COMMAND = ("node", "--test", "tests/unit/technician-commands.test.mjs")
 PROMPT = '''Implement one narrow technician HTTP response validation fix for Skycar issue #101.
 In createTechnicianHandlers().command(), require the returned result.account to match
 the x-skycar-account precondition, after validating its UUID and before accepting data.
-Use the existing requireTechnicianAccount helper. A valid but different account must
+Use the existing requireTechnicianAccount helper. The production file must be byte-for-byte
+identical to the supplied baseline except for inserting exactly this line immediately
+before `let data;try{data=readTechnicianCommandResult(...)` (retain the full existing line):
+      requireTechnicianAccount(result.account,expectedAccount);
+No other production edit, formatting change or instrumentation is permitted. A valid but different account must
 return a private 403 FORBIDDEN response, with no success data or foreign account header.
 Do not change authorization in repositories, database schemas, roles, transitions,
 or any valid same-account responses. Retain all existing tests, and add regression
@@ -44,3 +49,26 @@ def approved_issue(issue):
         raise PilotError("Technician issue lacks explicit task approval labels")
     if labels & {"production", "payment", "customer-data", "secrets", "deployment", "permission-change"}:
         raise PilotError("Protected task label blocks execution")
+
+
+# This fixed task permits exactly one reviewed production transformation. The
+# in-process probe cannot establish integrity against arbitrary JavaScript.
+PRODUCTION_PATH = WRITE_PATHS[0]
+BASELINE_SHA256 = 'a685acabe740a538982e0de3f5befb834245a4d58eb22aef51274c05176e0a79'
+COMMAND_ANCHOR = b"      let data;try{data=readTechnicianCommandResult(result.data,key,body.action);}catch{throw technicianFault('UNAVAILABLE');}\n"
+ACCOUNT_GUARD = b"      requireTechnicianAccount(result.account,expectedAccount);\n"
+
+
+def require_production_baseline(original):
+    baseline = original[PRODUCTION_PATH]
+    if (hashlib.sha256(baseline).hexdigest() != BASELINE_SHA256
+            or baseline.count(COMMAND_ANCHOR) != 1):
+        raise PilotError('Technician production baseline requires a new independent task review')
+    return baseline
+
+
+def require_production_change(original, files):
+    baseline = require_production_baseline(original)
+    expected = baseline.replace(COMMAND_ANCHOR, ACCOUNT_GUARD + COMMAND_ANCHOR, 1)
+    if files[PRODUCTION_PATH].encode('utf-8') != expected:
+        raise PilotError('Technician production change differs from the exact reviewed insertion')

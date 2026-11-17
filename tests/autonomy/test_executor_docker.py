@@ -72,6 +72,10 @@ class DockerAcceptance(unittest.TestCase):
     def test_zero_exit_without_assertions_cannot_publish(self):
         self.early_exit_candidate('process.exit(0);')
 
+    def test_serialization_forgery_cannot_execute_or_publish(self):
+        from test_production_integrity import FORGERY
+        self.early_exit_candidate(FORGERY)
+
     def test_forged_passing_summary_cannot_publish(self):
         self.early_exit_candidate('console.log("TAP version 13\\n1..17\\n# pass 17\\n# fail 0"); process.exit(0);')
 

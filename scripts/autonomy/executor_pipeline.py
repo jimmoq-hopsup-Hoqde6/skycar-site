@@ -15,12 +15,13 @@ from executor_github import GitHub, GitHubError, PREFIX
 from executor_ledger import Ledger
 from executor_build_guard import policy_digest, require_build_attestation
 from executor_validation import read_json, validate, validate_run, verify_validation
-from technician_tasks import select, approved_issue
+from technician_tasks import select, approved_issue, require_production_baseline
 
 
 def prepare(root, sha, task_id, project, cents):
     spec = select(task_id)
     files = pilot.source_snapshot(root, sha, task=spec)
+    require_production_baseline(files)
     request = pilot.build_request(files, sha, cents, task=spec)
     token = pilot.fingerprint(request, task=spec, provider_project_id=project)
     return spec, request, token
