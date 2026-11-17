@@ -29,7 +29,7 @@ def plan(issue):
             "reason": "staged; no executor connected"}
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(prog="queue_dry_run.py")
     parser.add_argument("issues_json", type=Path)
     args = parser.parse_args()
     try:
