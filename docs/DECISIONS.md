@@ -140,3 +140,46 @@ A new journey projection references either the existing guest intake or existing
 Operations require the existing server-granted admin role. No existing customer is silently promoted. Expert identity, service coverage and insurance validity are entered and reviewed by operations; availability is only confirmed after atomic overlap checks. Customer selection is a booking request until operations confirms it. Repeated commands reuse their keys and never create duplicate bookings.
 
 Money remains a separate lifecycle: there is no charge, payout, refund, paid badge or live Stripe checkout without a configured provider. Ravin trial links are not APIs. Manual review supports the working service path while official Ravin credentials/contracts remain a setup dependency. No external notifications are sent by this build.
+
+## D-009 — Owner risk acceptance for one supervised coding pilot
+Date: 2026-11-19
+Status: ACCEPTED OWNER POLICY DECISION; implementation pending owner review/merge;
+individual run acceptance NOT SIGNED
+
+Decision:
+Marcel (@jimmoq-hopsup-Hoqde6), repository owner, accepts responsibility for the
+remaining external-build security risk for one supervised technician coding pilot
+only, instead of requiring an independent human attestation for that pilot. He has
+no trusted independent reviewer available and does not authorize granting access
+to an unknown reviewer. This decision authorizes preparing the alternative gate;
+it is not an attestation that the checklist is complete or authorization to run.
+
+The existing independent-reviewer attestation remains available unchanged. The
+alternative is explicitly `attestation_type=owner_risk_acceptance` and
+`independent_review=false`, signed by Marcel through the protected environment
+only after his checklist. It binds current main SHA, build policy, exact budget
+(1–500 US cents), project, task, request fingerprint and one GitHub Actions run ID,
+expires within 24 hours, and permits a draft PR only. A durable atomic reservation
+consumes this exception before session creation. Failure, uncertainty, a later
+month, a changed SHA or renewed timestamps cannot authorize a second owner pilot.
+Publication in that same run must present the identical acceptance. Future owner
+exceptions require a new decision and reviewed implementation, preferably with a
+vetted independent reviewer.
+
+Before signing, Marcel must confirm unused GitHub apps (Netlify, ChatGPT Codex
+Connector, Cursor, Grok and Lovable if installed) are suspended or uninstalled;
+Vercel skycar-v2-staging Preview cannot read Supabase secret/service-role keys or
+other server secrets and preview branch tracking is off; and all three pilot
+credentials are dedicated and least privilege. See the executor runbook for the
+complete owner checklist and unsigned template.
+
+Required owner Actions approval, administrator bypass disabled, main-only pilot
+environment, runtime provider hard-limit verification that fails closed,
+network-disabled validation, two-file allowlist and separate draft-only publisher
+remain unchanged. No automatic merge, deployment, hosted migration, live payment
+or unattended/repeated execution is authorized. Previous AI reviews through
+Moogly88 are not independent and must not be cited as independent approval.
+
+Marcel will review and merge the gate PR himself, create/save any individual
+acceptance himself, and separately approve the single run in GitHub Actions.
+No AI may sign or install an owner acceptance on his behalf.
