@@ -13,7 +13,7 @@ import bounded_coding_pilot as pilot
 from executor_billing import ProviderBilling
 from executor_github import GitHub, GitHubError, PREFIX
 from executor_ledger import Ledger
-from executor_build_guard import policy_digest, require_build_attestation
+from executor_build_guard import policy_digest, require_build_attestation, owner_acceptance_marker
 from executor_validation import read_json, validate, validate_run, verify_validation
 from technician_tasks import select, approved_issue, require_production_baseline
 
@@ -44,6 +44,13 @@ def require_approval(actual, expected):
         raise pilot.PilotError('Exact request fingerprint not approved')
 
 
+def build_authorization(root, sha, task_id, project, cents, token, run_id):
+    require_build_attestation(root, sha, context={
+        'task_id': task_id, 'project_id': project, 'budget_cents': cents,
+        'request_fingerprint': token, 'run_id': run_id})
+    return owner_acceptance_marker()
+
+
 def coding_run(root, sha, task_id, project, cents, token, output, github, coding_client, billing):
     spec, request, actual = prepare(root,sha,task_id,project,cents)
     require_approval(actual,token)
@@ -52,17 +59,18 @@ def coding_run(root, sha, task_id, project, cents, token, output, github, coding
         raise pilot.PilotError('Approved source is no longer current main')
     github.environment()
     approved_issue(github.request('GET',PREFIX+'/issues/101'))
-    require_build_attestation(root, sha)
+    acceptance = build_authorization(root, sha, task_id, project, cents, token, run_id)
     billing.verify(project,cents)
     ledger = Ledger(github,project)
     output = Path(output)
     output.mkdir(exist_ok=False,mode=0o700)
-    key = ledger.claim(task_id,sha,token,cents,run_id)
+    key = ledger.claim(task_id,sha,token,cents,run_id,owner_acceptance=acceptance)
     approval = {'task':task_id,'sha':sha,'project_id':project,'budget_cents':cents,
                 'request_fingerprint':token,'run_id':run_id,'ledger_key':key}
     pilot.write_json(output/'approval.json',approval)
     def verified_budget(selected_project, requested):
-        require_build_attestation(root, sha)
+        if build_authorization(root, sha, task_id, selected_project, requested, token, run_id) != acceptance:
+            raise pilot.PilotError('Build authorization changed after durable reservation')
         return billing.verify(selected_project, requested)
     state = pilot.execute(coding_client,request,output/'run',token,task=spec,
                           budget_verifier=verified_budget,provider_project_id=project)
@@ -95,7 +103,7 @@ def publish(root, sha, task_id, project, cents, token, evidence, validation, git
         raise pilot.PilotError('Main advanced; do not silently rebase an approved task')
     ledger_github.environment()
     approved_issue(ledger_github.request('GET',PREFIX+'/issues/101'))
-    require_build_attestation(root, sha)
+    acceptance = build_authorization(root, sha, task_id, project, cents, token, run_id)
     _, _, files, digest = validate_run(root,sha,task_id,Path(evidence)/'run',token,run_id)
     receipt = read_json(Path(validation)/'validation.json',4096)
     verify_validation(receipt,task_id,sha,token,run_id,digest)
@@ -107,6 +115,8 @@ def publish(root, sha, task_id, project, cents, token, evidence, validation, git
     ledger = Ledger(ledger_github,project)
     key = task_id+'@'+sha
     _, _, entry = ledger.entry(key,token,run_id)
+    if entry.get('owner_risk_acceptance') != acceptance:
+        raise pilot.PilotError('Publication authorization differs from the durable reservation')
     if entry.get('artifact_sha256') != digest:
         raise pilot.PilotError('Candidate differs from durable coding evidence')
     branch = 'agent/'+task_id+'/'+sha[:12]
@@ -123,7 +133,8 @@ def publish(root, sha, task_id, project, cents, token, evidence, validation, git
     except GitHubError as exc:
         if exc.status_code != 404:
             raise
-        require_build_attestation(root, sha)
+        if build_authorization(root, sha, task_id, project, cents, token, run_id) != acceptance:
+            raise pilot.PilotError('Build authorization changed before branch creation')
         github.request('POST',PREFIX+'/git/refs',{'ref':'refs/heads/'+branch,'sha':commit})
     else:
         if existing.get('object',{}).get('sha') != commit:
@@ -145,6 +156,9 @@ def publish(root, sha, task_id, project, cents, token, evidence, validation, git
             'head':branch,'base':'main','draft':True,'maintainer_can_modify':False,
             'body':f'Bounded AI task `{task_id}` for #101.\n\nBase: `{sha}`. '
                    f'Artifact SHA-256: `{digest}`.\n\n'
+                   + ('Build risk accepted by Marcel (@jimmoq-hopsup-Hoqde6) under D-009; '
+                      'owner_risk_acceptance, independent_review=false. One supervised pilot only.\n\n'
+                      if acceptance is not None else '') +
                    'The scoped Node tests and fixed operator acceptance passed in a pinned '
                    'network-disabled container without credentials. Full application CI and '
                    'independent QA/security review remain required. No approval, merge, live '
@@ -178,7 +192,7 @@ def main():
                     'project_id':args.project_id,'budget_cents':args.budget_cents,'request_fingerprint':token,
                     'read_paths':spec.read_paths,'write_paths':spec.write_paths,
                     'build_policy_sha256':policy_digest(args.root,args.sha),
-                    'publication':'Requires current independent live build-security attestation',
+                    'publication':'Requires current independent attestation or one-run owner risk acceptance (D-009)',
                     'billing':'Live provider hard-limit/cost verification required before execution'}
         elif args.operation=='validate':
             require_approval(token,args.approved_fingerprint)

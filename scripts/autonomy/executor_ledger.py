@@ -13,6 +13,13 @@ from bounded_coding_pilot import MAX_CENTS, PilotError
 REF = "notes/skycar-executor-ledger-v1"
 
 
+def validate_owner_marker(marker):
+    if (type(marker) is not dict or set(marker) != {'decision_id', 'attestation_sha256'}
+            or marker['decision_id'] != 'D-009' or not isinstance(marker['attestation_sha256'], str)
+            or not re.fullmatch(r'[a-f0-9]{64}', marker['attestation_sha256'])):
+        raise PilotError('Invalid durable owner acceptance')
+
+
 def month_now():
     return datetime.now(timezone.utc).strftime("%Y-%m")
 
@@ -27,6 +34,7 @@ def validate_state(state, project):
         raise PilotError("Missing active task record")
     totals = {}
     pending = []
+    owner_runs = 0
     for key, entry in state["tasks"].items():
         if (not isinstance(key, str) or type(entry) is not dict
                 or not re.fullmatch(r"[a-z0-9-]+@[a-f0-9]{40}", key)
@@ -38,6 +46,9 @@ def validate_state(state, project):
                 or not re.fullmatch(r"\d+", entry.get("run_id", ""))):
             raise PilotError("Invalid task ledger entry")
         totals[entry["month"]] = totals.get(entry["month"], 0) + entry["budget_cents"]
+        if 'owner_risk_acceptance' in entry:
+            validate_owner_marker(entry['owner_risk_acceptance'])
+            owner_runs += 1
         if entry['phase'] != 'published':
             pending.append(key)
         if entry['phase'] in ('coded','publishing','published') and (
@@ -52,13 +63,19 @@ def validate_state(state, project):
             raise PilotError('Missing draft PR identity')
     if pending != ([] if state['active'] is None else [state['active']]):
         raise PilotError('Unreconciled task is missing its global lease')
+    if owner_runs > 1:
+        raise PilotError('Owner decision permits only one pilot across ledger history')
     if totals != state["months"] or any(type(n) is not int or not 0 <= n <= MAX_CENTS for n in totals.values()):
         raise PilotError("Ledger cumulative reservations are inconsistent")
     return state
 
 
-def reserve(state, project, task, sha, fingerprint, cents, run_id, month):
+def reserve(state, project, task, sha, fingerprint, cents, run_id, month, owner_acceptance=None):
     validate_state(state, project)
+    if owner_acceptance is not None:
+        validate_owner_marker(owner_acceptance)
+        if any('owner_risk_acceptance' in entry for entry in state['tasks'].values()):
+            raise PilotError('Owner pilot acceptance is consumed, including failed or uncertain runs')
     key = task + "@" + sha
     if (state["active"] is not None or key in state["tasks"]
             or state["months"] and month < max(state["months"])
@@ -68,6 +85,8 @@ def reserve(state, project, task, sha, fingerprint, cents, run_id, month):
     result = deepcopy(state)
     result["tasks"][key] = {"fingerprint": fingerprint, "budget_cents": cents,
                             "run_id": run_id, "month": month, "phase": "reserved"}
+    if owner_acceptance is not None:
+        result['tasks'][key]['owner_risk_acceptance'] = deepcopy(owner_acceptance)
     result["active"] = key
     result["months"][month] = result["months"].get(month, 0) + cents
     validate_state(result, project)
@@ -125,9 +144,9 @@ class Ledger:
         self.github.request("PATCH", PREFIX + "/git/refs/" + REF, {"sha": sha, "force": False})
         return sha
 
-    def claim(self, task, sha, fingerprint, cents, run_id):
+    def claim(self, task, sha, fingerprint, cents, run_id, owner_acceptance=None):
         parent, state = self.load()
-        state, key = reserve(state, self.project, task, sha, fingerprint, cents, run_id, month_now())
+        state, key = reserve(state, self.project, task, sha, fingerprint, cents, run_id, month_now(), owner_acceptance)
         self.save(parent, state)
         return key
 

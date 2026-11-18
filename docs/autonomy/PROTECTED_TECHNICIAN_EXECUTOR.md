@@ -75,7 +75,7 @@ update, never an automatic refresh during execution.
 Committed exclusions alone do not attest external integration settings. Before
 any inference and again before publication/ref creation, the controller requires
 `SKYCAR_GENERATED_BUILD_ATTESTATION` from the protected environment's variables.
-An independent reviewer must audit all connected build/deploy integrations,
+Under the unchanged independent-review path, a reviewer must audit all connected build/deploy integrations,
 confirm that generated branches cannot execute with application, deployment,
 OIDC or automation-bypass credentials, and record the exact current-main SHA and
 preflight `build_policy_sha256`. This is a protected human attestation, not a
@@ -102,8 +102,109 @@ The protected environment variable is a JSON object with exactly these fields
 
 The reviewer must differ from the repository owner. Retain the existing required
 environment review and no-admin-bypass controls; the JSON does not replace them.
+This original schema and its validation remain unchanged. The sole alternative is
+the explicit D-009 owner exception described below; owner acceptance must never be
+represented as independent review.
 Source for Vercel's branch control:
 https://vercel.com/docs/project-configuration/git-configuration#gitdeploymentenabled
+
+### D-009 — one-run owner risk acceptance (unsigned until Marcel signs)
+
+Marcel (@jimmoq-hopsup-Hoqde6) accepted responsibility for the remaining build-security
+risk in owner decision D-009 in docs/DECISIONS.md. He authorized preparing this gate
+change, not merging it, saving an attestation or running a paid task. Previous AI
+reviews posted through Moogly88 are **not independent**. The owner exception does
+not waive runtime billing verification or any execution, isolation or publication
+control. No live API, deployment, migration or payment is authorized by this PR.
+
+Owner checklist — Marcel must personally complete all items before signing:
+
+- [ ] Unused GitHub Apps are uninstalled or suspended: Netlify, ChatGPT Codex
+  Connector, and Cursor, Grok and Lovable if still installed. Check installation
+  status, not merely a disconnected chat. Disabling Codex Connector can remove
+  this chat's repository access; finish reviewing this PR first. Do not retain
+  unused app access just to let the assistant continue operating.
+- [ ] Vercel `skycar-v2-staging` Preview cannot read the Supabase secret/service-role
+  key or other server secrets, including shared/branch-specific Preview variables
+  and inherited settings. Verify names/scopes without displaying values. Remove
+  server-secret availability from Preview, not just the branch build trigger.
+  Preview Branch Tracking is off. Generated `agent/**` deployments remain disabled.
+- [ ] The coding key is dedicated to the selected pilot project; the separate
+  billing Admin key has only required read access; the publisher credential is
+  dedicated and restricted to this repository's Contents/PR writes, with no
+  approval/bypass or administration privileges. None is reused by other workloads.
+  Actual runtime provider hard-limit/cost reads must still succeed; screenshots,
+  checklist statements and key presence do not replace that check.
+
+Signing sequence, after Marcel reviews and merges this gate PR himself:
+
+1. Keep paid execution stopped while completing the checklist. Use the **new
+   merged current-main SHA**, never the old `85308251` or this PR's unmerged SHA.
+   Run credential-free `preflight` on that SHA to obtain the exact policy digest
+   and request fingerprint for the selected project and budget (at most 500 cents).
+   Do not reinitialize or reset the existing ledger.
+2. When ready for the separately authorized single run, Marcel controls enabling
+   the stop switch and dispatching `operation=run` with that exact SHA, budget and
+   fingerprint. It will wait at the existing protected coding environment gate.
+   Do **not** approve it yet. Copy its numeric Actions run ID; the acceptance must
+   name that run, not the preflight's ID. A run ID is available before paid coding.
+3. After personally completing the checklist, Marcel fills the unsigned template
+   below and records his decision/evidence in issue #120. He creates/saves
+   `SKYCAR_GENERATED_BUILD_ATTESTATION` himself as a **protected environment
+   variable**, not a repository variable or secret. The `reviewer` field names
+   him as the accepting owner, not an independent reviewer. This protected manual
+   record is the sign-off; it is not a cryptographic signature or an AI statement
+   on his behalf. No assistant may create or save it for him.
+4. Marcel separately approves the waiting coding job in GitHub Actions. The
+   publisher requires the existing second environment approval. Do not edit or
+   renew acceptance between stages; expiry or a changed record blocks publication.
+   Return the stop switch to false after the run, and cancel an in-flight run too
+   if stopping it. Reconcile uncertain outcomes without starting a new session.
+
+Unsigned example only — placeholders intentionally cannot pass validation:
+
+```json
+{
+  "version": 1,
+  "repository": "jimmoq-hopsup-Hoqde6/skycar-site",
+  "source_sha": "FULL_NEW_MERGED_CURRENT_MAIN_SHA",
+  "policy_sha256": "NEW_PREFLIGHT_BUILD_POLICY_SHA256",
+  "reviewer": "jimmoq-hopsup-Hoqde6",
+  "verified_at_utc": "YYYY-MM-DDTHH:MM:SS+00:00",
+  "expires_at_utc": "YYYY-MM-DDTHH:MM:SS+00:00",
+  "external_integrations_audited": true,
+  "attestation_type": "owner_risk_acceptance",
+  "independent_review": false,
+  "decision_id": "D-009",
+  "run_id": "WAITING_PAID_WORKFLOW_RUN_ID",
+  "project_id": "SELECTED_PILOT_PROJECT_ID",
+  "task_id": "technician-command-account-v1",
+  "budget_cents": 500,
+  "request_fingerprint": "NEW_PREFLIGHT_REQUEST_FINGERPRINT",
+  "draft_only": true,
+  "max_runs": 1,
+  "checklist": {
+    "unused_apps_suspended_or_uninstalled": true,
+    "preview_secrets_removed_and_tracking_off": true,
+    "dedicated_credentials_verified": true
+  }
+}
+```
+
+The expiry must be after verification and no more than 24 hours later, both UTC.
+All checklist values must reflect Marcel's actual completed verification. The
+owner acknowledges residual build risk; `external_integrations_audited=true` does
+not claim independence. No signed/usable acceptance is committed or installed.
+
+The atomic Git notes ledger stores D-009 and the canonical acceptance SHA-256
+before creating a session. Only one owner-acceptance reservation is allowed across
+the ledger's entire history, including failed/uncertain and published runs. New
+SHA, task, run ID, project, month or timestamps cannot reset it. The same run may
+finish validation/publication using its existing lease, but cannot repeat coding.
+Switching from owner acceptance to independent attestation mid-run (or vice versa)
+is rejected, as is changing any owner-acceptance field. The generated draft clearly
+labels D-009 as owner-accepted and not independent. Broader/repeated or unattended
+operation requires a new decision; this path never implements those operations.
 
 The new path does **not** accept operator-written billing receipts. Using the
 pinned OpenAI SDK it reads project activity, this month's project costs and the
@@ -190,7 +291,8 @@ After the protected merge and secure configuration:
 2. Initialize the ledger once using `initialize-ledger`; approve the existing
    protected environment gate. This does not enable inference.
 3. After task-label approval, owner attestation of the live dedicated cap and
-   a current independent generated-build attestation in the protected environment,
+   a current independent generated-build attestation (or the exact D-009 owner
+   acceptance following the separate signing sequence above) in the protected environment,
    and activation of the enable variable, dispatch `run` with the exact SHA, budget
    and fingerprint. Existing environment approval is required before coding and
    again before publication. The workflow has no unattended trigger.
@@ -203,7 +305,7 @@ host loss/SIGKILL can leave an uncertain session, which requires reconciliation.
 Do not infer cleanup solely from a canceled workflow badge.
 
 Generated branches must not build previews automatically. The committed exclusions
-and current independent external-integration attestation gate publication. This
+and current independent attestation or one-run D-009 owner acceptance gate publication. This
 implementation does not issue deployment or promotion calls.
 Unattended polling and coordination of nine agents remain a separate reviewed
 milestone after one real technician draft passes this complete supervised path.
