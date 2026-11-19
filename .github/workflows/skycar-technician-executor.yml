@@ -5,7 +5,7 @@ on:
     inputs:
       operation:
         type: choice
-        options: [preflight, initialize-ledger, run]
+        options: [preflight, initialize-ledger, verify-billing, run]
         default: preflight
         required: true
       approved_sha:
@@ -65,9 +65,33 @@ jobs:
           name: technician-preflight
           path: ${{ runner.temp }}/technician-preflight.json
           retention-days: 7
+  billing:
+    needs: preflight
+    if: "!startsWith(github.head_ref || github.ref_name, 'agent/') && (inputs.operation == 'verify-billing')"
+    environment: skycar-agent-pilot
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install pinned controller dependencies before credential injection
+        run: python3 -m pip install -r scripts/autonomy/requirements-pilot.txt
+      - name: Verify provider billing without coding or ledger writes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SKYCAR_OPENAI_ORGANIZATION_ID: ${{ vars.SKYCAR_OPENAI_ORGANIZATION_ID }}
+          SKYCAR_OPENAI_BILLING_READ_KEY: ${{ secrets.SKYCAR_OPENAI_BILLING_READ_KEY }}
+        run: >-
+          python3 scripts/autonomy/executor_pipeline.py verify-billing
+          --sha "$APPROVED_SHA" --project-id "$PROJECT_ID" --budget-cents "$BUDGET_CENTS"
   coding:
     needs: preflight
-    if: "!startsWith(github.head_ref || github.ref_name, 'agent/') && (inputs.operation != 'preflight')"
+    if: "!startsWith(github.head_ref || github.ref_name, 'agent/') && (inputs.operation == 'initialize-ledger' || inputs.operation == 'run')"
     environment: skycar-agent-pilot
     permissions:
       contents: write # Trusted controller writes only its durable ledger Git ref.

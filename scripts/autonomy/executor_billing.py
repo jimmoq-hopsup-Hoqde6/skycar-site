@@ -7,25 +7,37 @@ from executor_diagnostics import diagnostic_gate
 
 
 def validate_proof(proof, project, requested, now=None):
+    def reject(reason):
+        failure = PilotError('Provider budget evidence rejected')
+        failure._skycar_billing_reason = reason
+        raise failure
+
     fields = {"project_id", "currency", "interval", "limit_cents", "enforcement",
               "observed_spend_cents", "verified_at_utc"}
     if type(proof) is not dict or set(proof) != fields:
-        raise PilotError("Invalid provider budget evidence")
-    if (not re.fullmatch(r"proj_[A-Za-z0-9]+", project) or proof["project_id"] != project
-            or proof["currency"] != "USD" or proof["interval"] != "month"
-            or proof["enforcement"] != "enforcing" or type(requested) is not int
-            or type(proof["limit_cents"]) is not int
-            or not 1 <= proof["limit_cents"] <= requested <= MAX_CENTS
-            or type(proof["observed_spend_cents"]) is not int
-            or not 0 <= proof["observed_spend_cents"] < proof["limit_cents"]):
-        raise PilotError("Provider hard limit is unavailable, exceeded or outside approval")
+        reject('schema')
+    if not re.fullmatch(r"proj_[A-Za-z0-9]+", project) or proof['project_id'] != project:
+        reject('project')
+    for field in ('currency', 'interval', 'enforcement'):
+        if proof[field] != {'currency': 'USD', 'interval': 'month', 'enforcement': 'enforcing'}[field]:
+            reject(field)
+    if type(requested) is not int or not 1 <= requested <= MAX_CENTS:
+        reject('requested_budget')
+    if type(proof['limit_cents']) is not int:
+        reject('limit_type')
+    if not 1 <= proof['limit_cents'] <= requested:
+        reject('limit_range')
+    if type(proof['observed_spend_cents']) is not int:
+        reject('spend_type')
+    if not 0 <= proof['observed_spend_cents'] < proof['limit_cents']:
+        reject('spend_range')
     try:
         verified = datetime.fromisoformat(proof["verified_at_utc"])
         current = datetime.now(timezone.utc) if now is None else now
         if verified.utcoffset() is None or not 0 <= (current - verified).total_seconds() <= 30:
             raise ValueError()
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise PilotError("Provider evidence is not fresh") from exc
+    except (TypeError, ValueError, OverflowError):
+        reject('freshness')
     return dict(proof)
 
 

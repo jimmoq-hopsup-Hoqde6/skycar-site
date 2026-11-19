@@ -12,7 +12,7 @@
     ".github/workflows/skycar-openai-connection-test.yml": "916be2d68a20847be80fc033b2e9a39910c595fb09f106cc79c59da06e213a11",
     ".github/workflows/skycar-protected-executor-tests.yml": "d3c6792ccb64962c12924656cdbc3cef7195863cbd5141c63c95487707ee2673",
     ".github/workflows/skycar-smoke-offline-tests.yml": "1172307d973470f8a1c2950004759d1c565f70929fc4a0e1b317004aa7f54158",
-    ".github/workflows/skycar-technician-executor.yml": "18a8910f6a0c1eb2cb52af674637ec69a9223e1605a95ffbd5826f9750c849e4",
+    ".github/workflows/skycar-technician-executor.yml": "43587fea1229cb79828b7a62d0ce757bce6932f937edf5a03165ece55ce6bf1b",
     ".github/workflows/staging-backup-tests.yml": "6c2608f3440fb339ac057f3cbcf4e330aad2dd110466f51951f3cb17f70bb5d5",
     ".github/workflows/staging-backup.yml": "4d4fe8ec775fb4bb8a8fe694e819ad6d0f552a6c8b1c2798e9c70e9e759d7c8b",
     ".github/workflows/staging-readiness.yml": "ae47398fabe6185a08bfb04f382ded826c4d38e2c0b30e9b51fe6a9e29d2b089",

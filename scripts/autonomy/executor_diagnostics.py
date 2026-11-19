@@ -10,6 +10,12 @@ GATES = frozenset({
     'post_run_billing', 'ledger_advance',
 })
 
+BILLING_REASONS = frozenset({
+    'schema', 'project', 'currency', 'interval', 'enforcement',
+    'requested_budget', 'limit_type', 'limit_range', 'spend_type',
+    'spend_range', 'freshness',
+})
+
 
 @contextmanager
 def diagnostic_gate(name):
@@ -27,5 +33,9 @@ def diagnostic_gate(name):
 
 def safe_failure(exc):
     gate = getattr(exc, '_skycar_gate', None)
-    return failure_details(exc, gate if type(gate) is str and gate in GATES
-                           else 'protected_executor')
+    result = failure_details(exc, gate if type(gate) is str and gate in GATES
+                             else 'protected_executor')
+    reason = getattr(exc, '_skycar_billing_reason', None)
+    if type(reason) is str and reason in BILLING_REASONS:
+        result['billing_reason'] = reason
+    return result
