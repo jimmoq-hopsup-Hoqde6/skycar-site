@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts/autonomy'))
 import bounded_coding_pilot as pilot
 from executor_billing import ProviderBilling, validate_proof
+from executor_diagnostics import diagnostic_gate, safe_failure
 from executor_github import GitHub, GitHubError, PREFIX
 from executor_ledger import Ledger, REF, month_now, reserve, validate_state
 from executor_pipeline import coding_run, prepare, publish, workflow_context
@@ -290,6 +291,38 @@ class PipelineTests(unittest.TestCase):
             'SKYCAR_GENERATED_BUILD_ATTESTATION':build_attestation(self.root,self.sha)},clear=True)
         self.context.start();self.addCleanup(self.context.stop)
         self.evidence=self.base/'evidence';self.validation=self.base/'validation';self.validation.mkdir()
+
+    def test_safe_gate_failures_block_before_reservation_or_session(self):
+        for target, stage in (('main', 'current_main'), ('environment', 'environment_protection')):
+            with self.subTest(stage=stage):
+                client, sessions = fake_client(); client.project = 'proj_test'
+                billing = NS(verify=Mock())
+                before = self.gh.ref
+                failure = pilot.PilotError('DO-NOT-LOG-credential-or-response')
+                with patch.object(self.gh, target, side_effect=failure), self.assertRaises(pilot.PilotError) as caught:
+                    coding_run(self.root,self.sha,TASK_ID,'proj_test',500,self.token,
+                               self.evidence,self.gh,client,billing)
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(safe_failure(failure)['stage'], stage)
+                self.assertNotIn('DO-NOT-LOG', json.dumps(safe_failure(failure)))
+                sessions.create.assert_not_called(); billing.verify.assert_not_called()
+                self.assertEqual(self.gh.ref, before)
+                self.assertFalse(self.evidence.exists())
+
+    def test_nested_billing_gate_survives_pipeline_without_paid_calls(self):
+        client, sessions = fake_client(); client.project = 'proj_test'
+        failure = pilot.PilotError('DO-NOT-LOG-billing-body')
+        def fail(*_):
+            with diagnostic_gate('billing_hard_limit'):
+                raise failure
+        before = self.gh.ref
+        with self.assertRaises(pilot.PilotError):
+            coding_run(self.root,self.sha,TASK_ID,'proj_test',500,self.token,
+                       self.evidence,self.gh,client,NS(verify=fail))
+        self.assertEqual(safe_failure(failure)['stage'], 'billing_hard_limit')
+        sessions.create.assert_not_called()
+        self.assertEqual(self.gh.ref, before)
+        self.assertFalse(self.evidence.exists())
 
     def candidate(self):
         files={p:(self.root/p).read_text() for p in TECHNICIAN.write_paths}

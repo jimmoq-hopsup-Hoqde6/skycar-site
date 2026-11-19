@@ -10,6 +10,7 @@ import sys
 import time
 import urllib.parse
 import bounded_coding_pilot as pilot
+from executor_diagnostics import diagnostic_gate, safe_failure
 from executor_billing import ProviderBilling
 from executor_github import GitHub, GitHubError, PREFIX
 from executor_ledger import Ledger
@@ -19,52 +20,62 @@ from technician_tasks import select, approved_issue, require_production_baseline
 
 
 def prepare(root, sha, task_id, project, cents):
-    spec = select(task_id)
-    files = pilot.source_snapshot(root, sha, task=spec)
-    require_production_baseline(files)
-    request = pilot.build_request(files, sha, cents, task=spec)
-    token = pilot.fingerprint(request, task=spec, provider_project_id=project)
-    return spec, request, token
+    with diagnostic_gate('source_request'):
+        spec = select(task_id)
+        files = pilot.source_snapshot(root, sha, task=spec)
+        require_production_baseline(files)
+        request = pilot.build_request(files, sha, cents, task=spec)
+        token = pilot.fingerprint(request, task=spec, provider_project_id=project)
+        return spec, request, token
 
 
 def workflow_context(sha, *, enabled=True):
-    if (os.environ.get('GITHUB_REPOSITORY') != pilot.REPOSITORY
-            or os.environ.get('GITHUB_EVENT_NAME') != 'workflow_dispatch'
-            or os.environ.get('GITHUB_REF') != 'refs/heads/main'
-            or os.environ.get('GITHUB_SHA') != sha
-            or os.environ.get('GITHUB_RUN_ATTEMPT') != '1'
-            or not re.fullmatch(r'\d+',os.environ.get('GITHUB_RUN_ID',''))
-            or enabled and os.environ.get('SKYCAR_EXECUTOR_ENABLED') != 'true'):
-        raise pilot.PilotError('Execution context, first-attempt or stop-switch gate blocked')
-    return os.environ['GITHUB_RUN_ID']
+    with diagnostic_gate('workflow_context'):
+        if (os.environ.get('GITHUB_REPOSITORY') != pilot.REPOSITORY
+                or os.environ.get('GITHUB_EVENT_NAME') != 'workflow_dispatch'
+                or os.environ.get('GITHUB_REF') != 'refs/heads/main'
+                or os.environ.get('GITHUB_SHA') != sha
+                or os.environ.get('GITHUB_RUN_ATTEMPT') != '1'
+                or not re.fullmatch(r'\d+',os.environ.get('GITHUB_RUN_ID',''))
+                or enabled and os.environ.get('SKYCAR_EXECUTOR_ENABLED') != 'true'):
+            raise pilot.PilotError('Execution context, first-attempt or stop-switch gate blocked')
+        return os.environ['GITHUB_RUN_ID']
 
 
 def require_approval(actual, expected):
-    if not re.fullmatch(r'[a-f0-9]{64}',expected) or actual != expected:
-        raise pilot.PilotError('Exact request fingerprint not approved')
+    with diagnostic_gate('approval_fingerprint'):
+        if not re.fullmatch(r'[a-f0-9]{64}',expected) or actual != expected:
+            raise pilot.PilotError('Exact request fingerprint not approved')
 
 
 def build_authorization(root, sha, task_id, project, cents, token, run_id):
-    require_build_attestation(root, sha, context={
-        'task_id': task_id, 'project_id': project, 'budget_cents': cents,
-        'request_fingerprint': token, 'run_id': run_id})
-    return owner_acceptance_marker()
+    with diagnostic_gate('build_acceptance'):
+        require_build_attestation(root, sha, context={
+            'task_id': task_id, 'project_id': project, 'budget_cents': cents,
+            'request_fingerprint': token, 'run_id': run_id})
+        return owner_acceptance_marker()
 
 
 def coding_run(root, sha, task_id, project, cents, token, output, github, coding_client, billing):
     spec, request, actual = prepare(root,sha,task_id,project,cents)
     require_approval(actual,token)
     run_id = workflow_context(sha)
-    if github.main() != sha:
-        raise pilot.PilotError('Approved source is no longer current main')
-    github.environment()
-    approved_issue(github.request('GET',PREFIX+'/issues/101'))
-    acceptance = build_authorization(root, sha, task_id, project, cents, token, run_id)
-    billing.verify(project,cents)
-    ledger = Ledger(github,project)
-    output = Path(output)
-    output.mkdir(exist_ok=False,mode=0o700)
-    key = ledger.claim(task_id,sha,token,cents,run_id,owner_acceptance=acceptance)
+    with diagnostic_gate('current_main'):
+        if github.main() != sha:
+            raise pilot.PilotError('Approved source is no longer current main')
+    with diagnostic_gate('environment_protection'):
+        github.environment()
+    with diagnostic_gate('issue_approval'):
+        approved_issue(github.request('GET',PREFIX+'/issues/101'))
+    with diagnostic_gate('build_acceptance'):
+        acceptance = build_authorization(root, sha, task_id, project, cents, token, run_id)
+    with diagnostic_gate('billing_verification'):
+        billing.verify(project,cents)
+    with diagnostic_gate('ledger_reservation'):
+        ledger = Ledger(github,project)
+        output = Path(output)
+        output.mkdir(exist_ok=False,mode=0o700)
+        key = ledger.claim(task_id,sha,token,cents,run_id,owner_acceptance=acceptance)
     approval = {'task':task_id,'sha':sha,'project_id':project,'budget_cents':cents,
                 'request_fingerprint':token,'run_id':run_id,'ledger_key':key}
     pilot.write_json(output/'approval.json',approval)
@@ -72,26 +83,30 @@ def coding_run(root, sha, task_id, project, cents, token, output, github, coding
         if build_authorization(root, sha, task_id, selected_project, requested, token, run_id) != acceptance:
             raise pilot.PilotError('Build authorization changed after durable reservation')
         return billing.verify(selected_project, requested)
-    state = pilot.execute(coding_client,request,output/'run',token,task=spec,
-                          budget_verifier=verified_budget,provider_project_id=project)
-    visible = True
-    for attempt in range(3):
-        try:
-            coding_client.beta.agents.sessions.retrieve(state['session_id'])
-        except Exception as exc:
-            if getattr(exc,'status_code',None) != 404:
-                raise
-            visible = False
-            break
-        if attempt < 2:
-            time.sleep(2)
-    if visible:
-        raise pilot.PilotError('Session deletion not confirmed; lease remains blocked')
-    state['session_visible_after_deletion'] = False
-    state['post_run_provider_budget'] = billing.verify(project,cents)
-    pilot.write_json(output/'run/state.json',state)
-    ledger.advance(key,token,run_id,'reserved','coded',artifact_sha256=state['artifact_sha256'],
-                   session_id=state['session_id'],observed_spend_cents=state['post_run_provider_budget']['observed_spend_cents'])
+    with diagnostic_gate('coding_session'):
+        state = pilot.execute(coding_client,request,output/'run',token,task=spec,
+                              budget_verifier=verified_budget,provider_project_id=project)
+    with diagnostic_gate('session_cleanup'):
+        visible = True
+        for attempt in range(3):
+            try:
+                coding_client.beta.agents.sessions.retrieve(state['session_id'])
+            except Exception as exc:
+                if getattr(exc,'status_code',None) != 404:
+                    raise
+                visible = False
+                break
+            if attempt < 2:
+                time.sleep(2)
+        if visible:
+            raise pilot.PilotError('Session deletion not confirmed; lease remains blocked')
+        state['session_visible_after_deletion'] = False
+    with diagnostic_gate('post_run_billing'):
+        state['post_run_provider_budget'] = billing.verify(project,cents)
+    with diagnostic_gate('ledger_advance'):
+        pilot.write_json(output/'run/state.json',state)
+        ledger.advance(key,token,run_id,'reserved','coded',artifact_sha256=state['artifact_sha256'],
+                       session_id=state['session_id'],observed_spend_cents=state['post_run_provider_budget']['observed_spend_cents'])
     return {'status':'coded_NOT_TESTED','sha':sha,'task':task_id,'artifact_sha256':state['artifact_sha256']}
 
 
@@ -209,20 +224,21 @@ def main():
             require_approval(token,args.approved_fingerprint)
             workflow_context(args.sha)
             # Imports/dependency install happen before injecting credentials in the workflow.
-            from openai import OpenAI
-            org=os.environ.get('SKYCAR_OPENAI_ORGANIZATION_ID','')
-            if not re.fullmatch(r'org-[A-Za-z0-9]+',org):
-                raise pilot.PilotError('Selected organization is missing')
-            coding_key=os.environ.get('SKYCAR_OPENAI_CODING_KEY')
-            billing_key=os.environ.get('SKYCAR_OPENAI_BILLING_READ_KEY')
-            if not coding_key or not billing_key:
-                raise pilot.PilotError('Dedicated coding and billing-read credentials required')
-            with OpenAI(admin_api_key=billing_key,organization=org,base_url='https://api.openai.com/v1',
-                        max_retries=0,timeout=20) as admin, \
-                 OpenAI(api_key=coding_key,project=args.project_id,organization=org,
-                        base_url='https://api.openai.com/v1',max_retries=0,timeout=60) as client:
-                result=coding_run(args.root,args.sha,args.task,args.project_id,args.budget_cents,token,
-                                  args.output,GitHub(os.environ.get('GH_TOKEN')),client,ProviderBilling(admin))
+            with diagnostic_gate('credentials'):
+                from openai import OpenAI
+                org=os.environ.get('SKYCAR_OPENAI_ORGANIZATION_ID','')
+                if not re.fullmatch(r'org-[A-Za-z0-9]+',org):
+                    raise pilot.PilotError('Selected organization is missing')
+                coding_key=os.environ.get('SKYCAR_OPENAI_CODING_KEY')
+                billing_key=os.environ.get('SKYCAR_OPENAI_BILLING_READ_KEY')
+                if not coding_key or not billing_key:
+                    raise pilot.PilotError('Dedicated coding and billing-read credentials required')
+                with OpenAI(admin_api_key=billing_key,organization=org,base_url='https://api.openai.com/v1',
+                            max_retries=0,timeout=20) as admin, \
+                     OpenAI(api_key=coding_key,project=args.project_id,organization=org,
+                            base_url='https://api.openai.com/v1',max_retries=0,timeout=60) as client:
+                    result=coding_run(args.root,args.sha,args.task,args.project_id,args.budget_cents,token,
+                                      args.output,GitHub(os.environ.get('GH_TOKEN')),client,ProviderBilling(admin))
         else:
             result=publish(args.root,args.sha,args.task,args.project_id,args.budget_cents,
                            args.approved_fingerprint,args.evidence,args.validation,
@@ -232,7 +248,7 @@ def main():
     except BaseException as exc:
         # No raw exception/body, candidate output, URLs or credentials in diagnostics.
         print(json.dumps({'status':'blocked_RECONCILE_BEFORE_RETRY',
-                          'failure':pilot.failure_details(exc,'protected_executor')}),file=sys.stderr)
+                          'failure':safe_failure(exc)}),file=sys.stderr)
         raise SystemExit(1) from None
 
 
