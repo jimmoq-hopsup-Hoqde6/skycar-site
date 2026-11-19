@@ -334,3 +334,21 @@ made by those tests.
 SKYCAR_DOCKER_TESTS=1 python3 -m unittest discover \
   -s tests/autonomy -p 'test_executor_docker.py' -v
 ```
+
+### Safe failure diagnostics
+
+The controller reports a fixed `failure.stage` instead of printing exception
+messages or provider response bodies. Pre-session gates distinguish source and
+fingerprint approval, workflow context, current main, environment protection,
+issue approval, build acceptance, provider billing and durable reservation.
+Provider billing distinguishes `billing_costs`, `billing_project`,
+`billing_hard_limit` and `billing_proof`; these are diagnostic labels, not
+permission to bypass a failed check. Existing safe HTTP status/request metadata
+is retained. Unknown labels fall back to `protected_executor`.
+
+A blocked run remains blocked. Inspect the durable ledger before any retry;
+failures after reservation may have incurred costs and require reconciliation.
+Do not rerun an old attempt or reset the ledger. After a source change, obtain a
+new exact-main fingerprint and owner-signed, run-bound acceptance through the
+existing protected process. Diagnostics do not authorize inference, merge,
+publication or deployment.
