@@ -66,6 +66,10 @@ class BillingDiagnosticsTests(unittest.TestCase):
              patch('executor_pipeline.pilot.execute') as execute:
             result = verify_billing_only(sha, 'proj_test', 500, gh, billing)
             self.assertEqual(result['status'], 'billing_verified_NO_CODING')
+            # Billing access can succeed even when the requested full budget
+            # cannot fit: verification must not be mistaken for run authorization.
+            self.assertEqual(result['remaining_headroom_cents'], 313)
+            self.assertIs(result['full_request_fits'], False)
             gh.environment.assert_called_once()
             billing.verify.assert_called_once_with('proj_test', 500)
             ledger.assert_not_called(); execute.assert_not_called()
