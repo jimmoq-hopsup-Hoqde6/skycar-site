@@ -44,6 +44,16 @@ class BillingDiagnosticsTests(unittest.TestCase):
         failure._skycar_billing_reason = 'DO-NOT-LOG'
         self.assertNotIn('DO-NOT-LOG', json.dumps(safe_failure(failure)))
 
+    def test_enforcement_evidence_is_allowlisted(self):
+        for status, expected in [('inactive', 'inactive'), (None, 'missing'),
+                                 ('DO-NOT-LOG', 'unrecognized')]:
+            with self.subTest(status=status), self.assertRaises(PilotError) as caught:
+                validate_proof(valid_proof() | {'enforcement': status}, 'proj_test', 500)
+            failure = safe_failure(caught.exception)
+            self.assertEqual(failure['enforcement_status'], expected)
+            self.assertNotIn('DO-NOT-LOG', json.dumps(failure))
+        self.assertEqual(validate_proof(valid_proof(), 'proj_test', 500)['enforcement'], 'enforcing')
+
     def test_diagnostic_works_while_stopped_and_cannot_claim_or_code(self):
         sha = 'a'*40
         env = {'GITHUB_REPOSITORY': 'jimmoq-hopsup-Hoqde6/skycar-site',
