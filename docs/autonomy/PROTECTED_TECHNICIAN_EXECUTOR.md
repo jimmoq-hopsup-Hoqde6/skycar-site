@@ -214,10 +214,28 @@ actual project hard limit from the provider Admin API:
 * `admin.organization.usage.costs(...project_ids=[project]...)`
 * `admin.organization.projects.spend_limit.retrieve(project)`
 
-Only an active project with an enforced monthly USD hard limit no greater than
-the exact requested budget and 500 cents is accepted. Cost pagination is bounded;
-fractional cents round upward. A stale, missing, exhausted, inaccessible or soft
-limit blocks execution. There is no automatic fallback or retry. Verification
+For the owner-authorized one-run pilot experiment, an active project with a
+monthly USD limit no greater than the exact requested budget and 500 cents,
+API `enforcement.status=inactive`, and spend below that limit is accepted.
+`enforcing`, missing and unknown states are rejected. This reverses the previous
+status admission rule; it is an owner-authorized billing-policy change, not
+confirmed provider semantics. The public reference lists inactive/enforcing but
+does not establish that inactive means configured-and-below-limit. Do not describe
+this check as independent API verification that the dashboard hard-limit toggle
+is enabled, or claim tests prove that interpretation.
+
+Before approving any paid run, the owner must verify the exact organization and
+project in OpenAI Platform, confirm Project settings → Limits shows the US$5
+(or lower approved) limit and **Enforce a hard limit** enabled, and record that
+verification with the new source/run-bound owner acceptance in issue #120.
+Keep the dedicated project free of other workloads or cap changes during the run.
+The controller relies on that manual precondition for the toggle; it still reads
+project state, limit amount/currency/interval and current-month costs from the
+provider. The read-only diagnostic may test the new status rule while stopped,
+without paid-run acceptance or a session. A successful diagnostic does not prove
+the toggle is enabled and does not authorize paid coding. Cost pagination is bounded;
+fractional cents round upward. Stale, missing, exhausted or inaccessible evidence
+blocks execution; a disabled hard-limit toggle must block owner approval. There is no automatic fallback or retry. Verification
 runs before reservation/session creation, again before coding input and after
 cleanup. The fingerprint binds the exact requested budget, selected project,
 source, model, task prompt and effective request. Changing the budget invalidates

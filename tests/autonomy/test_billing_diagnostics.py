@@ -16,7 +16,7 @@ from executor_pipeline import verify_billing_only
 
 def valid_proof(**changes):
     return dict(project_id='proj_test', currency='USD', interval='month',
-                limit_cents=500, enforcement='enforcing', observed_spend_cents=187,
+                limit_cents=500, enforcement='inactive', observed_spend_cents=187,
                 verified_at_utc=datetime.now(timezone.utc).isoformat(), **changes)
 
 
@@ -24,7 +24,7 @@ class BillingDiagnosticsTests(unittest.TestCase):
     def test_every_rejection_reports_only_a_fixed_reason(self):
         cases = [('schema', {'extra': 'DO-NOT-LOG'}), ('project', {'project_id': 'DO-NOT-LOG'}),
                  ('currency', {'currency': 'DO-NOT-LOG'}), ('interval', {'interval': 'day'}),
-                 ('enforcement', {'enforcement': 'inactive'}), ('limit_type', {'limit_cents': True}),
+                 ('enforcement', {'enforcement': 'enforcing'}), ('limit_type', {'limit_cents': True}),
                  ('limit_range', {'limit_cents': 501}), ('spend_type', {'observed_spend_cents': True}),
                  ('spend_range', {'observed_spend_cents': 500}),
                  ('freshness', {'verified_at_utc': 'DO-NOT-LOG'})]
@@ -45,14 +45,14 @@ class BillingDiagnosticsTests(unittest.TestCase):
         self.assertNotIn('DO-NOT-LOG', json.dumps(safe_failure(failure)))
 
     def test_enforcement_evidence_is_allowlisted(self):
-        for status, expected in [('inactive', 'inactive'), (None, 'missing'),
+        for status, expected in [('enforcing', 'enforcing'), (None, 'missing'),
                                  ('DO-NOT-LOG', 'unrecognized')]:
             with self.subTest(status=status), self.assertRaises(PilotError) as caught:
                 validate_proof(valid_proof() | {'enforcement': status}, 'proj_test', 500)
             failure = safe_failure(caught.exception)
             self.assertEqual(failure['enforcement_status'], expected)
             self.assertNotIn('DO-NOT-LOG', json.dumps(failure))
-        self.assertEqual(validate_proof(valid_proof(), 'proj_test', 500)['enforcement'], 'enforcing')
+        self.assertEqual(validate_proof(valid_proof(), 'proj_test', 500)['enforcement'], 'inactive')
 
     def test_diagnostic_works_while_stopped_and_cannot_claim_or_code(self):
         sha = 'a'*40

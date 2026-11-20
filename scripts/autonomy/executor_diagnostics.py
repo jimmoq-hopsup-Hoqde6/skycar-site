@@ -40,6 +40,6 @@ def safe_failure(exc):
         result['billing_reason'] = reason
     if reason == 'enforcement':
         status = getattr(exc, '_skycar_enforcement', None)
-        if type(status) is str and status in ('inactive', 'missing', 'unrecognized'):
+        if type(status) is str and status in ('enforcing', 'missing', 'unrecognized'):
             result['enforcement_status'] = status
     return result

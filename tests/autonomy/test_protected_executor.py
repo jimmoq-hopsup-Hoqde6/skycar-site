@@ -30,7 +30,7 @@ from test_bounded_coding_pilot import fake_client
 
 def proof(**changes):
     value={'project_id':'proj_test','currency':'USD','interval':'month','limit_cents':500,
-           'enforcement':'enforcing','observed_spend_cents':0,
+           'enforcement':'inactive','observed_spend_cents':0,
            'verified_at_utc':datetime.now(timezone.utc).isoformat()}
     return dict(value,**changes)
 
@@ -144,8 +144,8 @@ class TaskAndBudgetTests(unittest.TestCase):
         self.assertNotEqual(token,pilot.fingerprint(request,provider_project_id='proj_test'))
         self.assertEqual(request,before)
 
-    def test_provider_proof_rejects_soft_limits_exhaustion_types_and_wrong_project(self):
-        for change in ({'project_id':'proj_other'},{'enforcement':'inactive'},{'currency':'AUD'},
+    def test_provider_proof_rejects_disallowed_states_exhaustion_types_and_wrong_project(self):
+        for change in ({'project_id':'proj_other'},{'enforcement':'enforcing'},{'enforcement':'active'},{'currency':'AUD'},
                        {'interval':'day'},{'limit_cents':501},{'limit_cents':True},
                        {'observed_spend_cents':500},{'observed_spend_cents':True},
                        {'observed_spend_cents':-1},{'extra':True}):
@@ -250,7 +250,7 @@ class ProviderSDKTests(unittest.TestCase):
                     'amount':{'currency':'usd','value':0.011}}]}],'has_more':False,'next_page':None})
             if request.url.path.endswith('/spend_limit'):
                 return httpx.Response(200,json={'object':'project.spend_limit','threshold_amount':500,
-                    'currency':'USD','interval':'month','enforcement':{'status':'enforcing'}})
+                    'currency':'USD','interval':'month','enforcement':{'status':'inactive'}})
             return httpx.Response(200,json={'id':'proj_test','object':'organization.project','name':'unit',
                                           'created_at':1,'status':'active'})
         with OpenAI(admin_api_key='admin-unit-test',max_retries=0,
