@@ -309,6 +309,20 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(self.gh.ref, before)
                 self.assertFalse(self.evidence.exists())
 
+    def test_previous_spend_blocks_full_budget_before_reservation_or_inference(self):
+        client, sessions = fake_client(); client.project = 'proj_test'
+        # $1.87 already spent on a $5 project leaves only $3.13 nominal headroom.
+        billing = NS(verify=Mock(return_value=proof(observed_spend_cents=187)))
+        before = self.gh.ref
+        with self.assertRaises(pilot.PilotError) as caught:
+            coding_run(self.root, self.sha, TASK_ID, 'proj_test', 500, self.token,
+                       self.evidence, self.gh, client, billing)
+        self.assertEqual(safe_failure(caught.exception)['stage'], 'billing_verification')
+        billing.verify.assert_called_once_with('proj_test', 500)
+        sessions.create.assert_not_called()
+        self.assertEqual(self.gh.ref, before)
+        self.assertFalse(self.evidence.exists())
+
     def test_nested_billing_gate_survives_pipeline_without_paid_calls(self):
         client, sessions = fake_client(); client.project = 'proj_test'
         failure = pilot.PilotError('DO-NOT-LOG-billing-body')
