@@ -247,6 +247,34 @@ lag; a project cap is not an exact final-invoice guarantee. A read-only Admin
 credential must actually be able to read project state, spend limits and costs;
 403 responses block the run. No billing writes are implemented.
 
+## Full requested-budget headroom — proposed additional fail-closed guard
+
+A successful read-only `verify-billing` means that project state, monthly USD
+limit, API enforcement state and recent cost data passed their existing checks.
+It **does not** mean that the entire proposed session budget fits in the
+*remaining* monthly project cap, that the dashboard hard-limit switch was
+independently verified, or that a paid run is authorized. The diagnostic now
+reports nominal remaining headroom and `full_request_fits` without launching
+coding. Paid execution must additionally reject a request before ledger
+reservation, and again before model input, when
+`observed_spend_cents + requested_budget_cents > limit_cents`.
+
+[Read-only run #14 on 20 November 2026](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/actions/runs/44739405461)
+returned 187 cents of spend under a 500-cent project cap. That snapshot gives
+313 cents of *nominal* room, not 500. A 500-cent paid request must therefore
+remain blocked; simply passing billing diagnostics or a protected preflight is
+not sufficient. Actual remaining spend can change, and provider enforcement
+may lag. Once a genuine paid session runs, post-run billing checks actual
+spend but deliberately do not re-demand the *original unused* full budget, to
+avoid stranding legitimate validation/publication solely because model usage
+increased as expected.
+
+Do not silently lower the approved request or raise the provider cap. Any
+reconfiguration (such as a separately approved fresh dedicated project) needs
+new provider evidence, exact-source budget fingerprint, personal owner acceptance
+and all protected environment plus QA/Security gates. This proposal is draft-only
+and does not authorize approval of any waiting workflow run.
+
 ## Durable reservations and recovery
 
 `refs/notes/skycar-executor-ledger-v1` stores a separate single-file ledger tree,
