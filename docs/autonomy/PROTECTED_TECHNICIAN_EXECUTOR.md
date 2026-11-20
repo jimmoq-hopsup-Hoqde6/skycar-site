@@ -215,7 +215,7 @@ actual project hard limit from the provider Admin API:
 * `admin.organization.projects.spend_limit.retrieve(project)`
 
 For the owner-authorized one-run pilot experiment, an active project with a
-monthly USD limit no greater than the exact requested budget and 500 cents,
+monthly USD limit of at most 500 cents, independent of the requested per-run budget,
 API `enforcement.status=inactive`, and spend below that limit is accepted.
 `enforcing`, missing and unknown states are rejected. This reverses the previous
 status admission rule; it is an owner-authorized billing-policy change, not
@@ -235,7 +235,7 @@ provider. The read-only diagnostic may test the new status rule while stopped,
 without paid-run acceptance or a session. A successful diagnostic does not prove
 the toggle is enabled and does not authorize paid coding. Cost pagination is bounded;
 fractional cents round upward. Stale, missing, exhausted or inaccessible evidence
-blocks execution; a disabled hard-limit toggle must block owner approval. There is no automatic fallback or retry. Verification
+blocks execution; a disabled hard-limit toggle must block owner approval. There is no automatic paid-session fallback or retry. Verification
 runs before reservation/session creation, again before coding input and after
 cleanup. The fingerprint binds the exact requested budget, selected project,
 source, model, task prompt and effective request. Changing the budget invalidates
@@ -246,6 +246,48 @@ operators changing its cap during execution. Provider reporting/enforcement can
 lag; a project cap is not an exact final-invoice guarantee. A read-only Admin
 credential must actually be able to read project state, spend limits and costs;
 403 responses block the run. No billing writes are implemented.
+
+## Full requested-budget headroom
+
+A successful read-only `verify-billing` means that project state, monthly USD
+limit, API enforcement state and recent cost data passed their existing checks.
+It **does not** mean that the entire proposed session budget fits in the
+*remaining* monthly project cap, that the dashboard hard-limit switch was
+independently verified, or that a paid run is authorized. The diagnostic now
+reports nominal remaining headroom and `full_request_fits` without launching
+coding. Paid execution must additionally reject a request before ledger
+reservation, and again before model input, when
+`observed_spend_cents + requested_budget_cents > limit_cents`.
+
+[Read-only run #14 on 20 November 2026](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/actions/runs/44739405461)
+returned 187 cents of spend under a 500-cent project cap. That snapshot gives
+313 cents of *nominal* room, not 500. A 500-cent paid request must therefore
+remain blocked; simply passing billing diagnostics or a protected preflight is
+not sufficient. Actual remaining spend can change, and provider enforcement
+may lag. Once a genuine paid session runs, post-run billing checks actual
+spend but deliberately do not re-demand the *original unused* full budget, to
+avoid stranding legitimate validation/publication solely because model usage
+increased as expected.
+
+Do not silently lower the approved request or raise the provider cap. Any
+reconfiguration (such as a separately approved fresh dedicated project) needs
+new provider evidence, exact-source budget fingerprint, personal owner acceptance
+and all protected environment plus QA/Security gates. This change does not
+authorize approval of any waiting workflow run.
+
+The former `limit_cents <= requested_budget_cents` rule is removed. Combined
+with full headroom admission it would allow a request only at zero prior spend.
+Pre-run checks reject insufficient room with `billing_reason: headroom`;
+post-run and diagnostic reads verify actual spend below the cap without requiring
+the original unused budget. Diagnostics report both `remaining_headroom_cents`
+and `full_request_fits`, including when the requested budget does not fit.
+
+The Admin billing client uses `BILLING_READ_RETRIES = 3` for read-only GETs.
+The pinned SDK bounds retry count and honors supported `Retry-After` delays;
+exhausted retries still block execution. Its retry policy also covers transient
+transport/server errors, not only 429s. The paid coding client retains
+`max_retries=0`. No entire workflow, session or ledger reservation is retried.
+Retries do not guarantee that a persistent provider limit will clear.
 
 ## Durable reservations and recovery
 

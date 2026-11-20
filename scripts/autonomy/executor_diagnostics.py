@@ -13,7 +13,7 @@ GATES = frozenset({
 BILLING_REASONS = frozenset({
     'schema', 'project', 'currency', 'interval', 'enforcement',
     'requested_budget', 'limit_type', 'limit_range', 'spend_type',
-    'spend_range', 'freshness',
+    'spend_range', 'headroom', 'freshness',
 })
 
 

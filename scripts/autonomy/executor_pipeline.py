@@ -19,6 +19,9 @@ from executor_validation import read_json, validate, validate_run, verify_valida
 from technician_tasks import select, approved_issue, require_production_baseline
 
 
+# Only the read-only Admin client uses bounded SDK retries.
+BILLING_READ_RETRIES = 3
+
 def prepare(root, sha, task_id, project, cents):
     with diagnostic_gate('source_request'):
         spec = select(task_id)
@@ -65,8 +68,21 @@ def verify_billing_only(sha, project, cents, github, billing):
     with diagnostic_gate('environment_protection'):
         github.environment()
     with diagnostic_gate('billing_verification'):
-        proof = billing.verify(project, cents)
-    return {'status': 'billing_verified_NO_CODING', 'sha': sha, 'proof': proof}
+        proof = billing.verify(project, cents, require_headroom=False)
+    return {'status': 'billing_verified_NO_CODING', 'sha': sha, 'proof': proof,
+            'remaining_headroom_cents': proof['limit_cents'] - proof['observed_spend_cents'],
+            'full_request_fits': proof['observed_spend_cents'] + cents <= proof['limit_cents']}
+
+
+def require_full_budget_headroom(proof, cents):
+    # A nominal project cap does not reserve the full per-run budget when prior
+    # project usage exists. Check before any ledger claim, session or model input.
+    # Post-run billing intentionally only verifies actual observed spend.
+    if proof['observed_spend_cents'] + cents > proof['limit_cents']:
+        failure = pilot.PilotError('Insufficient provider hard-limit headroom for requested budget')
+        failure._skycar_billing_reason = 'headroom'
+        raise failure
+    return proof
 
 
 def coding_run(root, sha, task_id, project, cents, token, output, github, coding_client, billing):
@@ -83,7 +99,7 @@ def coding_run(root, sha, task_id, project, cents, token, output, github, coding
     with diagnostic_gate('build_acceptance'):
         acceptance = build_authorization(root, sha, task_id, project, cents, token, run_id)
     with diagnostic_gate('billing_verification'):
-        billing.verify(project,cents)
+        require_full_budget_headroom(billing.verify(project,cents), cents)
     with diagnostic_gate('ledger_reservation'):
         ledger = Ledger(github,project)
         output = Path(output)
@@ -95,7 +111,7 @@ def coding_run(root, sha, task_id, project, cents, token, output, github, coding
     def verified_budget(selected_project, requested):
         if build_authorization(root, sha, task_id, selected_project, requested, token, run_id) != acceptance:
             raise pilot.PilotError('Build authorization changed after durable reservation')
-        return billing.verify(selected_project, requested)
+        return require_full_budget_headroom(billing.verify(selected_project, requested), requested)
     with diagnostic_gate('coding_session'):
         state = pilot.execute(coding_client,request,output/'run',token,task=spec,
                               budget_verifier=verified_budget,provider_project_id=project)
@@ -115,7 +131,7 @@ def coding_run(root, sha, task_id, project, cents, token, output, github, coding
             raise pilot.PilotError('Session deletion not confirmed; lease remains blocked')
         state['session_visible_after_deletion'] = False
     with diagnostic_gate('post_run_billing'):
-        state['post_run_provider_budget'] = billing.verify(project,cents)
+        state['post_run_provider_budget'] = billing.verify(project,cents,False)
     with diagnostic_gate('ledger_advance'):
         pilot.write_json(output/'run/state.json',state)
         ledger.advance(key,token,run_id,'reserved','coded',artifact_sha256=state['artifact_sha256'],
@@ -242,7 +258,7 @@ def main():
                 if not re.fullmatch(r'org-[A-Za-z0-9]+', org) or not key:
                     raise pilot.PilotError('Selected organization and billing-read credential required')
                 with OpenAI(admin_api_key=key, organization=org, base_url='https://api.openai.com/v1',
-                            max_retries=0, timeout=20) as admin:
+                            max_retries=BILLING_READ_RETRIES, timeout=20) as admin:
                     result = verify_billing_only(args.sha, args.project_id, args.budget_cents,
                         GitHub(os.environ.get('GH_TOKEN')), ProviderBilling(admin))
         elif args.operation=='execute':
@@ -259,7 +275,7 @@ def main():
                 if not coding_key or not billing_key:
                     raise pilot.PilotError('Dedicated coding and billing-read credentials required')
                 with OpenAI(admin_api_key=billing_key,organization=org,base_url='https://api.openai.com/v1',
-                            max_retries=0,timeout=20) as admin, \
+                            max_retries=BILLING_READ_RETRIES,timeout=20) as admin, \
                      OpenAI(api_key=coding_key,project=args.project_id,organization=org,
                             base_url='https://api.openai.com/v1',max_retries=0,timeout=60) as client:
                     result=coding_run(args.root,args.sha,args.task,args.project_id,args.budget_cents,token,

@@ -6,7 +6,7 @@ from bounded_coding_pilot import MAX_CENTS, PilotError
 from executor_diagnostics import diagnostic_gate
 
 
-def validate_proof(proof, project, requested, now=None):
+def validate_proof(proof, project, requested, now=None, require_headroom=True):
     def reject(reason):
         failure = PilotError('Provider budget evidence rejected')
         failure._skycar_billing_reason = reason
@@ -36,12 +36,14 @@ def validate_proof(proof, project, requested, now=None):
         reject('requested_budget')
     if type(proof['limit_cents']) is not int:
         reject('limit_type')
-    if not 1 <= proof['limit_cents'] <= requested:
+    if not 1 <= proof['limit_cents'] <= MAX_CENTS:
         reject('limit_range')
     if type(proof['observed_spend_cents']) is not int:
         reject('spend_type')
     if not 0 <= proof['observed_spend_cents'] < proof['limit_cents']:
         reject('spend_range')
+    if require_headroom and proof['observed_spend_cents'] + requested > proof['limit_cents']:
+        reject('headroom')
     try:
         verified = datetime.fromisoformat(proof["verified_at_utc"])
         current = datetime.now(timezone.utc) if now is None else now
@@ -56,7 +58,7 @@ class ProviderBilling:
     def __init__(self, client):
         self.client = client
 
-    def verify(self, project, requested):
+    def verify(self, project, requested, require_headroom=True):
         if not re.fullmatch(r"proj_[A-Za-z0-9]+", project):
             raise PilotError("Invalid project ID")
         with diagnostic_gate('billing_costs'):
@@ -101,4 +103,4 @@ class ProviderBilling:
                      "limit_cents": limit.threshold_amount, "enforcement": limit.enforcement.status,
                      "observed_spend_cents": int((total * 100).to_integral_value(rounding=ROUND_CEILING)),
                      "verified_at_utc": datetime.now(timezone.utc).isoformat()}
-            return validate_proof(proof, project, requested)
+            return validate_proof(proof, project, requested, require_headroom=require_headroom)
