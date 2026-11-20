@@ -151,7 +151,8 @@ class TaskAndBudgetTests(unittest.TestCase):
                        {'observed_spend_cents':-1},{'extra':True}):
             with self.subTest(change=change),self.assertRaises(pilot.PilotError):
                 validate_proof(proof(**change),'proj_test',500)
-        with self.assertRaises(pilot.PilotError):validate_proof(proof(),'proj_test',100)
+        self.assertEqual(validate_proof(proof(),'proj_test',100)['limit_cents'],500)
+        with self.assertRaises(pilot.PilotError):validate_proof(proof(observed_spend_cents=401),'proj_test',100)
         now=datetime.now(timezone.utc)
         for stamp in (now-timedelta(seconds=31),now+timedelta(seconds=1),now.replace(tzinfo=None)):
             with self.assertRaises(pilot.PilotError):
@@ -255,7 +256,7 @@ class ProviderSDKTests(unittest.TestCase):
                                           'created_at':1,'status':'active'})
         with OpenAI(admin_api_key='admin-unit-test',max_retries=0,
                     http_client=httpx.Client(transport=httpx.MockTransport(handle))) as client:
-            result=ProviderBilling(client).verify('proj_test',500)
+            result=ProviderBilling(client).verify('proj_test',498)
         self.assertEqual(result['observed_spend_cents'],2) # round up, never understate fractions
         self.assertEqual(len(seen),3)
 
@@ -346,15 +347,27 @@ class PipelineTests(unittest.TestCase):
         files[TECHNICIAN.write_paths[0]]=files[TECHNICIAN.write_paths[0]].replace(old,new)
         return files
 
-    def code(self):
+    def code(self, cents=500, spent=0, post_spent=0):
         files=self.candidate();raw=json.dumps({'task_id':TASK_ID,'files':[
             {'path':p,'content':text} for p,text in files.items()]}).encode()
         client,sessions=fake_client(raw=raw);client.project='proj_test'
         missing=Exception('not found');missing.status_code=404
         sessions.retrieve.side_effect=[NS(status='idle',environment=NS(id='env_test')),missing]
-        billing=NS(verify=Mock(side_effect=lambda *_:proof()))
-        result=coding_run(self.root,self.sha,TASK_ID,'proj_test',500,self.token,self.evidence,self.gh,client,billing)
+        def verify(project, requested, require_headroom=True):
+            return validate_proof(proof(observed_spend_cents=spent if require_headroom else post_spent),
+                                  project, requested, require_headroom=require_headroom)
+        billing=NS(verify=Mock(side_effect=verify))
+        _, _, token = prepare(self.root,self.sha,TASK_ID,'proj_test',cents)
+        result=coding_run(self.root,self.sha,TASK_ID,'proj_test',cents,token,self.evidence,self.gh,client,billing)
         return result,client,sessions,billing
+
+    def test_smaller_budget_runs_with_prior_spend_and_post_run_usage(self):
+        result, _, sessions, billing = self.code(cents=313, spent=187, post_spent=450)
+        self.assertEqual(result['status'], 'coded_NOT_TESTED')
+        sessions.create.assert_called_once()
+        self.assertEqual(billing.verify.call_args.args, ('proj_test',313,False))
+        state=json.loads((self.evidence/'run/state.json').read_text())
+        self.assertEqual(state['post_run_provider_budget']['observed_spend_cents'],450)
 
     def validation_receipt(self):
         digest=json.loads((self.evidence/'run/state.json').read_text())['artifact_sha256']
