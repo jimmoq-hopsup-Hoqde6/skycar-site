@@ -56,6 +56,19 @@ def build_authorization(root, sha, task_id, project, cents, token, run_id):
         return owner_acceptance_marker()
 
 
+def verify_billing_only(sha, project, cents, github, billing):
+    # No coding client, ledger, acceptance mutation or publication on this path.
+    workflow_context(sha, enabled=False)
+    with diagnostic_gate('current_main'):
+        if github.main() != sha:
+            raise pilot.PilotError('Approved source is no longer current main')
+    with diagnostic_gate('environment_protection'):
+        github.environment()
+    with diagnostic_gate('billing_verification'):
+        proof = billing.verify(project, cents)
+    return {'status': 'billing_verified_NO_CODING', 'sha': sha, 'proof': proof}
+
+
 def coding_run(root, sha, task_id, project, cents, token, output, github, coding_client, billing):
     spec, request, actual = prepare(root,sha,task_id,project,cents)
     require_approval(actual,token)
@@ -189,7 +202,7 @@ def publish(root, sha, task_id, project, cents, token, evidence, validation, git
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation',choices=('preflight','initialize-ledger','execute','validate','publish'))
+    parser.add_argument('operation',choices=('preflight','initialize-ledger','verify-billing','execute','validate','publish'))
     parser.add_argument('--root',type=Path,default=Path.cwd())
     parser.add_argument('--sha',required=True)
     parser.add_argument('--task',default='technician-command-account-v1')
@@ -220,6 +233,18 @@ def main():
             if gh.main()!=args.sha:raise pilot.PilotError('Main advanced')
             Ledger(gh,args.project_id).initialize()
             result={'status':'ledger_initialized_NOT_ACTIVE'}
+        elif args.operation=='verify-billing':
+            workflow_context(args.sha, enabled=False)
+            with diagnostic_gate('credentials'):
+                from openai import OpenAI
+                org = os.environ.get('SKYCAR_OPENAI_ORGANIZATION_ID', '')
+                key = os.environ.get('SKYCAR_OPENAI_BILLING_READ_KEY')
+                if not re.fullmatch(r'org-[A-Za-z0-9]+', org) or not key:
+                    raise pilot.PilotError('Selected organization and billing-read credential required')
+                with OpenAI(admin_api_key=key, organization=org, base_url='https://api.openai.com/v1',
+                            max_retries=0, timeout=20) as admin:
+                    result = verify_billing_only(args.sha, args.project_id, args.budget_cents,
+                        GitHub(os.environ.get('GH_TOKEN')), ProviderBilling(admin))
         elif args.operation=='execute':
             require_approval(token,args.approved_fingerprint)
             workflow_context(args.sha)

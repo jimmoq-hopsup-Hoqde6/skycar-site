@@ -337,6 +337,26 @@ SKYCAR_DOCKER_TESTS=1 python3 -m unittest discover \
 
 ### Safe failure diagnostics
 
+Run #9 (`44531352122`) stopped at `billing_proof` before reservation/session
+creation. Do not rerun it to diagnose billing. The new protected manual
+`verify-billing` operation reads provider costs, project state and hard limit
+while the executor remains stopped. It uses only the billing Admin credential
+and read-only GitHub permissions; it has no coding/publisher credential and does
+not reserve the ledger, create a coding session or publish. It still requires
+reviewed current-main source and the existing protected environment approval.
+Select this operation after this change is reviewed and merged, using that new
+full main SHA and the approved budget. It does not require a paid-run acceptance
+or fingerprint, and does not consume the one-run D-009 exception.
+
+Proof rejection now includes an allowlisted `failure.billing_reason`: schema,
+project, currency, interval, enforcement, requested_budget, limit_type,
+limit_range, spend_type, spend_range or freshness. Arbitrary provider values and
+exception messages are never included. Successful diagnosis prints only the
+validated budget proof. This identifies which condition to repair without
+weakening the hard-limit gate. A green diagnostic is not paid-run authorization;
+any subsequent paid pilot still requires a new exact-source, run-bound acceptance
+and protected approvals under the existing process.
+
 The controller reports a fixed `failure.stage` instead of printing exception
 messages or provider response bodies. Pre-session gates distinguish source and
 fingerprint approval, workflow context, current main, environment protection,
