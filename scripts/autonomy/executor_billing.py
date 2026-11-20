@@ -10,6 +10,14 @@ def validate_proof(proof, project, requested, now=None):
     def reject(reason):
         failure = PilotError('Provider budget evidence rejected')
         failure._skycar_billing_reason = reason
+        if reason == 'enforcement':
+            status = proof['enforcement']
+            if status is None:
+                failure._skycar_enforcement = 'missing'
+            elif type(status) is str and status == 'inactive':
+                failure._skycar_enforcement = 'inactive'
+            else:
+                failure._skycar_enforcement = 'unrecognized'
         raise failure
 
     fields = {"project_id", "currency", "interval", "limit_cents", "enforcement",
