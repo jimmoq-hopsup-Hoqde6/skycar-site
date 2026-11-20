@@ -14,8 +14,8 @@ def validate_proof(proof, project, requested, now=None):
             status = proof['enforcement']
             if status is None:
                 failure._skycar_enforcement = 'missing'
-            elif type(status) is str and status == 'inactive':
-                failure._skycar_enforcement = 'inactive'
+            elif type(status) is str and status == 'enforcing':
+                failure._skycar_enforcement = 'enforcing'
             else:
                 failure._skycar_enforcement = 'unrecognized'
         raise failure
@@ -26,8 +26,11 @@ def validate_proof(proof, project, requested, now=None):
         reject('schema')
     if not re.fullmatch(r"proj_[A-Za-z0-9]+", project) or proof['project_id'] != project:
         reject('project')
+    # Owner-authorized pilot policy: accept the observed inactive state only
+    # with dashboard hard-limit verification as a manual precondition. This
+    # does not establish that inactive proves enforcement is enabled.
     for field in ('currency', 'interval', 'enforcement'):
-        if proof[field] != {'currency': 'USD', 'interval': 'month', 'enforcement': 'enforcing'}[field]:
+        if proof[field] != {'currency': 'USD', 'interval': 'month', 'enforcement': 'inactive'}[field]:
             reject(field)
     if type(requested) is not int or not 1 <= requested <= MAX_CENTS:
         reject('requested_budget')
