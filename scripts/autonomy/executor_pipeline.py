@@ -74,6 +74,51 @@ def verify_billing_only(sha, project, cents, github, billing):
             'full_request_fits': proof['observed_spend_cents'] + cents <= proof['limit_cents']}
 
 
+def verify_coding_key(client):
+    # Free authenticated read with the dedicated coding key; no model input or spend.
+    with diagnostic_gate('coding_key'):
+        model = client.models.retrieve(pilot.MODEL)
+        if getattr(model, 'id', None) != pilot.MODEL:
+            raise pilot.PilotError('Coding key cannot read the reviewed model')
+    return 'authenticated'
+
+
+FAILED_CONCLUSIONS = ('failure', 'cancelled', 'timed_out')
+
+
+def release_failed_reservation(sha, project, failed_run_id, github, billing):
+    """Owner-approved, protected: free the lease of one failed pre-artifact run.
+
+    The task record, its owner acceptance and its reserved budget stay in the
+    ledger. A new attempt needs a new source SHA and an owner acceptance that
+    names this run in supersedes_run_id."""
+    run_id = workflow_context(sha, enabled=False)
+    with diagnostic_gate('current_main'):
+        if github.main() != sha:
+            raise pilot.PilotError('Approved source is no longer current main')
+    with diagnostic_gate('environment_protection'):
+        github.environment()
+    with diagnostic_gate('failed_run'):
+        if not re.fullmatch(r'[1-9][0-9]*', failed_run_id or '') or failed_run_id == run_id:
+            raise pilot.PilotError('A different, exact failed run is required')
+        run = github.request('GET', PREFIX + '/actions/runs/' + failed_run_id)
+        if (str(run.get('id')) != failed_run_id or run.get('status') != 'completed'
+                or run.get('conclusion') not in FAILED_CONCLUSIONS
+                or run.get('path') != '.github/workflows/skycar-technician-executor.yml'
+                or run.get('event') != 'workflow_dispatch' or run.get('head_branch') != 'main'):
+            raise pilot.PilotError('Run is not a completed, failed technician executor run')
+    with diagnostic_gate('billing_verification'):
+        proof = billing.verify(project, 1, False)
+    release = {'released_by_run_id': run_id, 'failed_run_conclusion': run['conclusion'],
+               'observed_spend_cents': proof['observed_spend_cents'],
+               'limit_cents': proof['limit_cents'], 'verified_at_utc': proof['verified_at_utc']}
+    with diagnostic_gate('ledger_release'):
+        key = Ledger(github, project).release(failed_run_id, release)
+    return {'status': 'reservation_released_RECORD_KEPT', 'task': key, 'failed_run_id': failed_run_id,
+            'observed_spend_cents': proof['observed_spend_cents'],
+            'remaining_headroom_cents': proof['limit_cents'] - proof['observed_spend_cents']}
+
+
 def require_full_budget_headroom(proof, cents):
     # A nominal project cap does not reserve the full per-run budget when prior
     # project usage exists. Check before any ledger claim, session or model input.
@@ -218,7 +263,9 @@ def publish(root, sha, task_id, project, cents, token, evidence, validation, git
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation',choices=('preflight','initialize-ledger','verify-billing','execute','validate','publish'))
+    parser.add_argument('operation',choices=('preflight','initialize-ledger','verify-billing','release-reservation',
+                                             'execute','validate','publish'))
+    parser.add_argument('--release-run-id',default='')
     parser.add_argument('--root',type=Path,default=Path.cwd())
     parser.add_argument('--sha',required=True)
     parser.add_argument('--task',default='technician-command-account-v1')
@@ -260,6 +307,22 @@ def main():
                 with OpenAI(admin_api_key=key, organization=org, base_url='https://api.openai.com/v1',
                             max_retries=BILLING_READ_RETRIES, timeout=20) as admin:
                     result = verify_billing_only(args.sha, args.project_id, args.budget_cents,
+                        GitHub(os.environ.get('GH_TOKEN')), ProviderBilling(admin))
+                coding_key = os.environ.get('SKYCAR_OPENAI_CODING_KEY')
+                if coding_key:
+                    with OpenAI(api_key=coding_key, project=args.project_id, organization=org,
+                                base_url='https://api.openai.com/v1', max_retries=2, timeout=20) as coder:
+                        result['coding_key'] = verify_coding_key(coder)
+        elif args.operation=='release-reservation':
+            with diagnostic_gate('credentials'):
+                from openai import OpenAI
+                org = os.environ.get('SKYCAR_OPENAI_ORGANIZATION_ID', '')
+                key = os.environ.get('SKYCAR_OPENAI_BILLING_READ_KEY')
+                if not re.fullmatch(r'org-[A-Za-z0-9]+', org) or not key:
+                    raise pilot.PilotError('Selected organization and billing-read credential required')
+                with OpenAI(admin_api_key=key, organization=org, base_url='https://api.openai.com/v1',
+                            max_retries=BILLING_READ_RETRIES, timeout=20) as admin:
+                    result = release_failed_reservation(args.sha, args.project_id, args.release_run_id,
                         GitHub(os.environ.get('GH_TOKEN')), ProviderBilling(admin))
         elif args.operation=='execute':
             require_approval(token,args.approved_fingerprint)

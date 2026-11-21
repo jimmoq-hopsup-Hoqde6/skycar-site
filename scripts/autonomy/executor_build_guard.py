@@ -83,6 +83,9 @@ def require_build_attestation(root, sha, now=None, *, context=None):
         fields |= {'attestation_type', 'independent_review', 'decision_id', 'run_id',
                    'project_id', 'task_id', 'budget_cents', 'request_fingerprint',
                    'draft_only', 'max_runs', 'checklist'}
+        # Optional: explicitly authorizes a new attempt after a released failed run.
+        if 'supersedes_run_id' in value:
+            fields.add('supersedes_run_id')
     if (type(value) is not dict or set(value) != fields or type(value['version']) is not int
             or value['version'] != 1 or value['repository'] != REPOSITORY
             or value['source_sha'] != sha or value['policy_sha256'] != digest
@@ -103,6 +106,9 @@ def require_build_attestation(root, sha, now=None, *, context=None):
             or not re.fullmatch(r'[a-f0-9]{64}', value['request_fingerprint'])
             or any(value[key] != expected or type(value[key]) is not type(expected)
                    for key, expected in context.items())
+            or 'supersedes_run_id' in value and (not isinstance(value['supersedes_run_id'], str)
+                or not re.fullmatch(r'[1-9][0-9]*', value['supersedes_run_id'])
+                or value['supersedes_run_id'] == value['run_id'])
             or type(value['checklist']) is not dict or set(value['checklist']) != OWNER_CHECKLIST
             or any(answer is not True for answer in value['checklist'].values())):
         raise PilotError('Owner acceptance must authorize this one draft-only pilot and completed checklist')
@@ -123,5 +129,8 @@ def owner_acceptance_marker():
     value = decode(os.environ.get('SKYCAR_GENERATED_BUILD_ATTESTATION', ''))
     if value.get('attestation_type') != 'owner_risk_acceptance':
         return None
-    return {'decision_id': OWNER_DECISION,
-            'attestation_sha256': hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()}
+    marker = {'decision_id': OWNER_DECISION,
+              'attestation_sha256': hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()}
+    if 'supersedes_run_id' in value:
+        marker['supersedes_run_id'] = value['supersedes_run_id']
+    return marker
