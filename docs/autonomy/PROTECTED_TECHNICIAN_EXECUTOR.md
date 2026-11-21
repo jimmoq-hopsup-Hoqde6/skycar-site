@@ -320,9 +320,14 @@ session id for a `reserved` task, so the job downloads the failed run's own
 `technician-coding-evidence` artifact and takes the session id from its
 `run/state.json`, which must match the reservation's fingerprint and SHA. A run
 with no known session id (for example an unknown creation outcome) cannot be
-released. With the coding key it then cancels and deletes the session if it
-still exists, and proceeds only after the provider returns **404** for it. Only
-then does it read live billing evidence (`observed_spend_cents`, `limit_cents`,
+released. With the coding key it must first **see** the session (successful
+retrieve): that is the provider-backed proof the credential is scoped to the
+session's project and Agents resources. It then cancels and deletes it and
+proceeds only after the provider returns **404**. An initial 404 is ambiguous
+(the Agents API also returns 404 for a resource in another project or not
+visible to a restricted credential), so it never releases: the lock, record and
+budget stay and the owner must reconcile in the provider dashboard. Only then
+does it read live billing evidence (`observed_spend_cents`, `limit_cents`,
 `verified_at_utc`), record it with the session id, `session_absent_confirmed`
 and the releasing run id, and mark the task `released`. It does **not** delete or
 refund anything:
@@ -339,8 +344,9 @@ unreleased at a time. A release is not proof that no provider cost occurred;
 the recorded billing figures and the retained budget are the safeguard.
 
 `verify-billing` also checks the dedicated coding key with a free model read
-(`coding_key: authenticated`). This proves authentication and model-metadata
-access only, not Agents session write permission.
+(`coding_key: authenticated`) and fails if `SKYCAR_OPENAI_CODING_KEY` is
+missing. This proves authentication and model-metadata access only, not Agents
+session write permission.
 The publisher records a candidate commit before creating its prefixed branch.
 An uncertain PR creation can be reconciled against that exact existing draft
 without creating a second PR or making another coding call.

@@ -107,7 +107,13 @@ def entry_sha(entry):
 
 
 def ensure_session_absent(client, session_id):
-    """Cancel and delete if still present; release only after the provider returns 404."""
+    """Release only after this credential has SEEN the session, deleted it, then got 404.
+
+    A provider 404 also means "not visible to this request" (wrong project or a
+    restricted/rotated credential), so an initial 404 proves nothing. Seeing the
+    session first is the provider-backed proof that this credential is scoped to
+    its project; after that, a 404 means it is gone. Otherwise the lock stays and
+    the owner must reconcile in the provider dashboard."""
     def missing():
         try:
             client.beta.agents.sessions.retrieve(session_id)
@@ -118,7 +124,8 @@ def ensure_session_absent(client, session_id):
         return False
     with diagnostic_gate('session_absence'):
         if missing():
-            return True
+            raise pilot.PilotError('Session not visible to this credential (ambiguous 404); '
+                                   'keep the lock and reconcile in the provider dashboard')
         try:
             client.beta.agents.sessions.events.create(
                 session_id, events=[{'type': 'agent.session.input.cancel'}])
@@ -363,6 +370,10 @@ def main():
             result={'status':'ledger_initialized_NOT_ACTIVE'}
         elif args.operation=='verify-billing':
             workflow_context(args.sha, enabled=False)
+            with diagnostic_gate('coding_key'):
+                # The documented check is billing AND coding key; never report success without both.
+                if not os.environ.get('SKYCAR_OPENAI_CODING_KEY'):
+                    raise pilot.PilotError('Coding credential required for the billing-and-key check')
             with diagnostic_gate('credentials'):
                 from openai import OpenAI
                 org = os.environ.get('SKYCAR_OPENAI_ORGANIZATION_ID', '')
@@ -373,11 +384,10 @@ def main():
                             max_retries=BILLING_READ_RETRIES, timeout=20) as admin:
                     result = verify_billing_only(args.sha, args.project_id, args.budget_cents,
                         GitHub(os.environ.get('GH_TOKEN')), ProviderBilling(admin))
-                coding_key = os.environ.get('SKYCAR_OPENAI_CODING_KEY')
-                if coding_key:
-                    with OpenAI(api_key=coding_key, project=args.project_id, organization=org,
-                                base_url='https://api.openai.com/v1', max_retries=2, timeout=20) as coder:
-                        result['coding_key'] = verify_coding_key(coder)
+                with OpenAI(api_key=os.environ['SKYCAR_OPENAI_CODING_KEY'], project=args.project_id,
+                            organization=org, base_url='https://api.openai.com/v1',
+                            max_retries=2, timeout=20) as coder:
+                    result['coding_key'] = verify_coding_key(coder)
         elif args.operation=='release-reservation':
             with diagnostic_gate('credentials'):
                 from openai import OpenAI

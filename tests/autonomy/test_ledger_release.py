@@ -200,7 +200,7 @@ class ReleaseOperationTests(unittest.TestCase):
         self.ledger.initialize()
         self.key = self.ledger.claim(TASK, 'b' * 40, 'f' * 64, 313, FAILED_RUN, owner_acceptance=marker())
         self.billing = NS(verify=Mock(return_value=proof(observed_spend_cents=187)))
-        self.client, self.api, self.live = sessions()
+        self.client, self.api, self.live = sessions(present=True)
         tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
         self.evidence = Path(tmp.name)
         self.write_state()
@@ -272,9 +272,36 @@ class ReleaseOperationTests(unittest.TestCase):
         self.api.delete.side_effect = delete
         result = self.release()
         self.assertTrue(result['session_absent_confirmed'])
+        self.assertEqual(self.api.retrieve.call_count, 2)  # visible first, then 404
         self.api.events.create.assert_called_once()
         self.assertEqual(self.api.delete.call_count, 2)
         self.assertEqual(self.ledger.load()[1]['tasks'][self.key]['phase'], 'released')
+
+    def assert_blocked_and_kept(self, stage):
+        with self.assertRaises(Exception) as caught:
+            self.release()
+        self.assertEqual(safe_failure(caught.exception)['stage'], stage)
+        state = self.ledger.load()[1]
+        self.assertEqual(state['active'], self.key)
+        self.assertEqual(state['tasks'][self.key]['phase'], 'reserved')
+        self.assertEqual(state['months'][state['tasks'][self.key]['month']], 313)
+        self.billing.verify.assert_not_called()
+
+    def test_initial_404_is_ambiguous_and_never_releases(self):
+        # Reviewer repro: the original session is still live, but the rotated credential
+        # (wrong project or restricted scope) gets 404. Must not release or delete.
+        self.live['present'] = True
+        self.api.retrieve.side_effect = Gone()
+        self.assert_blocked_and_kept('session_absence')
+        self.api.delete.assert_not_called()
+        self.api.events.create.assert_not_called()
+
+    def test_wrong_project_or_restricted_credential_is_blocked(self):
+        for error in (Gone(), Denied()):
+            self.api.retrieve.side_effect = error
+            with self.subTest(error=type(error).__name__):
+                self.assert_blocked_and_kept('session_absence')
+        self.api.delete.assert_not_called()
 
     def test_session_that_cannot_be_confirmed_gone_blocks_release_before_billing(self):
         for setup in ('still_present', 'retrieve_denied', 'delete_denied'):
@@ -312,6 +339,26 @@ class ReleaseOperationTests(unittest.TestCase):
                             artifact_sha256='a' * 64, session_id='sess_x')
         with self.assertRaises(PilotError):
             self.release()
+
+
+class VerifyBillingCliTests(unittest.TestCase):
+    def test_verify_billing_fails_without_coding_key(self):
+        import subprocess, sys
+        f = fixtures.PipelineTests(); f.setUp(); self.addCleanup(f.doCleanups)
+        script = Path(__file__).resolve().parents[2] / 'scripts' / 'autonomy' / 'executor_pipeline.py'
+        env = {k: v for k, v in os.environ.items() if not k.startswith('SKYCAR_')}
+        env.update({'GITHUB_REPOSITORY': fixtures.pilot.REPOSITORY, 'GITHUB_EVENT_NAME': 'workflow_dispatch',
+                    'GITHUB_REF': 'refs/heads/main', 'GITHUB_SHA': f.sha, 'GITHUB_RUN_ATTEMPT': '1',
+                    'GITHUB_RUN_ID': '777', 'SKYCAR_EXECUTOR_ENABLED': 'false',
+                    'SKYCAR_OPENAI_ORGANIZATION_ID': 'org-test', 'SKYCAR_OPENAI_BILLING_READ_KEY': 'admin-test'})
+        done = subprocess.run([sys.executable, str(script), 'verify-billing', '--root', str(f.root),
+                               '--sha', f.sha, '--project-id', PROJECT, '--budget-cents', '187'],
+                              env=env, capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(done.stdout, '')
+        failure = json.loads(done.stderr.strip().splitlines()[-1])
+        self.assertEqual(failure['status'], 'blocked_RECONCILE_BEFORE_RETRY')
+        self.assertEqual(failure['failure']['stage'], 'coding_key')
 
 
 class CodingKeyAndAcceptanceTests(unittest.TestCase):
