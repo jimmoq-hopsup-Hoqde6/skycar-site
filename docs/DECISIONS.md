@@ -143,8 +143,8 @@ Money remains a separate lifecycle: there is no charge, payout, refund, paid bad
 
 ## D-009 — Owner risk acceptance for one supervised coding pilot
 Date: 2026-11-19
-Status: ACCEPTED OWNER POLICY DECISION; implementation pending owner review/merge;
-individual run acceptance NOT SIGNED
+Status: ACCEPTED OWNER POLICY DECISION; implementation merged via PR #123;
+individual run acceptance NOT SIGNED — NO EXECUTION AUTHORIZATION
 
 Decision:
 Marcel (@jimmoq-hopsup-Hoqde6), repository owner, accepts responsibility for the
@@ -180,6 +180,17 @@ remain unchanged. No automatic merge, deployment, hosted migration, live payment
 or unattended/repeated execution is authorized. Previous AI reviews through
 Moogly88 are not independent and must not be cited as independent approval.
 
-Marcel will review and merge the gate PR himself, create/save any individual
-acceptance himself, and separately approve the single run in GitHub Actions.
-No AI may sign or install an owner acceptance on his behalf.
+PR #123 was merged on 2026-11-18 at 21:37:26 UTC by `moogly88` (not the
+owner login `jimmoq-hopsup-Hoqde6`). A merge or GitHub review under that
+account does not establish the owner's personal sign-off or satisfy a separate
+independent human QA/Security assessment. Before any D-009 invocation, Marcel
+must personally review the merged gate, complete the live integration, Preview
+secret-isolation and dedicated-credential checklist, create/save the exact-run
+protected owner acceptance himself, and separately approve the protected job.
+
+The first new preflight must bind the **then-current** `main` SHA; the previous
+`85308251...` SHA and any fingerprint from it are invalid after PR #123.
+The original independent-human attestation route remains available. D-009's
+explicit owner-risk exception is never an independent QA/Security verdict and
+never authorizes unattended agents. No AI may sign or install an owner acceptance
+on Marcel's behalf. No paid run is approved by this documentation update.
