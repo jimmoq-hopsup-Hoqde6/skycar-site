@@ -15,7 +15,7 @@ REF = "notes/skycar-executor-ledger-v1"
 # owner-accepted attempts (original plus explicit supersessions) may ever exist.
 MAX_OWNER_ATTEMPTS = 3
 RELEASE_FIELDS = {'released_by_run_id', 'failed_run_conclusion', 'observed_spend_cents',
-                  'limit_cents', 'verified_at_utc'}
+                  'limit_cents', 'verified_at_utc', 'session_id', 'session_absent_confirmed'}
 
 
 def validate_owner_marker(marker):
@@ -40,6 +40,9 @@ def validate_release(entry):
             or type(release['observed_spend_cents']) is not int or type(release['limit_cents']) is not int
             or not 0 <= release['observed_spend_cents'] < release['limit_cents'] <= MAX_CENTS
             or not isinstance(release['verified_at_utc'], str)
+            or not isinstance(release['session_id'], str)
+            or not re.fullmatch(r'sess_[A-Za-z0-9]+', release['session_id'])
+            or release['session_absent_confirmed'] is not True
             or 'artifact_sha256' in entry or 'session_id' in entry):
         raise PilotError('Invalid released reservation evidence')
 

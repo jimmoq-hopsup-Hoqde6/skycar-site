@@ -112,15 +112,24 @@ jobs:
           persist-credentials: false
       - name: Install pinned controller dependencies before credential injection
         run: python3 -m pip install -r scripts/autonomy/requirements-pilot.txt
-      - name: Release one failed pre-artifact reservation, keeping its record and budget
+      - name: Fetch the failed run's own bounded evidence (session id source)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: technician-coding-evidence
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/failed-evidence
+      - name: Confirm provider session is gone, then release, keeping record and budget
         env:
           GH_TOKEN: ${{ github.token }}
           SKYCAR_OPENAI_ORGANIZATION_ID: ${{ vars.SKYCAR_OPENAI_ORGANIZATION_ID }}
           SKYCAR_OPENAI_BILLING_READ_KEY: ${{ secrets.SKYCAR_OPENAI_BILLING_READ_KEY }}
+          # Session retrieve/cancel/delete only; no session creation or model input.
+          SKYCAR_OPENAI_CODING_KEY: ${{ secrets.SKYCAR_OPENAI_CODING_KEY }}
         run: >-
           python3 scripts/autonomy/executor_pipeline.py release-reservation
           --sha "$APPROVED_SHA" --project-id "$PROJECT_ID" --budget-cents "$BUDGET_CENTS"
-          --release-run-id "$RELEASE_RUN_ID"
+          --release-run-id "$RELEASE_RUN_ID" --evidence "$RUNNER_TEMP/failed-evidence"
   coding:
     needs: preflight
     if: "!startsWith(github.head_ref || github.ref_name, 'agent/') && (inputs.operation == 'initialize-ledger' || inputs.operation == 'run')"
