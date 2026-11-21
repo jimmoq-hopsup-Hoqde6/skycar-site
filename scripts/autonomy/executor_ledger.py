@@ -11,13 +11,37 @@ from executor_github import GitHubError, PREFIX
 from bounded_coding_pilot import MAX_CENTS, PilotError
 
 REF = "notes/skycar-executor-ledger-v1"
+# A released reservation keeps its record and its budget; this bounds how many
+# owner-accepted attempts (original plus explicit supersessions) may ever exist.
+MAX_OWNER_ATTEMPTS = 3
+RELEASE_FIELDS = {'released_by_run_id', 'failed_run_conclusion', 'observed_spend_cents',
+                  'limit_cents', 'verified_at_utc'}
 
 
 def validate_owner_marker(marker):
-    if (type(marker) is not dict or set(marker) != {'decision_id', 'attestation_sha256'}
+    keys = {'decision_id', 'attestation_sha256'}
+    if type(marker) is dict and 'supersedes_run_id' in marker:
+        keys = keys | {'supersedes_run_id'}
+    if (type(marker) is not dict or set(marker) != keys
             or marker['decision_id'] != 'D-009' or not isinstance(marker['attestation_sha256'], str)
-            or not re.fullmatch(r'[a-f0-9]{64}', marker['attestation_sha256'])):
+            or not re.fullmatch(r'[a-f0-9]{64}', marker['attestation_sha256'])
+            or 'supersedes_run_id' in marker and (not isinstance(marker['supersedes_run_id'], str)
+                or not re.fullmatch(r'[1-9][0-9]*', marker['supersedes_run_id']))):
         raise PilotError('Invalid durable owner acceptance')
+
+
+def validate_release(entry):
+    release = entry.get('release')
+    if (type(release) is not dict or set(release) != RELEASE_FIELDS
+            or not isinstance(release['released_by_run_id'], str)
+            or not re.fullmatch(r'[1-9][0-9]*', release['released_by_run_id'])
+            or release['released_by_run_id'] == entry['run_id']
+            or release['failed_run_conclusion'] not in ('failure', 'cancelled', 'timed_out')
+            or type(release['observed_spend_cents']) is not int or type(release['limit_cents']) is not int
+            or not 0 <= release['observed_spend_cents'] < release['limit_cents'] <= MAX_CENTS
+            or not isinstance(release['verified_at_utc'], str)
+            or 'artifact_sha256' in entry or 'session_id' in entry):
+        raise PilotError('Invalid released reservation evidence')
 
 
 def month_now():
@@ -35,21 +59,29 @@ def validate_state(state, project):
     totals = {}
     pending = []
     owner_runs = 0
+    live_owner_runs = 0
     for key, entry in state["tasks"].items():
         if (not isinstance(key, str) or type(entry) is not dict
                 or not re.fullmatch(r"[a-z0-9-]+@[a-f0-9]{40}", key)
                 or not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", entry.get("month", ""))
                 or type(entry.get("budget_cents")) is not int
                 or not 1 <= entry["budget_cents"] <= MAX_CENTS
-                or entry.get("phase") not in ("reserved", "coded", "publishing", "published")
+                or entry.get("phase") not in ("reserved", "coded", "publishing", "published", "released")
                 or not re.fullmatch(r"[a-f0-9]{64}", entry.get("fingerprint", ""))
                 or not re.fullmatch(r"\d+", entry.get("run_id", ""))):
             raise PilotError("Invalid task ledger entry")
+        # Released reservations still count: the ledger never forgets reserved budget.
         totals[entry["month"]] = totals.get(entry["month"], 0) + entry["budget_cents"]
         if 'owner_risk_acceptance' in entry:
             validate_owner_marker(entry['owner_risk_acceptance'])
             owner_runs += 1
-        if entry['phase'] != 'published':
+            if entry['phase'] != 'released':
+                live_owner_runs += 1
+        if entry['phase'] == 'released':
+            validate_release(entry)
+        elif 'release' in entry:
+            raise PilotError('Release evidence on an unreleased task')
+        if entry['phase'] not in ('published', 'released'):
             pending.append(key)
         if entry['phase'] in ('coded','publishing','published') and (
                 not re.fullmatch(r'[a-f0-9]{64}',entry.get('artifact_sha256',''))
@@ -63,8 +95,8 @@ def validate_state(state, project):
             raise PilotError('Missing draft PR identity')
     if pending != ([] if state['active'] is None else [state['active']]):
         raise PilotError('Unreconciled task is missing its global lease')
-    if owner_runs > 1:
-        raise PilotError('Owner decision permits only one pilot across ledger history')
+    if live_owner_runs > 1 or owner_runs > MAX_OWNER_ATTEMPTS:
+        raise PilotError('Owner decision permits only one live pilot and bounded explicit retries')
     if totals != state["months"] or any(type(n) is not int or not 0 <= n <= MAX_CENTS for n in totals.values()):
         raise PilotError("Ledger cumulative reservations are inconsistent")
     return state
@@ -74,8 +106,19 @@ def reserve(state, project, task, sha, fingerprint, cents, run_id, month, owner_
     validate_state(state, project)
     if owner_acceptance is not None:
         validate_owner_marker(owner_acceptance)
-        if any('owner_risk_acceptance' in entry for entry in state['tasks'].values()):
-            raise PilotError('Owner pilot acceptance is consumed, including failed or uncertain runs')
+        prior = [entry for entry in state['tasks'].values() if 'owner_risk_acceptance' in entry]
+        if prior:
+            # A failed attempt stays consumed. Only a fresh acceptance that names the
+            # exact released run it supersedes may authorize another attempt.
+            released = [entry for entry in prior if entry['phase'] == 'released']
+            if (len(released) != len(prior) or len(prior) >= MAX_OWNER_ATTEMPTS
+                    or owner_acceptance.get('supersedes_run_id')
+                    not in {entry['run_id'] for entry in released}
+                    or any(entry['owner_risk_acceptance'].get('supersedes_run_id')
+                           == owner_acceptance['supersedes_run_id'] for entry in prior)):
+                raise PilotError('Owner pilot acceptance is consumed, including failed or uncertain runs')
+        elif 'supersedes_run_id' in owner_acceptance:
+            raise PilotError('Nothing to supersede')
     key = task + "@" + sha
     if (state["active"] is not None or key in state["tasks"]
             or state["months"] and month < max(state["months"])
@@ -170,3 +213,16 @@ class Ledger:
         if new_phase == "published":
             state["active"] = None
         self.save(parent, state)
+
+    def release(self, run_id, release):
+        """Free the lease of a pre-artifact reservation; keep its record and budget."""
+        parent, state = self.load()
+        key = state['active']
+        entry = state['tasks'].get(key) if key else None
+        if (entry is None or entry['phase'] != 'reserved' or entry['run_id'] != run_id
+                or 'artifact_sha256' in entry or 'session_id' in entry):
+            raise PilotError('Only the active pre-artifact reservation of that run can be released')
+        entry.update(phase='released', release=deepcopy(release))
+        state['active'] = None
+        self.save(parent, state)
+        return key

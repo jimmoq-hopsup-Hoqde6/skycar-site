@@ -309,6 +309,30 @@ Successful coding requires session deletion followed by a provider 404 before
 the ledger can advance. A failed or uncertain run stays blocked for owner
 reconciliation against session/cost evidence. Do not delete or rewrite ledger
 history to retry. There is deliberately no automated recovery/reset command.
+
+**Owner-approved release of a failed pre-artifact reservation.** The protected
+`release-reservation` operation (owner approval in `skycar-agent-pilot`
+required) frees only the global lease of the active task when all hold: its
+phase is still `reserved` (no artifact or session id recorded), its run is the
+exact `release_run_id`, and that run is a completed `failure`, `cancelled` or
+`timed_out` dispatch of this workflow on `main`. It records live billing
+evidence (`observed_spend_cents`, `limit_cents`, `verified_at_utc`) and the
+releasing run id, and marks the task `released`. It does **not** delete or
+refund anything:
+
+* the task record and its owner acceptance marker stay in the current ledger;
+* its full reserved budget still counts toward the month's 500-cent ceiling;
+* the same task/SHA can never be reserved again (a retry needs a new SHA).
+
+A released owner attempt stays consumed. Another attempt requires a fresh
+owner acceptance whose optional `supersedes_run_id` names that exact released
+run; each released run can be superseded once, at most
+`MAX_OWNER_ATTEMPTS = 3` owner attempts may ever exist, and only one may be
+unreleased at a time. A release is not proof that no provider cost occurred;
+the recorded billing figures and the retained budget are the safeguard.
+
+`verify-billing` also checks the dedicated coding key with a free model read
+(`coding_key: authenticated`), so a rotated key is confirmed before a paid run.
 The publisher records a candidate commit before creating its prefixed branch.
 An uncertain PR creation can be reconciled against that exact existing draft
 without creating a second PR or making another coding call.
