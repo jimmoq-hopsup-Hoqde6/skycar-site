@@ -2,6 +2,8 @@
 from copy import deepcopy
 import json
 import os
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock
@@ -17,6 +19,36 @@ PROJECT = 'proj_test'
 TASK = fixtures.TASK_ID
 FAILED_RUN = '44838598662'
 MONTH = '2099-01'
+SESSION = 'sess_0b3601bf748c0fc8806b00dc9ece44819aa834774b31465e2f'
+
+
+class Gone(Exception):
+    status_code = 404
+
+
+class Busy(Exception):
+    status_code = 409
+
+
+class Denied(Exception):
+    status_code = 401
+
+
+def sessions(present=False, delete_errors=()):
+    """Fake provider sessions: retrieve 404s once deleted."""
+    live = {'present': present}
+    errors = list(delete_errors)
+    def retrieve(sid):
+        if not live['present']:
+            raise Gone()
+        return NS(id=sid)
+    def delete(sid):
+        if errors:
+            raise errors.pop(0)
+        live['present'] = False
+    api = NS(retrieve=Mock(side_effect=retrieve), delete=Mock(side_effect=delete),
+             events=NS(create=Mock()), create=Mock(), stream=Mock())
+    return NS(beta=NS(agents=NS(sessions=api))), api, live
 
 
 def marker(n='1', supersedes=None):
@@ -29,7 +61,8 @@ def marker(n='1', supersedes=None):
 def release_evidence(**changes):
     value = {'released_by_run_id': '777', 'failed_run_conclusion': 'failure',
              'observed_spend_cents': 187, 'limit_cents': 500,
-             'verified_at_utc': '2099-01-01T00:00:00+00:00'}
+             'verified_at_utc': '2099-01-01T00:00:00+00:00',
+             'session_id': SESSION, 'session_absent_confirmed': True}
     return dict(value, **changes)
 
 
@@ -131,6 +164,8 @@ class LedgerReleaseTests(unittest.TestCase):
             lambda s: s['tasks'][key]['release'].update(failed_run_conclusion='success'),
             lambda s: s['tasks'][key]['release'].update(observed_spend_cents=500),
             lambda s: s['tasks'][key]['release'].update(limit_cents=501),
+            lambda s: s['tasks'][key]['release'].update(session_id='nope'),
+            lambda s: s['tasks'][key]['release'].update(session_absent_confirmed=False),
             lambda s: s['tasks'][key].update(session_id='sess_x'),
             lambda s: s['months'].update({MONTH: 0}),
             lambda s: s['tasks'][key].update(phase='reserved'),  # evidence on unreleased task
@@ -165,6 +200,21 @@ class ReleaseOperationTests(unittest.TestCase):
         self.ledger.initialize()
         self.key = self.ledger.claim(TASK, 'b' * 40, 'f' * 64, 313, FAILED_RUN, owner_acceptance=marker())
         self.billing = NS(verify=Mock(return_value=proof(observed_spend_cents=187)))
+        self.client, self.api, self.live = sessions()
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        self.evidence = Path(tmp.name)
+        self.write_state()
+
+    def write_state(self, **changes):
+        state = {'task': TASK, 'sha': 'b' * 40, 'request_fingerprint': 'f' * 64,
+                 'session_id': SESSION, 'cleanup': 'deletion_requested'}
+        state.update(changes)
+        (self.evidence / 'run').mkdir(exist_ok=True)
+        (self.evidence / 'run' / 'state.json').write_text(json.dumps(state))
+
+    def release(self, run_id=FAILED_RUN, sha='a' * 40):
+        return release_failed_reservation(sha, PROJECT, run_id, self.gh, self.billing,
+                                          self.client, self.evidence)
 
     def restore(self):
         for k, v in self.old.items():
@@ -172,7 +222,7 @@ class ReleaseOperationTests(unittest.TestCase):
             else: os.environ[k] = v
 
     def test_release_records_live_billing_and_keeps_the_record(self):
-        result = release_failed_reservation('a' * 40, PROJECT, FAILED_RUN, self.gh, self.billing)
+        result = self.release()
         self.assertEqual(result['status'], 'reservation_released_RECORD_KEPT')
         self.assertEqual(result['remaining_headroom_cents'], 313)
         self.billing.verify.assert_called_once_with(PROJECT, 1, False)
@@ -182,9 +232,12 @@ class ReleaseOperationTests(unittest.TestCase):
         self.assertEqual(entry['phase'], 'released')
         self.assertEqual(entry['release']['released_by_run_id'], '777')
         self.assertEqual(entry['release']['observed_spend_cents'], 187)
+        self.assertEqual(entry['release']['session_id'], SESSION)
+        self.assertIs(entry['release']['session_absent_confirmed'], True)
+        self.api.create.assert_not_called(); self.api.stream.assert_not_called()
         self.assertEqual(state['months'][entry['month']], 313)
         with self.assertRaises(PilotError):  # nothing left to release
-            release_failed_reservation('a' * 40, PROJECT, FAILED_RUN, self.gh, self.billing)
+            self.release()
 
     def test_only_a_completed_failed_executor_run_can_be_released(self):
         for change in ({'conclusion': 'success'}, {'status': 'in_progress'},
@@ -192,7 +245,7 @@ class ReleaseOperationTests(unittest.TestCase):
                        {'head_branch': 'agent/x'}, {'id': 1}):
             self.gh.runs[FAILED_RUN] = failed_run(**change)
             with self.subTest(change=change), self.assertRaises(PilotError) as caught:
-                release_failed_reservation('a' * 40, PROJECT, FAILED_RUN, self.gh, self.billing)
+                self.release()
             self.assertEqual(safe_failure(caught.exception)['stage'], 'failed_run')
         self.billing.verify.assert_not_called()
         self.assertEqual(self.ledger.load()[1]['active'], self.key)
@@ -200,20 +253,65 @@ class ReleaseOperationTests(unittest.TestCase):
     def test_wrong_or_current_run_id_and_moved_main_are_rejected(self):
         for run_id in ('', '0', '777', 'x1'):
             with self.subTest(run_id=run_id), self.assertRaises(PilotError):
-                release_failed_reservation('a' * 40, PROJECT, run_id, self.gh, self.billing)
+                self.release(run_id)
         self.gh.runs['555'] = failed_run('555')
         with self.assertRaises(PilotError):  # completed failure, but not the lease holder
-            release_failed_reservation('a' * 40, PROJECT, '555', self.gh, self.billing)
+            self.release('555')
         self.gh.main_sha = 'c' * 40
         with self.assertRaises(PilotError):
-            release_failed_reservation('a' * 40, PROJECT, FAILED_RUN, self.gh, self.billing)
+            self.release()
         self.assertEqual(self.ledger.load()[1]['active'], self.key)
+
+    def test_present_session_is_deleted_and_confirmed_404_before_release(self):
+        self.live['present'] = True
+        self.api.delete.side_effect = None
+        def delete(sid):
+            if self.api.delete.call_count == 1:
+                raise Busy()
+            self.live['present'] = False
+        self.api.delete.side_effect = delete
+        result = self.release()
+        self.assertTrue(result['session_absent_confirmed'])
+        self.api.events.create.assert_called_once()
+        self.assertEqual(self.api.delete.call_count, 2)
+        self.assertEqual(self.ledger.load()[1]['tasks'][self.key]['phase'], 'released')
+
+    def test_session_that_cannot_be_confirmed_gone_blocks_release_before_billing(self):
+        for setup in ('still_present', 'retrieve_denied', 'delete_denied'):
+            self.live['present'] = True
+            self.api.retrieve.side_effect = None
+            self.api.delete.side_effect = None
+            if setup == 'still_present':
+                self.api.retrieve.side_effect = lambda sid: NS(id=sid)
+                self.api.delete.side_effect = lambda sid: None
+            elif setup == 'retrieve_denied':
+                self.api.retrieve.side_effect = Denied()
+            else:
+                self.api.retrieve.side_effect = lambda sid: NS(id=sid)
+                self.api.delete.side_effect = Denied()
+            with self.subTest(setup=setup), self.assertRaises(Exception) as caught:
+                self.release()
+            self.assertEqual(safe_failure(caught.exception)['stage'], 'session_absence')
+        self.billing.verify.assert_not_called()
+        self.assertEqual(self.ledger.load()[1]['active'], self.key)
+
+    def test_evidence_must_identify_this_reservation_and_a_session(self):
+        for changes in ({'session_id': None}, {'session_id': 'bad'}, {'request_fingerprint': 'e' * 64},
+                        {'sha': 'c' * 40}):
+            self.write_state(**changes)
+            with self.subTest(changes=changes), self.assertRaises(PilotError) as caught:
+                self.release()
+            self.assertEqual(safe_failure(caught.exception)['stage'], 'failed_run_evidence')
+        (self.evidence / 'run' / 'state.json').unlink()
+        with self.assertRaises(PilotError):
+            self.release()
+        self.api.retrieve.assert_not_called(); self.billing.verify.assert_not_called()
 
     def test_coded_reservation_cannot_be_released(self):
         self.ledger.advance(self.key, 'f' * 64, FAILED_RUN, 'reserved', 'coded',
                             artifact_sha256='a' * 64, session_id='sess_x')
         with self.assertRaises(PilotError):
-            release_failed_reservation('a' * 40, PROJECT, FAILED_RUN, self.gh, self.billing)
+            self.release()
 
 
 class CodingKeyAndAcceptanceTests(unittest.TestCase):

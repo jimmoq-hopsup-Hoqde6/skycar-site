@@ -7,7 +7,7 @@ GATES = frozenset({
     'environment_protection', 'issue_approval', 'build_acceptance', 'credentials',
     'billing_verification', 'billing_costs', 'billing_project', 'billing_hard_limit',
     'billing_proof', 'ledger_reservation', 'coding_session', 'session_cleanup',
-    'post_run_billing', 'ledger_advance', 'coding_key', 'failed_run', 'ledger_release',
+    'post_run_billing', 'ledger_advance', 'coding_key', 'failed_run', 'failed_run_evidence', 'session_absence', 'ledger_release',
 })
 
 BILLING_REASONS = frozenset({

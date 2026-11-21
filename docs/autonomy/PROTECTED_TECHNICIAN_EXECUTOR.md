@@ -315,9 +315,16 @@ history to retry. There is deliberately no automated recovery/reset command.
 required) frees only the global lease of the active task when all hold: its
 phase is still `reserved` (no artifact or session id recorded), its run is the
 exact `release_run_id`, and that run is a completed `failure`, `cancelled` or
-`timed_out` dispatch of this workflow on `main`. It records live billing
-evidence (`observed_spend_cents`, `limit_cents`, `verified_at_utc`) and the
-releasing run id, and marks the task `released`. It does **not** delete or
+`timed_out` dispatch of this workflow on `main`. The ledger never records a
+session id for a `reserved` task, so the job downloads the failed run's own
+`technician-coding-evidence` artifact and takes the session id from its
+`run/state.json`, which must match the reservation's fingerprint and SHA. A run
+with no known session id (for example an unknown creation outcome) cannot be
+released. With the coding key it then cancels and deletes the session if it
+still exists, and proceeds only after the provider returns **404** for it. Only
+then does it read live billing evidence (`observed_spend_cents`, `limit_cents`,
+`verified_at_utc`), record it with the session id, `session_absent_confirmed`
+and the releasing run id, and mark the task `released`. It does **not** delete or
 refund anything:
 
 * the task record and its owner acceptance marker stay in the current ledger;
@@ -332,7 +339,8 @@ unreleased at a time. A release is not proof that no provider cost occurred;
 the recorded billing figures and the retained budget are the safeguard.
 
 `verify-billing` also checks the dedicated coding key with a free model read
-(`coding_key: authenticated`), so a rotated key is confirmed before a paid run.
+(`coding_key: authenticated`). This proves authentication and model-metadata
+access only, not Agents session write permission.
 The publisher records a candidate commit before creating its prefixed branch.
 An uncertain PR creation can be reconciled against that exact existing draft
 without creating a second PR or making another coding call.

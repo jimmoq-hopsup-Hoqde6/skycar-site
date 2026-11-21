@@ -86,7 +86,60 @@ def verify_coding_key(client):
 FAILED_CONCLUSIONS = ('failure', 'cancelled', 'timed_out')
 
 
-def release_failed_reservation(sha, project, failed_run_id, github, billing):
+def failed_run_session(evidence, entry):
+    """The failed run's own uploaded state.json is the only session-id source."""
+    with diagnostic_gate('failed_run_evidence'):
+        path = Path(evidence) / 'run' / 'state.json'
+        if not path.is_file() or path.is_symlink() or path.stat().st_size > 1_000_000:
+            raise pilot.PilotError('Failed-run evidence is missing')
+        state = json.loads(path.read_text(encoding='utf-8'))
+        session_id = state.get('session_id') if type(state) is dict else None
+        if (state.get('request_fingerprint') != entry['fingerprint']
+                or state.get('sha') != entry_sha(entry)
+                or not isinstance(session_id, str) or not re.fullmatch(r'sess_[A-Za-z0-9]+', session_id)):
+            # No known session id (for example an unknown creation outcome) cannot be released.
+            raise pilot.PilotError('Failed-run evidence does not identify this reservation and session')
+        return session_id
+
+
+def entry_sha(entry):
+    return entry['_key'].rsplit('@', 1)[1]
+
+
+def ensure_session_absent(client, session_id):
+    """Cancel and delete if still present; release only after the provider returns 404."""
+    def missing():
+        try:
+            client.beta.agents.sessions.retrieve(session_id)
+        except Exception as exc:
+            if getattr(exc, 'status_code', None) == 404:
+                return True
+            raise
+        return False
+    with diagnostic_gate('session_absence'):
+        if missing():
+            return True
+        try:
+            client.beta.agents.sessions.events.create(
+                session_id, events=[{'type': 'agent.session.input.cancel'}])
+        except Exception:
+            pass  # Deletion and the 404 check below are authoritative.
+        for attempt in range(3):
+            try:
+                client.beta.agents.sessions.delete(session_id)
+                break
+            except Exception as exc:
+                if getattr(exc, 'status_code', None) == 404:
+                    break
+                if getattr(exc, 'status_code', None) != 409 or attempt == 2:
+                    raise
+                time.sleep(2)
+        if not missing():
+            raise pilot.PilotError('Provider session still exists; do not release')
+        return True
+
+
+def release_failed_reservation(sha, project, failed_run_id, github, billing, coding_client, evidence):
     """Owner-approved, protected: free the lease of one failed pre-artifact run.
 
     The task record, its owner acceptance and its reserved budget stay in the
@@ -107,14 +160,26 @@ def release_failed_reservation(sha, project, failed_run_id, github, billing):
                 or run.get('path') != '.github/workflows/skycar-technician-executor.yml'
                 or run.get('event') != 'workflow_dispatch' or run.get('head_branch') != 'main'):
             raise pilot.PilotError('Run is not a completed, failed technician executor run')
+    ledger = Ledger(github, project)
+    with diagnostic_gate('ledger_release'):
+        _, state = ledger.load()
+        key = state['active']
+        entry = state['tasks'].get(key) if key else None
+        if entry is None or entry['phase'] != 'reserved' or entry['run_id'] != failed_run_id:
+            raise pilot.PilotError('Only the active pre-artifact reservation of that run can be released')
+    session_id = failed_run_session(evidence, dict(entry, _key=key))
+    session_absent = ensure_session_absent(coding_client, session_id)
+    # Billing is read after the session is confirmed gone, so no turn can still be accruing.
     with diagnostic_gate('billing_verification'):
         proof = billing.verify(project, 1, False)
     release = {'released_by_run_id': run_id, 'failed_run_conclusion': run['conclusion'],
                'observed_spend_cents': proof['observed_spend_cents'],
-               'limit_cents': proof['limit_cents'], 'verified_at_utc': proof['verified_at_utc']}
+               'limit_cents': proof['limit_cents'], 'verified_at_utc': proof['verified_at_utc'],
+               'session_id': session_id, 'session_absent_confirmed': session_absent}
     with diagnostic_gate('ledger_release'):
-        key = Ledger(github, project).release(failed_run_id, release)
+        key = ledger.release(failed_run_id, release)
     return {'status': 'reservation_released_RECORD_KEPT', 'task': key, 'failed_run_id': failed_run_id,
+            'session_id': session_id, 'session_absent_confirmed': True,
             'observed_spend_cents': proof['observed_spend_cents'],
             'remaining_headroom_cents': proof['limit_cents'] - proof['observed_spend_cents']}
 
@@ -318,12 +383,16 @@ def main():
                 from openai import OpenAI
                 org = os.environ.get('SKYCAR_OPENAI_ORGANIZATION_ID', '')
                 key = os.environ.get('SKYCAR_OPENAI_BILLING_READ_KEY')
-                if not re.fullmatch(r'org-[A-Za-z0-9]+', org) or not key:
-                    raise pilot.PilotError('Selected organization and billing-read credential required')
+                coding_key = os.environ.get('SKYCAR_OPENAI_CODING_KEY')
+                if not re.fullmatch(r'org-[A-Za-z0-9]+', org) or not key or not coding_key or not args.evidence:
+                    raise pilot.PilotError('Organization, billing-read and coding credentials and evidence required')
+                # Coding client: session retrieve/cancel/delete only; never creates sessions or turns.
                 with OpenAI(admin_api_key=key, organization=org, base_url='https://api.openai.com/v1',
-                            max_retries=BILLING_READ_RETRIES, timeout=20) as admin:
+                            max_retries=BILLING_READ_RETRIES, timeout=20) as admin, \
+                     OpenAI(api_key=coding_key, project=args.project_id, organization=org,
+                            base_url='https://api.openai.com/v1', max_retries=0, timeout=30) as coder:
                     result = release_failed_reservation(args.sha, args.project_id, args.release_run_id,
-                        GitHub(os.environ.get('GH_TOKEN')), ProviderBilling(admin))
+                        GitHub(os.environ.get('GH_TOKEN')), ProviderBilling(admin), coder, args.evidence)
         elif args.operation=='execute':
             require_approval(token,args.approved_fingerprint)
             workflow_context(args.sha)
