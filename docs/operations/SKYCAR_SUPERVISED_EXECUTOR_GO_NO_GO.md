@@ -1,0 +1,28 @@
+# First supervised technician coding run — independent go/no-go record
+
+**Status: NO-GO for paid execution and unattended agent operation.** This is an evidence and handoff document, not an approval, trigger, or credential request. Owner, QA, and Security retain all protected approval rights.
+
+## Verified baseline (18 November 2026, GitHub read-only inspection)
+
+- Protected executor PR [#121](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/121) merged 17 Nov after independent [Moogly88 approval](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/121) of exact source `1bab7dfbfd1410dc269deedbc5e2e0fd06f05f06`. Current `main` SHA: `8530825102372079d2b345db055ee85bb8b792d4`; [post-merge CI 44066421101](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/actions/runs/44066421101) passed.
+- [Manual preflight 44082998877](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/actions/runs/44082998877) passed with coding, validation and publisher jobs skipped.
+- [Manual initialize-ledger 44083250631](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/actions/runs/44083250631) passed. Coding job explicitly logged `{"status":"ledger_initialized_NOT_ACTIVE"}`; its inference step was skipped. The durable Git notes reference `refs/notes/skycar-executor-ledger-v1` now exists at `ff8a0384e23ff5db28d18a324338376af9932996`. Initialization is **not** a coding task or budget approval. Never reset the ledger.
+- The workflow logs showed `SKYCAR_EXECUTOR_ENABLED=false` and no build attestation value. These are observations of those runs, not a claim about inaccessible later environment settings.
+- Technician [issue #101](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/issues/101) is open with both exact reviewed labels: `agent-approved` and `skycar-task:technician-command-account-v1`. Labels alone do not approve a live run.
+- [PR #92](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/92) remains open/unmerged and still proposes a repository-wide paid planning workflow. [Draft #115](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/115) removes it but is unmerged and lacks independent submitted review. Do not integrate #92 unmodified. [PR #119](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/pull/119) is a separate older preflight proposal and must be reconciled against #121 before any merge.
+
+## Operator evidence to collect before considering operation `run`
+
+- [ ] **Exact source & CI:** Confirm `main` still matches the reviewed SHA; if changed, stop, regenerate the source-bound fingerprint and obtain fresh review. Review `skycar-technician-executor.yml`, fixed task registry, and pinned production baseline at that SHA.
+- [ ] **Protected environment & three credentials:** Owner/DevOps privately verify `skycar-agent-pilot` requires owner review, no administrator bypass and main-only access; verify dedicated coding, **read-only billing Admin**, and scoped draft-PR publisher credentials are available only to the intended protected steps. Never print or paste values. Smoke credential is not reusable. This connector cannot inspect secret values.
+- [ ] **Hard cap:** Confirm the selected project is the approved project, with **enforced US$5 monthly maximum** and current spend/limits rechecked via read-only provider API. A UI display of the limit or a local receipt is insufficient. Preserve an independently reviewed budget- and source-bound approval fingerprint; never widen budget on the old fingerprint.
+- [ ] **Generated-branch build isolation:** Independently audit all GitHub Apps, CI/CD integrations (including Vercel, Netlify, Cursor, Grok, Lovable and any other installed app) for `agent/*` branch triggers and credentials. An installation is not proof of an active trigger, and excluding one Vercel preview is not proof of complete isolation. Record fresh `external_integrations_audited` attestation bound to the exact source SHA and current build-policy hash only after verification.
+- [ ] **Ledger & stop switch:** Read the Git notes ledger and verify it is canonical, has no active or unreconciled lease, and is associated with the correct project. Confirm `SKYCAR_EXECUTOR_ENABLED=false` until all prerequisites are met. No reset/replay; any uncertainty is NO-GO.
+- [ ] **Independent approval:** Separate QA/Security reviewer must inspect environment, provider cap, integration audit, task scope, fingerprint and exact current source. Record evidence links in [#120](https://github.com/jimmoq-hopsup-Hoqde6/skycar-site/issues/120). Owner separately authorizes the single bounded invocation and any enabling control.
+- [ ] **One manual run only:** Under the protected owner gate, use `operation=run`, exact current `approved_sha`, exact independently approved `approved_fingerprint`, and approved `budget_cents` (maximum 500 US cents). Stop if any preflight fails. No schedule or unattended queue consumer.
+- [ ] **Post-run validation:** Require provider session cleanup, trusted isolated acceptance, source/build attestation revalidation, and an allowlisted **draft** PR from a separate publisher. Record artifact SHA/test output/commit/PR identity in #120; verify independent QA/Security before any merge. Never deploy, bill customers, or access production data.
+
+## Decision rules
+
+- **NO-GO** on missing attestation, unverifiable cap, unavailable protected secrets, current-main mismatch, disabled stop switch, held ledger lease, privileged generated-branch builds, missing independent review, or unknown outcome.
+- **GO for one supervised pilot only** when every item above is independently evidenced and separately authorized. This **does not authorize unattended coding**, all-nine-agent operation, production deployment, merging, or future model spending.
