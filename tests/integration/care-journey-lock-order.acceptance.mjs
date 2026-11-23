@@ -215,19 +215,23 @@ export async function verifyCareJourneyLockOrder({sql, quote, result}) {
   ]) {
    const f = fixture(state), tag = `holds_${label.replace(/\W+/g, '_')}_${f.id}`;
    const session = runSession(builder, f, `first_${tag}`);
+   const sessionEnded = track(session);   // the holder ended early (error or finished): no probe can ever be blocked by it
    // One probe session per row, each FOR UPDATE (blocking, not NOWAIT). The row is held by the command only if the
    // server reports the probe blocked by the holder's own backend pid, read after the holder signalled that its
    // locks are taken. No probe can race the hold: the hold ends only on release, after all three are proven.
    const probes = [];
    try {
-    await waitFor(holding(`first_${tag}`), `${label} holding`);
+    await waitFor(holding(`first_${tag}`), `${label} holding`, WAIT_MS, sessionEnded);
     const pid = await gate.holderPid(`first_${tag}`);
     assert.match(pid, /^\d+$/, `${label}: holder backend pid`);
     for (const [table, column, id] of [['vehicles', 'id', f.vehicle], ['care_requests', 'id', f.id], ['care_journeys', 'id', f.id]]) {
      const probeLabel = `probe_${table}_${tag}`;
-     probes.push(result(`begin;/* ${probeLabel} */set local statement_timeout='${STATEMENT_TIMEOUT}';select 1 from public.${table} where ${column}=${quote(id)} for update;rollback;`));
+     const probe = result(`begin;/* ${probeLabel} */set local statement_timeout='${STATEMENT_TIMEOUT}';select 1 from public.${table} where ${column}=${quote(id)} for update;rollback;`);
+     probes.push(probe);
+     const probeEnded = track(probe);   // a probe that finishes was never blocked: the row was not held
      try {
-      await waitFor(blockedByPid(probeLabel, pid), `${label} must hold the ${table} row lock (probe blocked by holder pid ${pid})`);
+      await waitFor(blockedByPid(probeLabel, pid), `${label} must hold the ${table} row lock (probe blocked by holder pid ${pid})`, WAIT_MS,
+       () => { const ended = sessionEnded(); if (ended) return `holder ${ended}`; const free = probeEnded(); return free && `probe got the ${table} row without waiting (${free})`; });
      } catch (error) {
       throw new assert.AssertionError({message: `${label} must hold the ${table} row lock while holding: ${error.message}`});
      }

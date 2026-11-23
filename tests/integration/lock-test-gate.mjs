@@ -4,14 +4,20 @@
 // taken them. hold() first publishes application_name = 'lock_test_holding' (transaction-local), which is the
 // holder's signal that its locks are taken, then polls for its release row. It never returns on time alone: the
 // test inserts the tag into lock_test.release, or the hold raises LOCK_TEST_HOLD_TIMEOUT after max_seconds.
-// Every waitFor() bound (WAIT_MS) is longer than the longest hold (HOLD_SECONDS), and every statement_timeout
-// used around a hold (STATEMENT_TIMEOUT) is longer than both, so no barrier can give up while a hold is still
-// legitimately in place and no hold can be cut short by a timeout.
+// Bounds, strictly ordered and checked below at import: every waitFor() bound (WAIT_MS) is shorter than a hold
+// (HOLD_SECONDS), and every statement_timeout used around a hold (STATEMENT_TIMEOUT) is longer than the hold.
+// So a barrier always gives up (and fails the test) while the hold it is watching is still in place: a hold can
+// never expire underneath a waiting barrier and let it observe post-hold state. And no hold is cut short by a
+// statement timeout; a hold that is never released ends only by its own LOCK_TEST_HOLD_TIMEOUT.
+// Barriers also stop at once when the session they depend on has already ended (abort / track() below).
 // Lock evidence is taken from the server, never from timing: pg_blocking_pids(waiter) must contain the
 // holder's backend pid.
-export const HOLD_SECONDS = 30;
+export const HOLD_SECONDS = 60;
 export const WAIT_MS = 45000;
 export const STATEMENT_TIMEOUT = '90s';
+if (!(WAIT_MS < HOLD_SECONDS * 1000 && HOLD_SECONDS < Number.parseInt(STATEMENT_TIMEOUT, 10))) {
+ throw new Error(`lock-test-gate bounds must satisfy WAIT_MS < HOLD_SECONDS < STATEMENT_TIMEOUT (got ${WAIT_MS} ms, ${HOLD_SECONDS} s, ${STATEMENT_TIMEOUT})`);
+}
 export const GATE_SETUP = `create schema if not exists lock_test;
  create table if not exists lock_test.release(tag text primary key);
  create or replace function lock_test.hold(p_tag text, p_max_seconds numeric) returns void language plpgsql set search_path = '' as $hold$
