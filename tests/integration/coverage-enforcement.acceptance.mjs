@@ -76,7 +76,27 @@ export function proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, fi
 export async function verifyLegacyAuditLockWait({ sql, quote, garageCreate, result }) {
   let checks = 0;
   const equal = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks += 1; };
-  assert.equal(sql(`select clock_timestamp() + interval '10 seconds' < timestamptz ${quote(CAP)}`), 't', 'this regression needs the clock more than 10 seconds before the hard cap');
+  if (sql(`select clock_timestamp() + interval '10 seconds' < timestamptz ${quote(CAP)}`) !== 't') {
+    // At or past the hard cap (or within 10 s of it) no stored deadline can reopen legacy creates, so the
+    // audit-row wait below cannot be staged. Prove instead that the window is closed now, stays closed with the
+    // boolean on and the deadline at the cap, and that a real signed-in legacy create fails closed without effects.
+    equal(sql('select public.care_legacy_create_open(clock_timestamp())'), 'f', 'past the hard cap the legacy window is closed now');
+    equal(sql(`begin; update public.care_service_coverage_compat set accept_legacy_create = true, legacy_create_deadline = timestamptz ${quote(CAP)};
+      select public.care_legacy_create_open(clock_timestamp()); rollback;`).split('\n').pop(), 'f', 'past the cap the window stays closed with the boolean on and the deadline at the cap');
+    const lateOwner = randomUUID();
+    sql(`insert into auth.users(id) values (${quote(lateOwner)});`);
+    const lateVehicle = garageCreate(lateOwner, randomUUID(), 'Post-cap legacy');
+    const lateKey = randomUUID();
+    const lateLegacy = JSON.stringify({ vehicle_id: lateVehicle.id, service: 'repair', description: 'Scratch on rear bumper', preferred_window: 'flexible' });
+    const beforeCount = sql('select create_count from public.care_legacy_create_audit');
+    assert.throws(() => sql(`begin; set local role authenticated; set local request.jwt.claim.sub = ${quote(lateOwner)}; select public.care_submit_request(${quote(lateKey)}::uuid, ${quote(lateLegacy)}::jsonb); commit;`),
+      error => /VALIDATION_FAILED/.test(`${error.message}\n${error.stderr ?? ''}`), 'a signed-in legacy create fails closed after the cap');
+    checks += 1;
+    equal(sql('select create_count from public.care_legacy_create_audit'), beforeCount, 'the refused post-cap create is not counted');
+    equal(sql(`select count(*) from public.care_request_commands where idempotency_key = ${quote(lateKey)}::uuid`), '0', 'the refused post-cap create stores no command');
+    console.log(`PASS: ${checks} legacy-create post-cap checks (the pre-cap audit-lock wait regression needs a clock before ${CAP} and was not staged).`);
+    return;
+  }
   const owner = randomUUID();
   sql(`insert into auth.users(id) values (${quote(owner)});`);
   const vehicle = garageCreate(owner, randomUUID(), 'Audit wait');
