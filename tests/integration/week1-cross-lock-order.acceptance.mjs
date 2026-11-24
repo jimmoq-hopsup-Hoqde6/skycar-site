@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {weekOf,tomorrowAt,publishAvailability} from './availability-fixture.mjs';
+import {lockGate, track, HOLD_SECONDS, WAIT_MS, STATEMENT_TIMEOUT} from './lock-test-gate.mjs';
 
 // Cross-feature lock order on the integrated chain. care_journey_command takes
 //   advisory(scope:key) -> vehicle FOR UPDATE -> care_requests FOR UPDATE -> care_journeys FOR UPDATE
@@ -9,13 +11,14 @@ import {randomUUID} from 'node:crypto';
 //   (b) care_record_request_photos / care_heal_request_photo_marker (20261101150000): care_requests FOR KEY SHARE,
 //       then the photo-set row;
 //   (c) care_technician_replace_availability (20261101063000): care_experts FOR SHARE, own advisories, schedule row.
-// The session that goes FIRST sleeps (a GUC-driven pg_sleep injected into the function under test, nothing else
-// changed) right after the lock named below; the SECOND starts once the first is observed inside pg_sleep and is
-// then either observed waiting on a lock (expected contention) or observed finishing while the first still sleeps
-// (expected isolation). Every concurrent outcome and final state must equal running the same two commands serially
+// The session that goes FIRST holds (a GUC-driven lock_test.hold() injected into the function under test, nothing
+// else changed) right after the lock named below, and keeps holding until the test releases it (./lock-test-gate.mjs).
+// The SECOND starts once the first has signalled that it holds its locks and is then either proven blocked BY THE
+// FIRST (pg_blocking_pids contains the first's pid; expected contention) or observed finishing while the first is
+// still inside its hold (expected isolation; the hold cannot end on time, so this does not depend on timing). Every concurrent outcome and final state must equal running the same two commands serially
 // in the same order, and nothing may raise 40P01 or 55P03. A negative control with a genuinely inverted pair of
 // plain row locks proves the harness does detect a deadlock.
-const SLEEP = 'skycar.lock_test_sleep', SLEEP_EXPERT = 'skycar.lock_test_sleep_expert', SECONDS = '1.5';
+const SLEEP = 'skycar.lock_test_sleep', SLEEP_EXPERT = 'skycar.lock_test_sleep_expert', SLEEP_AVAIL = 'skycar.lock_test_sleep_avail', TAG = 'skycar.lock_test_tag';
 const SIGS = {
  journey: 'public.care_journey_command(text,uuid,uuid,uuid,uuid,jsonb)',
  submit: 'public.care_submit_request(uuid,jsonb)',
@@ -23,7 +26,7 @@ const SIGS = {
  heal: 'public.care_heal_request_photo_marker(uuid,text)',
  availability: 'public.care_technician_replace_availability(uuid,uuid,integer,jsonb)',
 };
-const sleeper = guc => `perform pg_sleep(coalesce(nullif(current_setting('${guc}',true),''),'0')::numeric);`;
+const sleeper = guc => `perform lock_test.hold(current_setting('${TAG}',true), coalesce(nullif(current_setting('${guc}',true),''),'0')::numeric);`;
 // Insert a sleep statement right after the single occurrence of `anchor` (a complete statement boundary).
 function injectAfter(definition, anchor, guc, from = 0) {
  const at = definition.indexOf(anchor, from);
@@ -33,6 +36,8 @@ function injectAfter(definition, anchor, guc, from = 0) {
 }
 const INJECT = {
  journey: d => injectAfter(d, 'select * into journey from public.care_journeys where id=p_id for update;', SLEEP),
+ // 20261115090000: confirm sleeps right after its availability check, i.e. while it holds the schedule advisory lock.
+ journeyAvail: d => injectAfter(d, 'perform public.care_assert_expert_slot_available(journey.expert_id,journey.starts_at,journey.ends_at);', SLEEP_AVAIL),
  journeyExpert: d => {
   const lock = d.indexOf("perform pg_advisory_xact_lock(hashtextextended('care:expert-capacity:'");
   assert.ok(lock > 0, 'confirm expert-capacity lock not found');
@@ -51,18 +56,16 @@ const classify = outcome => {
  return match ? match[1] : `OTHER:${output.split('\n')[0]}`;
 };
 const HASH = 'ab'.repeat(32);
-const EVIDENCE_FREE = JSON.stringify({timezone: 'Australia/Adelaide', weekly_windows: [{weekday: 1, starts_at: '09:00', ends_at: '17:00'}], exceptions: []});
+// Fixtures publish 09:00-17:00 every day (revision 1) and book tomorrow 10:00-11:00 Adelaide. The replace commands
+// rewrite revision 1: KEEP still covers the slot, AWAY (00:00-09:00) no longer does (20261115090000).
+const KEEP = weekOf('08:00', '18:00'), AWAY = weekOf('00:00', '09:00');
 
 export async function verifyCrossLockOrder({sql, quote, result}) {
  const originals = Object.fromEntries(Object.entries(SIGS).map(([name, signature]) => [name, sql(`select pg_get_functiondef(${quote(signature)}::regprocedure)`)]));
  const restore = () => { for (const definition of Object.values(originals)) sql(definition); };
- const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
- const waitFor = async (predicate, what) => {
-  for (let attempt = 0; attempt < 600; attempt++) { if (sql(predicate) !== '0') return; await wait(20); }
-  throw new Error(`Cross lock-order barrier not observed: ${what}`);
- };
- const sleeping = tag => `select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event='PgSleep' and query like ${quote('%' + tag + '%')}`;
- const blocked = tag => `select count(*) from pg_stat_activity where pid<>pg_backend_pid() and wait_event_type='Lock' and query like ${quote('%' + tag + '%')}`;
+ const gate = lockGate({exec: sql, quote});
+ const {waitFor, holding, blockedBy, release} = gate;
+ gate.setup();
 
  const adminId = randomUUID();
  sql(`insert into auth.users(id) values(${quote(adminId)}); insert into public.user_roles(user_id,role) values(${quote(adminId)},'admin') on conflict do nothing;`);
@@ -79,10 +82,11 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
    insert into public.care_requests(id,customer_id,vehicle_id,service,description,preferred_window,next_update_at,escalation_minutes)
     values(${quote(f.id)},${quote(f.customer)},${quote(f.vehicle)},'repair','Synthetic cross lock order','flexible',clock_timestamp()+interval '1 hour',30);
    insert into public.care_journeys(id,account_request_id,customer_details,state,expert_id,starts_at,ends_at)
-    values(${quote(f.id)},${quote(f.id)},'{"postcode":"5000"}','booking_requested',${quote(f.expert)},clock_timestamp()+interval '1 day',clock_timestamp()+interval '1 day 1 hour');
+    values(${quote(f.id)},${quote(f.id)},'{"postcode":"5000"}','booking_requested',${quote(f.expert)},${tomorrowAt(10)},${tomorrowAt(11)});
    insert into public.care_reviewed_quotes(id,journey_id,expert_id,expert_name,expert_description,scope_summary,total_price_cents,status,expires_at,starts_at,ends_at)
-    values(${quote(f.quoteId)},${quote(f.id)},${quote(f.expert)},'Cross lock technician','Synthetic isolated expert','Synthetic repair',10000,'selected',clock_timestamp()+interval '1 hour',clock_timestamp()+interval '1 day',clock_timestamp()+interval '1 day 1 hour');
+    values(${quote(f.quoteId)},${quote(f.id)},${quote(f.expert)},'Cross lock technician','Synthetic isolated expert','Synthetic repair',10000,'selected',clock_timestamp()+interval '1 hour',${tomorrowAt(10)},${tomorrowAt(11)});
    update public.care_journeys set selected_quote_id=${quote(f.quoteId)} where id=${quote(f.id)};`);
+  sql(publishAvailability(quote, f.tech, weekOf('09:00', '17:00')));
   return f;
  }
  const snapshot = f => sql(`select concat_ws('|',
@@ -92,7 +96,7 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
    coalesce((select revision::text from public.care_technician_availability where expert_id=${quote(f.expert)}),'-'),
    (select count(*) from public.care_journey_commands where journey_id=${quote(f.id)}))`);
 
- const head = (label, role, extra) => `begin;/* ${label} */set local statement_timeout='25s';set local lock_timeout='15s';${role};${extra ?? ''}`;
+ const head = (label, role, extra) => `begin;/* ${label} */set local statement_timeout='${STATEMENT_TIMEOUT}';set local lock_timeout='60s';${role};${extra ?? ''}`;
  const service = (label, body, gucs = {}) => `${head(label, 'set local role service_role', Object.entries(gucs).map(([k, v]) => `set local ${k}='${v}';`).join(''))}${body};commit;`;
  const customerRole = f => `set local role authenticated;set local request.jwt.claim.sub=${quote(f.customer)}`;
  const submitBody = (f, postcode) => JSON.stringify({vehicle_id: f.vehicle, service: 'repair', description: 'Synthetic cross lock submit', preferred_window: 'flexible', postcode});
@@ -102,7 +106,8 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
   submit: postcode => (f, label, g) => `${head(label, customerRole(f), Object.entries(g ?? {}).map(([k, v]) => `set local ${k}='${v}';`).join(''))}select public.care_submit_request(${quote(randomUUID())}::uuid,${quote(submitBody(f, postcode))}::jsonb);commit;`,
   record: (f, label, g) => service(label, `select public.care_record_request_photos(${quote(f.id)}::uuid,1,${quote(HASH)},'account')`, g),
   heal: (f, label, g) => service(label, `select public.care_heal_request_photo_marker(${quote(f.id)}::uuid,'account')`, g),
-  availability: (f, label, g) => service(label, `select public.care_technician_replace_availability(${quote(f.tech)}::uuid,${quote(randomUUID())}::uuid,0,${quote(EVIDENCE_FREE)}::jsonb)`, g),
+  availability: (f, label, g) => service(label, `select public.care_technician_replace_availability(${quote(f.tech)}::uuid,${quote(randomUUID())}::uuid,1,${quote(KEEP)}::jsonb)`, g),
+  availabilityAway: (f, label, g) => service(label, `select public.care_technician_replace_availability(${quote(f.tech)}::uuid,${quote(randomUUID())}::uuid,1,${quote(AWAY)}::jsonb)`, g),
  };
  const run = (builder, f, label, gucs) => result(builder(f, label, gucs));
  const serial = async (first, second) => {
@@ -110,20 +115,25 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
   const outcomes = [classify(await run(first, f, `serial_a_${f.id}`)), classify(await run(second, f, `serial_b_${f.id}`))];
   return {outcomes, snapshot: snapshot(f)};
  };
- // contention: second must be seen waiting on a lock. isolation: second must finish while the first still sleeps.
+ // contention: the server must report the second blocked by the first (pg_blocking_pids), then the first is released.
+ // isolation: the second must finish while the first is still inside its hold. The hold ends only on release (or
+ // LOCK_TEST_HOLD_TIMEOUT after HOLD_SECONDS), so "still holding" is a server fact, not a timing window.
  async function race(first, second, firstGuc, mode) {
-  const f = fixture(), tag = `${randomUUID()}`;
-  const a = run(first, f, `first_${tag}`, {[firstGuc]: SECONDS});
+  const f = fixture(), tag = `${randomUUID()}`, firstLabel = `first_${tag}`;
+  const a = run(first, f, firstLabel, {[firstGuc]: String(HOLD_SECONDS), [TAG]: firstLabel});
+  const aEnded = track(a);
   let b, secondOutcome;
   try {
-   await waitFor(sleeping(`first_${tag}`), 'first session sleeping while holding its locks');
+   await waitFor(holding(firstLabel), 'first session holding its locks', WAIT_MS, aEnded);
    b = run(second, f, `second_${tag}`);
-   if (mode === 'contention') await waitFor(blocked(`second_${tag}`), 'second session waiting on a lock held by the first');
+   const bEnded = track(b);
+   if (mode === 'contention') await waitFor(blockedBy(`second_${tag}`, firstLabel), 'second session blocked by the first (pg_blocking_pids)', WAIT_MS, () => aEnded() || bEnded());
    else {
     secondOutcome = await b;
-    assert.equal(sql(sleeping(`first_${tag}`)), '1', 'the second session finished without waiting for the first');
+    assert.equal(sql(holding(firstLabel)), '1', 'the second session finished without waiting for the first');
    }
-  } catch (error) { await a; await b; throw error; }
+  } catch (error) { release(firstLabel); await a; await b; throw error; }
+  release(firstLabel);
   const outcomes = [classify(await a), classify(secondOutcome ?? await b)];
   return {outcomes, snapshot: snapshot(f), f};
  }
@@ -143,6 +153,7 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
 
  try {
   sql(INJECT.journey(originals.journey)); sql(INJECT.journeyExpert(sql(`select pg_get_functiondef(${quote(SIGS.journey)}::regprocedure)`)));
+  sql(INJECT.journeyAvail(sql(`select pg_get_functiondef(${quote(SIGS.journey)}::regprocedure)`)));
   sql(INJECT.submit(originals.submit)); sql(INJECT.photo(originals.record)); sql(INJECT.photo(originals.heal)); sql(INJECT.availability(originals.availability));
 
   // (a) journey vs care_submit_request with the coverage check, both directions.
@@ -161,13 +172,28 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
    await pair(`${name} (holds request key share) then journey cancel`, builder, cmd.cancel, SLEEP, 'contention');
   }
 
-  // (c) journey vs the availability RPC: the confirm sleeps after it holds journey, expert key share and the
-  // capacity advisory lock; availability takes expert FOR SHARE (compatible) and its own advisories. Neither waits.
-  const c1 = await pair('journey confirm (holds request,journey,expert key share,capacity advisory) then availability replace', cmd.confirm, cmd.availability, SLEEP_EXPERT, 'isolation');
+  // (c) journey confirm vs the availability RPC. Since 20261115090000, confirm takes, after the capacity advisory
+  // lock, the schedule advisory lock that care_technician_replace_availability holds while it rewrites windows,
+  // then checks the slot. So the two serialise on that lock (contention, never a deadlock) and the check sees the
+  // schedule that is current when it runs.
+  // c0: confirm sleeps BEFORE the schedule lock (after the expert check): replace does not wait for it.
+  const c0 = await pair('journey confirm (holds request,journey,expert key share,capacity advisory) then availability replace', cmd.confirm, cmd.availability, SLEEP_EXPERT, 'isolation');
+  assert.deepEqual(c0.outcomes, ['ok', 'ok']);
+  // c1: confirm sleeps AFTER its check, holding the schedule lock: replace waits for it.
+  const c1 = await pair('journey confirm (holds schedule advisory after its availability check) then availability replace', cmd.confirm, cmd.availability, SLEEP_AVAIL, 'contention');
   assert.deepEqual(c1.outcomes, ['ok', 'ok']);
-  const c2 = await pair('availability replace (holds expert share, schedule advisory and row) then journey confirm', cmd.availability, cmd.confirm, SLEEP, 'isolation');
+  assert.equal(c1.snapshot.split('|')[0], 'scheduled');
+  // c2: replace sleeps holding the schedule lock and row: confirm waits for it, then checks the new schedule.
+  const c2 = await pair('availability replace (holds expert share, schedule advisory and row) then journey confirm', cmd.availability, cmd.confirm, SLEEP, 'contention');
   assert.deepEqual(c2.outcomes, ['ok', 'ok']);
-  assert.equal(c2.snapshot.split('|')[3], '1', 'availability revision advanced exactly once');
+  assert.equal(c2.snapshot.split('|')[3], '2', 'availability revision advanced exactly once');
+  // c3: a replace that removes the slot commits while confirm waits: confirm must refuse, not book.
+  const c3 = await pair('availability replace removing the slot (holds schedule lock) then journey confirm', cmd.availabilityAway, cmd.confirm, SLEEP, 'contention');
+  assert.deepEqual(c3.outcomes, ['ok', 'AVAILABILITY_SLOT_UNAVAILABLE']);
+  assert.equal(c3.snapshot.split('|')[0], 'booking_requested', 'nothing was booked outside the new schedule');
+  // c4: confirm decided first and holds the lock: the later schedule change waits and does not undo the booking.
+  const c4 = await pair('journey confirm (holds schedule advisory) then availability replace removing the slot', cmd.confirm, cmd.availabilityAway, SLEEP_AVAIL, 'contention');
+  assert.deepEqual(c4.outcomes, ['ok', 'ok']);
  } finally {
   restore();
  }
@@ -178,11 +204,18 @@ export async function verifyCrossLockOrder({sql, quote, result}) {
 
  // ---- negative control: a real inversion (request -> vehicle versus vehicle -> request) must deadlock.
  const f = fixture();
- const invert = (label, one, two) => `begin;/* ${label} */set local statement_timeout='20s';select 1 from public.${one[0]} where id=${quote(one[1])} for update;select pg_sleep(1);select 1 from public.${two[0]} where id=${quote(two[1])} for update;commit;`;
- const [x, y] = await Promise.all([
-  result(invert(`inv_x_${f.id}`, ['care_requests', f.id], ['vehicles', f.vehicle])),
-  result(invert(`inv_y_${f.id}`, ['vehicles', f.vehicle], ['care_requests', f.id])),
- ]);
+ // Each session takes its first row lock and holds; only when the server shows both holding are both released, so
+ // both second-lock requests are guaranteed to cross (no sleep decides whether the inversion happens).
+ const invert = (label, one, two) => `begin;/* ${label} */set local statement_timeout='${STATEMENT_TIMEOUT}';select 1 from public.${one[0]} where id=${quote(one[1])} for update;${gate.holdCall(label)};select 1 from public.${two[0]} where id=${quote(two[1])} for update;commit;`;
+ const [labelX, labelY] = [`inv_x_${f.id}`, `inv_y_${f.id}`];
+ const px = result(invert(labelX, ['care_requests', f.id], ['vehicles', f.vehicle]));
+ const py = result(invert(labelY, ['vehicles', f.vehicle], ['care_requests', f.id]));
+ try {
+  await waitFor(holding(labelX), 'negative control x holding care_requests');
+  await waitFor(holding(labelY), 'negative control y holding vehicles');
+ } finally { release(labelX); release(labelY); }
+ const [x, y] = await Promise.all([px, py]);
+ gate.teardown();
  const control = [classify(x), classify(y)].sort();
  assert.deepEqual(control, ['40P01', 'ok'], `the inverted negative control must deadlock exactly one session: ${control}`);
  summary.negativeControl = control.join(',');

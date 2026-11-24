@@ -21,9 +21,11 @@ import { verifySequenceGrantRevoke } from "./sequence-grant-revoke.acceptance.mj
 import { verifySupabaseAdminSequenceDefaultAcl } from "./supabase-admin-sequence-default-acl.acceptance.mjs";
 import { verifyRequestPhotos } from "./request-photos.acceptance.mjs";
 import { verifyRequestPhotoMarker } from "./request-photo-marker.acceptance.mjs";
+import { lockGate, heldRace } from "./lock-test-gate.mjs";
 import { proveLegacyBypassThenSunset, verifyCoverageEnforcement } from "./coverage-enforcement.acceptance.mjs";
 import { verifyCrossLockOrder } from "./week1-cross-lock-order.acceptance.mjs";
 import { verifyCrossLockStress } from "./week1-cross-lock-stress.acceptance.mjs";
+import { verifyBookingAvailabilityEnforcement } from "./booking-availability-enforcement.acceptance.mjs";
 
 const database = process.env.GARAGE_CARE_TEST_DATABASE_URL;
 if (!database) {
@@ -134,15 +136,18 @@ before(() => {
     '20261101150000_request_photo_marker_legacy_state_and_cleanup.sql',
     '20261101160000_care_service_coverage_enforcement.sql',
     '20261108120000_care_legacy_create_sunset.sql',
+    '20261115090000_care_booking_availability_enforcement.sql',
   ], 'combined verification must include every public migration in filename order');
   const sunset = '20261108120000_care_legacy_create_sunset.sql';
+  // Files after the sunset (forward-only follow-ups) are applied after it, in filename order, below.
   for (const migration of migrations) {
-    if (migration === sunset) continue;
+    if (migration >= sunset) continue;
     file(`supabase/migrations/${migration}`);
   }
   sql(`insert into auth.users(id) values (${quote(owner)}),(${quote(stranger)}); insert into public.care_response_policy values (true,60,30);`);
   // Show the pre-fix bypass on 20261101160000 alone, then apply the sunset before any later test.
   proveLegacyBypassThenSunset({ sql, auth, quote, garageCreate, file });
+  for (const migration of migrations.filter(name => name > sunset)) file(`supabase/migrations/${migration}`);
 });
 
 test('combined Garage and Care migrations preserve ownership, history, retries, races and atomic writes', async () => {
@@ -231,14 +236,13 @@ test('combined Garage and Care migrations preserve ownership, history, retries, 
 
   const careFirstVehicle = garageCreate(owner, '10000000-0000-4000-8000-000000000004', 'Care first');
   const careFirstTag = 'combined_care_first_holds_vehicle';
-  const careFirst = result(auth(owner,
-    `select public.care_submit_request('20000000-0000-4000-8000-000000000004',${quote(carePayload(careFirstVehicle.id))}::jsonb); select pg_sleep(1); /* ${careFirstTag} */`,
-  ));
-  await waitForQuery(careFirstTag);
-  const archiveAfterCare = result(auth(owner,
-    `select public.garage_mutate_vehicle('archive',${quote(careFirstVehicle.id)}::uuid,'{"expected_revision":1}'::jsonb,gen_random_uuid(),gen_random_uuid())`,
-  ));
-  const [careFirstResult, archiveAfterCareResult] = await Promise.all([careFirst, archiveAfterCare]);
+  // Ordered races: the first session holds its locks in lock_test.hold until the second is blocked by it.
+  const gate = lockGate({ exec: sql, quote });
+  gate.setup();
+  const [careFirstResult, archiveAfterCareResult] = await heldRace(gate, result, { label: careFirstTag,
+    first: auth(owner, `select public.care_submit_request('20000000-0000-4000-8000-000000000004',${quote(carePayload(careFirstVehicle.id))}::jsonb); ${gate.holdCall(careFirstTag)}; /* ${careFirstTag} */`),
+    second: auth(owner, `select public.garage_mutate_vehicle('archive',${quote(careFirstVehicle.id)}::uuid,'{"expected_revision":1}'::jsonb,gen_random_uuid(),gen_random_uuid())`) });
+  checks++;
   assert.equal(careFirstResult.error, undefined); checks++;
   assert.equal(archiveAfterCareResult.error, undefined); checks++;
   assert.equal(sql(`select count(*) from public.care_requests where vehicle_id=${quote(careFirstVehicle.id)}::uuid`), '1'); checks++;
@@ -246,14 +250,10 @@ test('combined Garage and Care migrations preserve ownership, history, retries, 
 
   const archiveFirstVehicle = garageCreate(owner, '10000000-0000-4000-8000-000000000005', 'Archive first');
   const archiveFirstTag = 'combined_archive_first_holds_vehicle';
-  const archiveFirst = result(auth(owner,
-    `select public.garage_mutate_vehicle('archive',${quote(archiveFirstVehicle.id)}::uuid,'{"expected_revision":1}'::jsonb,gen_random_uuid(),gen_random_uuid()); select pg_sleep(1); /* ${archiveFirstTag} */`,
-  ));
-  await waitForQuery(archiveFirstTag);
-  const intakeAfterArchive = result(auth(owner,
-    `select public.care_submit_request('20000000-0000-4000-8000-000000000005',${quote(carePayload(archiveFirstVehicle.id))}::jsonb)`,
-  ));
-  const [archiveFirstResult, intakeAfterArchiveResult] = await Promise.all([archiveFirst, intakeAfterArchive]);
+  const [archiveFirstResult, intakeAfterArchiveResult] = await heldRace(gate, result, { label: archiveFirstTag,
+    first: auth(owner, `select public.garage_mutate_vehicle('archive',${quote(archiveFirstVehicle.id)}::uuid,'{"expected_revision":1}'::jsonb,gen_random_uuid(),gen_random_uuid()); ${gate.holdCall(archiveFirstTag)}; /* ${archiveFirstTag} */`),
+    second: auth(owner, `select public.care_submit_request('20000000-0000-4000-8000-000000000005',${quote(carePayload(archiveFirstVehicle.id))}::jsonb)`) });
+  checks++;
   assert.equal(archiveFirstResult.error, undefined); checks++;
   assert.ok(intakeAfterArchiveResult.output?.includes('NOT_FOUND')); checks++;
   assert.equal(sql(`select count(*) from public.care_requests where vehicle_id=${quote(archiveFirstVehicle.id)}::uuid`), '0'); checks++;
@@ -264,14 +264,10 @@ test('combined Garage and Care migrations preserve ownership, history, retries, 
   )).split('\n')[0]).request.id;
   sql(`update public.care_requests set customer_stage='no_match',next_action='choose_recovery',responsible_role='customer',next_update_at=null where id=${quote(retryFirstRequest)}::uuid`);
   const retryFirstTag = 'combined_retry_first_holds_vehicle';
-  const retryFirst = result(auth(owner,
-    `select public.care_retry_request(${quote(retryFirstRequest)}::uuid,'30000000-0000-4000-8000-000000000006'); select pg_sleep(1); /* ${retryFirstTag} */`,
-  ));
-  await waitForQuery(retryFirstTag);
-  const archiveAfterRetry = result(auth(owner,
-    `select public.garage_mutate_vehicle('archive',${quote(retryFirstVehicle.id)}::uuid,'{"expected_revision":1}'::jsonb,gen_random_uuid(),gen_random_uuid())`,
-  ));
-  const [retryFirstResult, archiveAfterRetryResult] = await Promise.all([retryFirst, archiveAfterRetry]);
+  const [retryFirstResult, archiveAfterRetryResult] = await heldRace(gate, result, { label: retryFirstTag,
+    first: auth(owner, `select public.care_retry_request(${quote(retryFirstRequest)}::uuid,'30000000-0000-4000-8000-000000000006'); ${gate.holdCall(retryFirstTag)}; /* ${retryFirstTag} */`),
+    second: auth(owner, `select public.garage_mutate_vehicle('archive',${quote(retryFirstVehicle.id)}::uuid,'{"expected_revision":1}'::jsonb,gen_random_uuid(),gen_random_uuid())`) });
+  checks++;
   assert.equal(retryFirstResult.error, undefined); checks++;
   assert.equal(archiveAfterRetryResult.error, undefined); checks++;
   assert.equal(sql(`select count(*) from public.care_request_events where request_id=${quote(retryFirstRequest)}::uuid and type='request_reopened'`), '1'); checks++;
@@ -282,14 +278,11 @@ test('combined Garage and Care migrations preserve ownership, history, retries, 
   )).split('\n')[0]).request.id;
   sql(`update public.care_requests set customer_stage='no_match',next_action='choose_recovery',responsible_role='customer',next_update_at=null where id=${quote(retryBlockedRequest)}::uuid`);
   const retryArchiveFirstTag = 'combined_archive_blocks_retry';
-  const retryArchiveFirst = result(auth(owner,
-    `select public.garage_mutate_vehicle('archive',${quote(retryBlockedVehicle.id)}::uuid,'{"expected_revision":1}'::jsonb,gen_random_uuid(),gen_random_uuid()); select pg_sleep(1); /* ${retryArchiveFirstTag} */`,
-  ));
-  await waitForQuery(retryArchiveFirstTag);
-  const retryAfterArchive = result(auth(owner,
-    `select public.care_retry_request(${quote(retryBlockedRequest)}::uuid,'30000000-0000-4000-8000-000000000007')`,
-  ));
-  const [retryArchiveFirstResult, retryAfterArchiveResult] = await Promise.all([retryArchiveFirst, retryAfterArchive]);
+  const [retryArchiveFirstResult, retryAfterArchiveResult] = await heldRace(gate, result, { label: retryArchiveFirstTag,
+    first: auth(owner, `select public.garage_mutate_vehicle('archive',${quote(retryBlockedVehicle.id)}::uuid,'{"expected_revision":1}'::jsonb,gen_random_uuid(),gen_random_uuid()); ${gate.holdCall(retryArchiveFirstTag)}; /* ${retryArchiveFirstTag} */`),
+    second: auth(owner, `select public.care_retry_request(${quote(retryBlockedRequest)}::uuid,'30000000-0000-4000-8000-000000000007')`) });
+  checks++;
+  gate.teardown();
   assert.equal(retryArchiveFirstResult.error, undefined); checks++;
   assert.ok(retryAfterArchiveResult.output?.includes('NOT_FOUND')); checks++;
   assert.equal(sql(`select count(*) from public.care_request_events where request_id=${quote(retryBlockedRequest)}::uuid and type='request_reopened'`), '0'); checks++;
@@ -352,4 +345,8 @@ test('Journey RPCs share no lock inversion with care_submit_request, the photo-m
 });
 test('Concurrent sessions queued behind one journey lock never deadlock (real lock-order stress)', async () => {
   await verifyCrossLockStress({ database });
+});
+
+test('Technician availability is enforced on quote, publish, selection and confirmation (20261115090000)', async () => {
+  await verifyBookingAvailabilityEnforcement({ sql, quote, result });
 });

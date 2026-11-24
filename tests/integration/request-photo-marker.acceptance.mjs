@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { lockGate, heldRace, whileHolding } from './lock-test-gate.mjs';
 import { randomUUID, createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -254,11 +255,16 @@ export async function verifyRequestPhotoMarker({ sql, auth, quote, run, carePayl
   sql(`delete from public.care_request_photo_sets where request_id=${quote(crossed)}::uuid`);
 
   // A delete racing a marker write never leaves an orphan: the writer waits for the delete, then NOT_FOUND.
+  // The deleter holds its locks (lock_test.hold) until the writer is proven blocked by it (pg_blocking_pids).
+  const gate = lockGate({ exec: sql, quote });
+  const outcome = statement => run(statement).then(value => ({ value }), error => ({ error, output: `${error.message}\n${error.stderr ?? ''}` }));
+  gate.setup();
   const racing = submit(owner, vehicle.id);
-  const deleter = run(`begin; ${purge('public.care_requests', racing)} select pg_sleep(1.2); commit;`);
-  await new Promise(resolve => setTimeout(resolve, 300));
-  const late = await run(service(record(racing, 1, sha('late')))).then(() => 'ok', error => `${error.message}\n${error.stderr ?? ''}`);
-  await deleter;
+  const deleteTag = `photo_marker_delete_${racing}`;
+  const [deleted, lateWrite] = await heldRace(gate, outcome, { label: deleteTag,
+    first: `begin; /* ${deleteTag} */ ${purge('public.care_requests', racing)} ${gate.holdCall(deleteTag)}; commit;`, second: service(record(racing, 1, sha('late'))) });
+  assert.equal(deleted.error, undefined, deleted.output);
+  const late = lateWrite.error ? lateWrite.output : 'ok';
   assert.ok(late.includes('NOT_FOUND'), late); checks += 1;
   equal(rows(racing), '0', 'no orphan marker');
   // Concurrent heal, upgrade and replay calls on one request converge without deadlock or error.
@@ -273,12 +279,14 @@ export async function verifyRequestPhotoMarker({ sql, auth, quote, run, carePayl
   equal(row(raced), `recorded:${racedHash}:2:account`);
   equal(calls.filter(entry => entry.replayed === false).length, 1, 'exactly one record call created (or upgraded to) the recorded set');
   // Marker writes and a journey command on the same request do not block each other.
-  const journeyHolder = run(`begin; update public.care_requests set description=description where id=${quote(raced)}::uuid; select pg_sleep(0.8); commit;`);
-  await new Promise(resolve => setTimeout(resolve, 200));
-  const started = Date.now();
-  await run(service(heal(raced)));
-  assert.ok(Date.now() - started < 600, 'marker write is not blocked by a non-key update of the request'); checks += 1;
-  await journeyHolder;
+  const journeyTag = `photo_marker_journey_holder_${raced}`;
+  const { held: journeyHeld, value: healed } = await whileHolding(gate, outcome, { label: journeyTag,
+    first: `begin; update public.care_requests set description=description where id=${quote(raced)}::uuid; ${gate.holdCall(journeyTag)}; commit;` },
+    () => outcome(service(heal(raced))));
+  assert.equal(healed.error, undefined, healed.output);
+  assert.equal(journeyHeld.error, undefined, journeyHeld.output);
+  checks += 1;   // whileHolding: the marker write returned while the non-key update still held the request row
+  gate.teardown();
 
   console.log(`PASS: ${checks} request photo marker legacy-state, heal, backfill and cleanup assertions (disposable database).`);
 }

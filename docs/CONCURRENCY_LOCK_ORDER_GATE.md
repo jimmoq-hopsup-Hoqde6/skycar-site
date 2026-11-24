@@ -4,6 +4,14 @@ Canonical lock order for the journey, request, photo-marker, availability and co
 advisory(scope:key) -> vehicle -> `care_requests` -> `care_journeys` -> quote / expert rows -> (confirm only) the
 `care:expert-capacity` advisory lock. Every function that locks more than one of these takes them in this order.
 
+
+Since `20261115090000`, `care_journey_command` confirm takes one more lock after the capacity advisory lock:
+the `care:technician-availability-schedule:<expert>` advisory lock, then the published-availability check.
+`care_technician_replace_availability` takes expert/account `FOR SHARE`, its key advisory, the schedule
+advisory and the availability row, and never any journey-chain lock, so the edge is one-directional.
+`week1-cross-lock-order.acceptance.mjs` (c0-c4) and `booking-availability-enforcement.acceptance.mjs` prove
+both waits and no `40P01`.
+
 ## The two tests and what each can see
 
 | Test | File | Sees | Blind to |
